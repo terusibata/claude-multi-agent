@@ -1,0 +1,89 @@
+# AIエージェントバックエンド Docker Compose設定
+version: '3.8'
+
+services:
+  # PostgreSQLデータベース
+  db:
+    image: postgres:15-alpine
+    container_name: ai-agent-db
+    environment:
+      POSTGRES_USER: ${DB_USER:-aiagent}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-aiagent_password}
+      POSTGRES_DB: ${DB_NAME:-aiagent_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db:/docker-entrypoint-initdb.d
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-aiagent}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # AIエージェントバックエンド
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ai-agent-backend
+    environment:
+      # データベース設定
+      DATABASE_URL: postgresql+asyncpg://${DB_USER:-aiagent}:${DB_PASSWORD:-aiagent_password}@db:5432/${DB_NAME:-aiagent_db}
+
+      # AWS Bedrock設定
+      CLAUDE_CODE_USE_BEDROCK: "1"
+      AWS_REGION: ${AWS_REGION:-us-west-2}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+
+      # アプリケーション設定
+      APP_ENV: ${APP_ENV:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      SKILLS_BASE_PATH: /skills
+    volumes:
+      - ./app:/app/app
+      - skills_data:/skills
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # 本番環境用バックエンド（リロードなし）
+  backend-prod:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ai-agent-backend-prod
+    profiles:
+      - production
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${DB_USER:-aiagent}:${DB_PASSWORD:-aiagent_password}@db:5432/${DB_NAME:-aiagent_db}
+      CLAUDE_CODE_USE_BEDROCK: "1"
+      AWS_REGION: ${AWS_REGION:-us-west-2}
+      APP_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      SKILLS_BASE_PATH: /skills
+    volumes:
+      - skills_data:/skills
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+
+volumes:
+  postgres_data:
+    driver: local
+  skills_data:
+    driver: local
