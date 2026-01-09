@@ -59,13 +59,10 @@ async def lifespan(app: FastAPI):
     if settings.aws_secret_access_key:
         os.environ["AWS_SECRET_ACCESS_KEY"] = settings.aws_secret_access_key
 
-    # 開発環境ではDBを初期化
-    if settings.is_development:
-        try:
-            await init_db()
-            logger.info("データベース初期化完了")
-        except Exception as e:
-            logger.warning("データベース初期化失敗（マイグレーションを使用してください）", error=str(e))
+    # データベース初期化は Alembic マイグレーションで実施
+    # 開発環境でも本番環境でも、マイグレーションを使用することで一貫性を保つ
+    # 起動前に `alembic upgrade head` を実行してください
+    logger.info("データベースマイグレーションは alembic upgrade head で実行してください")
 
     logger.info("アプリケーション起動完了", environment=settings.app_env)
 
