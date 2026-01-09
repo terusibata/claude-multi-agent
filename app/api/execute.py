@@ -2,7 +2,9 @@
 エージェント実行API
 ストリーミング対応のエージェント実行
 """
+import asyncio
 import json
+import logging
 from typing import AsyncIterator
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -16,6 +18,41 @@ from app.services.execute_service import ExecuteService
 from app.services.model_service import ModelService
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+
+async def _background_execution(
+    execute_service: ExecuteService,
+    request: ExecuteRequest,
+    agent_config,
+    model,
+    tenant_id: str,
+    event_queue: asyncio.Queue,
+) -> None:
+    """
+    バックグラウンドでエージェントを実行し、イベントをキューに送信
+
+    Args:
+        execute_service: 実行サービス
+        request: 実行リクエスト
+        agent_config: エージェント設定
+        model: モデル定義
+        tenant_id: テナントID
+        event_queue: イベントキュー
+    """
+    try:
+        async for event in execute_service.execute_streaming(
+            request=request,
+            agent_config=agent_config,
+            model=model,
+            tenant_id=tenant_id,
+        ):
+            await event_queue.put(event)
+    except Exception as e:
+        logger.error(f"Background execution error: {e}", exc_info=True)
+    finally:
+        # 終了シグナルを送信
+        await event_queue.put(None)
 
 
 async def event_generator(
@@ -27,6 +64,7 @@ async def event_generator(
 ) -> AsyncIterator[dict]:
     """
     SSEイベントジェネレータ
+    クライアントが切断しても、バックグラウンド処理は継続します。
 
     Args:
         execute_service: 実行サービス
@@ -38,16 +76,56 @@ async def event_generator(
     Yields:
         SSEイベント
     """
-    async for event in execute_service.execute_streaming(
-        request=request,
-        agent_config=agent_config,
-        model=model,
-        tenant_id=tenant_id,
-    ):
-        yield {
-            "event": event["event"],
-            "data": json.dumps(event["data"], ensure_ascii=False, default=str),
-        }
+    event_queue = asyncio.Queue()
+
+    # バックグラウンドタスクとして実行を開始
+    background_task = asyncio.create_task(
+        _background_execution(
+            execute_service,
+            request,
+            agent_config,
+            model,
+            tenant_id,
+            event_queue,
+        )
+    )
+
+    try:
+        while True:
+            try:
+                # タイムアウトを設定してキューから取得
+                event = await asyncio.wait_for(event_queue.get(), timeout=300)
+
+                if event is None:
+                    # 処理完了シグナル
+                    break
+
+                yield {
+                    "event": event["event"],
+                    "data": json.dumps(event["data"], ensure_ascii=False, default=str),
+                }
+            except asyncio.TimeoutError:
+                logger.warning("Event queue timeout, continuing...")
+                continue
+
+    except asyncio.CancelledError:
+        # クライアントが接続を切断した場合
+        logger.info(
+            f"Client disconnected for session {request.chat_session_id}, "
+            "but background execution continues"
+        )
+        # バックグラウンドタスクは継続させる（awaitしない）
+        raise
+    except Exception as e:
+        logger.error(f"Event generator error: {e}", exc_info=True)
+        background_task.cancel()
+        raise
+    finally:
+        # タスクが完了していない場合、ログに記録
+        if not background_task.done():
+            logger.info(
+                f"Background task continues for session {request.chat_session_id}"
+            )
 
 
 @router.post("/execute", summary="エージェント実行")
@@ -126,18 +204,3 @@ async def execute_agent(
     )
 
 
-@router.post("/sessions/{session_id}/interrupt", summary="実行中断")
-async def interrupt_execution(
-    tenant_id: str,
-    session_id: str,
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    実行中のエージェントを中断します。
-
-    ※ 現在の実装では、ストリーミング接続のクローズで中断されます。
-    本APIは将来の拡張用です。
-    """
-    # TODO: 実行中断の実装
-    # 現在のClaude Agent SDKでは、ストリーミングをクローズすることで中断
-    return {"status": "accepted", "message": "中断リクエストを受け付けました"}
