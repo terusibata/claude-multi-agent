@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Any, Optional
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, model_validator
 
 
 class ExecutorInfo(BaseModel):
@@ -42,13 +42,14 @@ class ExecuteRequest(BaseModel):
     )
     fork_session: bool = Field(default=False, description="セッションをフォークするか")
 
-    @field_validator("chat_session_id", mode="before")
-    @classmethod
-    def validate_chat_session_id(cls, v: Optional[str]) -> str:
+    @model_validator(mode="after")
+    def ensure_chat_session_id(self) -> "ExecuteRequest":
         """chat_session_idがNoneまたは空文字列の場合は新しいUUIDを生成"""
-        if v is None or (isinstance(v, str) and v.strip() == ""):
-            return str(uuid4())
-        return v
+        if not self.chat_session_id or (
+            isinstance(self.chat_session_id, str) and self.chat_session_id.strip() == ""
+        ):
+            self.chat_session_id = str(uuid4())
+        return self
 
 
 class UsageInfo(BaseModel):
