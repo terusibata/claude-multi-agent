@@ -135,4 +135,4 @@ uvicorn app.main:app --reload
 
 ## ライセンス
 
-Private
+開発中

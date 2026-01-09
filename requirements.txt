@@ -1,0 +1,42 @@
+# AIエージェントバックエンド 依存パッケージ
+
+# Webフレームワーク
+fastapi>=0.128.0
+uvicorn[standard]>=0.40.0
+sse-starlette>=3.1.2
+
+# データベース
+sqlalchemy>=2.0.45
+asyncpg>=0.31.0
+alembic>=1.17.2
+psycopg2-binary>=2.9.11
+
+# バリデーション
+pydantic>=2.12.5
+pydantic-settings>=2.12.0
+
+# Claude Agent SDK
+claude-agent-sdk>=0.1.19
+
+# AWS SDK
+boto3>=1.42.24
+botocore>=1.42.24
+
+# ユーティリティ
+python-multipart>=0.0.21
+python-dotenv>=1.2.1
+aiofiles>=25.1.0
+PyYAML>=6.0.3
+
+# ロギング
+structlog>=25.5.0
+
+# テスト
+pytest>=9.0.2
+pytest-asyncio>=1.3.0
+httpx>=0.28.1
+
+# 開発ツール
+black>=25.12.0
+isort>=7.0.0
+mypy>=1.19.1
