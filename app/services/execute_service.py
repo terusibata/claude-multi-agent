@@ -63,9 +63,16 @@ class ExecuteService:
         """
         env = {
             "CLAUDE_CODE_USE_BEDROCK": "1",
-            "AWS_ACCESS_KEY_ID": settings.aws_access_key_id,
-            "AWS_SECRET_ACCESS_KEY": settings.aws_secret_access_key,
         }
+
+        # AWS認証情報を追加（設定されている場合のみ）
+        # Noneまたは空文字列の場合は追加しない
+        if settings.aws_access_key_id and settings.aws_access_key_id.strip():
+            env["AWS_ACCESS_KEY_ID"] = settings.aws_access_key_id
+        if settings.aws_secret_access_key and settings.aws_secret_access_key.strip():
+            env["AWS_SECRET_ACCESS_KEY"] = settings.aws_secret_access_key
+        if settings.aws_session_token and settings.aws_session_token.strip():
+            env["AWS_SESSION_TOKEN"] = settings.aws_session_token
 
         # モデルのリージョンを設定（指定がなければデフォルト）
         if model.model_region:
