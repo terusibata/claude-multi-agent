@@ -126,18 +126,26 @@ async def execute_agent(
     )
 
 
-@router.post("/sessions/{session_id}/interrupt", summary="実行中断")
-async def interrupt_execution(
+@router.post("/sessions/{session_id}/stop", summary="実行停止リクエスト")
+async def stop_execution(
     tenant_id: str,
     session_id: str,
     db: AsyncSession = Depends(get_db),
 ):
     """
-    実行中のエージェントを中断します。
+    実行中のエージェントに停止リクエストを送信します。
 
-    ※ 現在の実装では、ストリーミング接続のクローズで中断されます。
-    本APIは将来の拡張用です。
+    **重要:**
+    - このAPIは停止リクエストを送信するのみで、即座に処理を中断しません
+    - バックエンドの処理は現在のターンの完了まで継続されます
+    - ストリーミング接続がクローズされても、バックエンド処理は最後まで実行されます
+
+    **将来の実装予定:**
+    - 停止リクエストのフラグを管理し、処理の適切なタイミングで停止する機能
+    - 停止状態の確認API
     """
-    # TODO: 実行中断の実装
-    # 現在のClaude Agent SDKでは、ストリーミングをクローズすることで中断
-    return {"status": "accepted", "message": "中断リクエストを受け付けました"}
+    # TODO: 停止リクエストの実装
+    # - セッションの停止フラグを設定
+    # - 実行サービス側で停止フラグをチェックし、適切なタイミングで処理を終了
+    # - 現在は未実装のため、受け付けのみを返す
+    return {"status": "accepted", "message": "停止リクエストを受け付けました"}
