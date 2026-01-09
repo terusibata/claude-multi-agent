@@ -6,7 +6,7 @@ from functools import lru_cache
 from typing import Optional
 
 from pydantic import field_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -76,10 +76,12 @@ class Settings(BaseSettings):
         """開発環境かどうか"""
         return self.app_env == "development"
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore"  # 追加の環境変数を無視
+    )
 
 
 @lru_cache()
