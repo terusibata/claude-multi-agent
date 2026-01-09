@@ -256,7 +256,16 @@ class ExecuteService:
             # Claude Agent SDKをインポート
             logger.info("Claude Agent SDK インポート中...")
             try:
-                from claude_agent_sdk import ClaudeAgentOptions, query
+                from claude_agent_sdk import (
+                    ClaudeAgentOptions,
+                    query,
+                    AssistantMessage,
+                    SystemMessage,
+                    ResultMessage,
+                    TextBlock,
+                    ThinkingBlock,
+                    ToolUseBlock,
+                )
                 logger.info("Claude Agent SDK インポート成功")
             except ImportError as e:
                 yield format_error_event(
@@ -319,25 +328,34 @@ class ExecuteService:
             ):
                 message_seq += 1
                 timestamp = datetime.utcnow()
-                logger.debug("メッセージ受信", seq=message_seq, type=getattr(message, 'type', 'unknown'))
 
-                # メッセージログに保存
+                # メッセージタイプを判定
+                msg_type = "unknown"
+                if isinstance(message, SystemMessage):
+                    msg_type = "system"
+                elif isinstance(message, AssistantMessage):
+                    msg_type = "assistant"
+                elif isinstance(message, ResultMessage):
+                    msg_type = "result"
+
+                logger.debug("メッセージ受信", seq=message_seq, type=msg_type)
+
+                # メッセージログに保存用のエントリ
                 log_entry = {
-                    "type": getattr(message, "type", "unknown"),
+                    "type": msg_type,
                     "subtype": getattr(message, "subtype", None),
                     "timestamp": timestamp.isoformat(),
                 }
 
-                # メッセージタイプに応じた処理
-                msg_type = getattr(message, "type", None)
+                # システムメッセージ
+                if isinstance(message, SystemMessage):
+                    subtype = message.subtype
+                    data = message.data
 
-                # システムメッセージ（init）
-                if msg_type == "system":
-                    subtype = getattr(message, "subtype", None)
                     if subtype == "init":
-                        session_id = getattr(message, "session_id", None)
-                        tools = getattr(message, "tools", [])
-                        model_name = getattr(message, "model", model.display_name)
+                        session_id = data.get("session_id")
+                        tools = data.get("tools", [])
+                        model_name = data.get("model", model.display_name)
 
                         # セッションIDを更新
                         if session_id:
@@ -360,22 +378,20 @@ class ExecuteService:
                         )
 
                 # アシスタントメッセージ
-                elif msg_type == "assistant":
-                    content_blocks = getattr(message, "content", [])
+                elif isinstance(message, AssistantMessage):
+                    content_blocks = message.content
                     for content in content_blocks:
-                        content_type = getattr(content, "type", None)
-
-                        # テキストコンテンツ
-                        if content_type == "text":
-                            text = getattr(content, "text", "")
+                        # テキストブロック
+                        if isinstance(content, TextBlock):
+                            text = content.text
                             assistant_text += text
                             yield format_text_delta_event(text)
 
-                        # ツール使用開始
-                        elif content_type == "tool_use":
-                            tool_id = getattr(content, "id", str(uuid4()))
-                            tool_name = getattr(content, "name", "unknown")
-                            tool_input = getattr(content, "input", {})
+                        # ツール使用ブロック
+                        elif isinstance(content, ToolUseBlock):
+                            tool_id = content.id
+                            tool_name = content.name
+                            tool_input = content.input
 
                             current_tool = {
                                 "tool_use_id": tool_id,
@@ -388,97 +404,28 @@ class ExecuteService:
                             summary = generate_tool_summary(tool_name, tool_input)
                             yield format_tool_start_event(tool_id, tool_name, summary)
 
-                        # 思考プロセス
-                        elif content_type == "thinking":
-                            thinking_text = getattr(content, "text", "")
+                        # 思考ブロック
+                        elif isinstance(content, ThinkingBlock):
+                            thinking_text = content.text
                             yield format_thinking_event(thinking_text)
 
-                # ツール結果
-                elif msg_type == "tool_result":
-                    if current_tool:
-                        is_error = getattr(message, "is_error", False)
-                        output = getattr(message, "content", None)
-
-                        current_tool["status"] = "error" if is_error else "completed"
-                        current_tool["completed_at"] = timestamp
-                        current_tool["output"] = output
-
-                        # ツール実行ログを保存
-                        execution_time_ms = None
-                        if current_tool.get("started_at"):
-                            delta = timestamp - current_tool["started_at"]
-                            execution_time_ms = int(delta.total_seconds() * 1000)
-
-                        if session_id:
-                            await self.usage_service.save_tool_log(
-                                session_id=session_id,
-                                tool_name=current_tool["tool_name"],
-                                tool_use_id=current_tool["tool_use_id"],
-                                tool_input=current_tool["tool_input"],
-                                tool_output={"content": str(output)[:1000]}
-                                if output
-                                else None,
-                                status=current_tool["status"],
-                                execution_time_ms=execution_time_ms,
-                                chat_session_id=request.chat_session_id,
-                            )
-
-                        result_summary = generate_tool_result_summary(
-                            current_tool["tool_name"],
-                            current_tool["status"],
-                            output,
-                        )
-                        tools_used.append(
-                            {
-                                "tool_name": current_tool["tool_name"],
-                                "status": current_tool["status"],
-                                "summary": result_summary,
-                            }
-                        )
-
-                        yield format_tool_complete_event(
-                            tool_use_id=current_tool["tool_use_id"],
-                            tool_name=current_tool["tool_name"],
-                            status=current_tool["status"],
-                            summary=result_summary,
-                        )
-                        current_tool = None
-
-                # ストリームイベント（増分更新）
-                elif msg_type == "stream_event":
-                    event = getattr(message, "event", None)
-                    if event:
-                        event_type = getattr(event, "type", None)
-                        if event_type == "content_block_delta":
-                            delta = getattr(event, "delta", None)
-                            if delta and getattr(delta, "type", None) == "text_delta":
-                                text = getattr(delta, "text", "")
-                                assistant_text += text
-                                yield format_text_delta_event(text)
-
                 # 結果メッセージ
-                elif msg_type == "result":
-                    usage = getattr(message, "usage", None)
-                    subtype = getattr(message, "subtype", "success")
-                    result_errors = getattr(message, "errors", None)
-
-                    if result_errors:
-                        errors.extend(result_errors)
+                elif isinstance(message, ResultMessage):
+                    subtype = message.subtype
+                    usage_data = message.usage
 
                     # 使用状況の取得
-                    input_tokens = getattr(usage, "input_tokens", 0) if usage else 0
-                    output_tokens = getattr(usage, "output_tokens", 0) if usage else 0
-                    cache_creation = (
-                        getattr(usage, "cache_creation_input_tokens", 0)
-                        if usage
-                        else 0
-                    )
-                    cache_read = (
-                        getattr(usage, "cache_read_input_tokens", 0) if usage else 0
-                    )
-                    total_cost = getattr(message, "total_cost_usd", 0) or 0
-                    num_turns = getattr(message, "num_turns", 1)
+                    input_tokens = usage_data.get("input_tokens", 0) if usage_data else 0
+                    output_tokens = usage_data.get("output_tokens", 0) if usage_data else 0
+                    cache_creation = usage_data.get("cache_creation_input_tokens", 0) if usage_data else 0
+                    cache_read = usage_data.get("cache_read_input_tokens", 0) if usage_data else 0
+                    total_cost = message.total_cost_usd or 0
+                    num_turns = message.num_turns
                     duration_ms = int((time.time() - start_time) * 1000)
+
+                    # エラーチェック
+                    if message.is_error:
+                        errors.append(message.result or "Unknown error")
 
                     # コストを計算（SDKから取得できない場合）
                     if not total_cost:
@@ -540,7 +487,7 @@ class ExecuteService:
                 await self.session_service.save_message_log(
                     chat_session_id=request.chat_session_id,
                     message_seq=message_seq,
-                    message_type=msg_type or "unknown",
+                    message_type=msg_type,
                     message_subtype=getattr(message, "subtype", None),
                     content=log_entry,
                 )
