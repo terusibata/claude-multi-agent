@@ -26,15 +26,11 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: ai-agent-backend
+    env_file:
+      - .env
     environment:
       # データベース設定
       DATABASE_URL: postgresql+asyncpg://${DB_USER:-aiagent}:${DB_PASSWORD:-aiagent_password}@db:5432/${DB_NAME:-aiagent_db}
-
-      # AWS Bedrock設定
-      CLAUDE_CODE_USE_BEDROCK: "1"
-      AWS_REGION: ${AWS_REGION:-us-west-2}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
 
       # アプリケーション設定
       APP_ENV: ${APP_ENV:-development}
@@ -59,10 +55,10 @@ services:
     container_name: ai-agent-backend-prod
     profiles:
       - production
+    env_file:
+      - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://${DB_USER:-aiagent}:${DB_PASSWORD:-aiagent_password}@db:5432/${DB_NAME:-aiagent_db}
-      CLAUDE_CODE_USE_BEDROCK: "1"
-      AWS_REGION: ${AWS_REGION:-us-west-2}
       APP_ENV: production
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       SKILLS_BASE_PATH: /skills
