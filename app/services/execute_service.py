@@ -51,20 +51,29 @@ class ExecuteService:
         self.skill_service = SkillService(db)
         self.mcp_service = McpServerService(db)
 
-    def _setup_bedrock_env(self, model: Model) -> None:
+    def _build_bedrock_env(self, model: Model) -> dict[str, str]:
         """
-        AWS Bedrock環境変数を設定
+        AWS Bedrock環境変数の辞書を構築
 
         Args:
             model: モデル定義
+
+        Returns:
+            環境変数の辞書
         """
-        os.environ["CLAUDE_CODE_USE_BEDROCK"] = "1"
+        env = {
+            "CLAUDE_CODE_USE_BEDROCK": "1",
+            "AWS_ACCESS_KEY_ID": settings.aws_access_key_id,
+            "AWS_SECRET_ACCESS_KEY": settings.aws_secret_access_key,
+        }
 
         # モデルのリージョンを設定（指定がなければデフォルト）
         if model.model_region:
-            os.environ["AWS_REGION"] = model.model_region
-        elif not os.environ.get("AWS_REGION"):
-            os.environ["AWS_REGION"] = settings.aws_region
+            env["AWS_REGION"] = model.model_region
+        else:
+            env["AWS_REGION"] = settings.aws_region
+
+        return env
 
     async def _build_options(
         self,
@@ -113,6 +122,9 @@ class ExecuteService:
         # テナント専用のcwdを取得
         cwd = self.skill_service.get_tenant_cwd(tenant_id)
 
+        # AWS Bedrock環境変数を構築
+        env = self._build_bedrock_env(model)
+
         options = {
             "system_prompt": agent_config.system_prompt,
             "model": model.bedrock_model_id,
@@ -120,6 +132,7 @@ class ExecuteService:
             "permission_mode": agent_config.permission_mode,
             "mcp_servers": mcp_servers if mcp_servers else None,
             "cwd": cwd,
+            "env": env,
         }
 
         # Skillsが設定されている場合のみ、setting_sourcesを追加
@@ -172,10 +185,6 @@ class ExecuteService:
         )
 
         try:
-            # Bedrock環境設定
-            logger.info("Bedrock環境設定中...")
-            self._setup_bedrock_env(model)
-
             # オプション構築
             logger.info("SDK オプション構築中...")
             options = await self._build_options(
