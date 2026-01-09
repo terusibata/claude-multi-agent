@@ -4,8 +4,9 @@
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, Optional
+from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ExecutorInfo(BaseModel):
@@ -38,6 +39,14 @@ class ExecuteRequest(BaseModel):
         None, description="継続するSDKセッションID"
     )
     fork_session: bool = Field(default=False, description="セッションをフォークするか")
+
+    @field_validator("chat_session_id", mode="before")
+    @classmethod
+    def validate_chat_session_id(cls, v: str) -> str:
+        """chat_session_idが空文字列の場合は新しいUUIDを生成"""
+        if not v or (isinstance(v, str) and v.strip() == ""):
+            return str(uuid4())
+        return v
 
 
 class UsageInfo(BaseModel):
