@@ -330,6 +330,7 @@ class SkillService:
     def get_tenant_cwd(self, tenant_id: str) -> str:
         """
         テナント専用のcwd（作業ディレクトリ）を取得
+        ディレクトリが存在しない場合は自動的に作成します。
 
         Args:
             tenant_id: テナントID
@@ -337,4 +338,7 @@ class SkillService:
         Returns:
             cwdパス
         """
-        return str(self.base_path / f"tenant_{tenant_id}")
+        tenant_path = self.base_path / f"tenant_{tenant_id}"
+        # ディレクトリが存在しない場合は作成
+        tenant_path.mkdir(parents=True, exist_ok=True)
+        return str(tenant_path)
