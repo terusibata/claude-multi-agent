@@ -2,7 +2,9 @@
 AIエージェントバックエンド メインアプリケーション
 AWS Bedrock + Claude Agent SDKを利用したマルチテナント対応AIエージェントシステム
 """
+import logging
 import os
+import sys
 from contextlib import asynccontextmanager
 
 import structlog
@@ -18,6 +20,13 @@ from app.database import close_db, init_db
 
 # 設定読み込み
 settings = get_settings()
+
+# 標準ライブラリのlogging設定
+logging.basicConfig(
+    format="%(message)s",
+    stream=sys.stdout,
+    level=logging.INFO,
+)
 
 # ログ設定
 structlog.configure(
