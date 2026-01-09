@@ -30,21 +30,20 @@ AWS Bedrock + Claude Agent SDKを利用したマルチテナント対応AIエー
 ## ディレクトリ構成
 
 ```
-backend/
-├── app/
-│   ├── api/              # APIルーター
-│   ├── models/           # SQLAlchemyモデル
-│   ├── schemas/          # Pydanticスキーマ
-│   ├── services/         # ビジネスロジック
-│   ├── utils/            # ユーティリティ
-│   ├── config.py         # 設定管理
-│   ├── database.py       # データベース接続
-│   └── main.py           # メインアプリケーション
-├── alembic/              # DBマイグレーション
-├── tests/                # テスト
-├── Dockerfile
-├── docker-compose.yml
-└── requirements.txt
+app/
+├── api/              # APIルーター
+├── models/           # SQLAlchemyモデル
+├── schemas/          # Pydanticスキーマ
+├── services/         # ビジネスロジック
+├── utils/            # ユーティリティ
+├── config.py         # 設定管理
+├── database.py       # データベース接続
+└── main.py           # メインアプリケーション
+alembic/              # DBマイグレーション
+tests/                # テスト
+Dockerfile
+docker-compose.yml
+requirements.txt
 ```
 
 ## セットアップ
@@ -59,7 +58,6 @@ backend/
 1. 環境変数を設定
 
 ```bash
-cd backend
 cp .env.example .env
 # .envファイルを編集してAWS認証情報を設定
 ```
@@ -85,7 +83,6 @@ http://localhost:8000/docs
 1. 仮想環境を作成
 
 ```bash
-cd backend
 python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
