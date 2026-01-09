@@ -215,7 +215,7 @@ class ExecuteService:
                 log_entry = {
                     "type": getattr(message, "type", "unknown"),
                     "subtype": getattr(message, "subtype", None),
-                    "timestamp": timestamp,
+                    "timestamp": timestamp.isoformat(),
                 }
 
                 # メッセージタイプに応じた処理
