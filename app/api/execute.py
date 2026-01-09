@@ -157,6 +157,7 @@ async def execute_agent(
     - **tool_start**: ツール使用開始
     - **tool_complete**: ツール使用完了
     - **thinking**: 思考プロセス
+    - **title_generated**: タイトル生成完了（初回実行時のみ）
     - **result**: 最終結果
     - **error**: エラー
     """

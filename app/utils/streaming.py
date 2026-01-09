@@ -239,3 +239,21 @@ def format_error_event(error_message: str, error_type: str = "error") -> dict:
             "message": error_message,
         },
     }
+
+
+def format_title_generated_event(title: str) -> dict:
+    """
+    タイトル生成イベントをフォーマット
+
+    Args:
+        title: 生成されたタイトル
+
+    Returns:
+        イベントデータ
+    """
+    return {
+        "event": "title_generated",
+        "data": {
+            "title": title,
+        },
+    }

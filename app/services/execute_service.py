@@ -28,6 +28,7 @@ from app.utils.streaming import (
     format_session_start_event,
     format_text_delta_event,
     format_thinking_event,
+    format_title_generated_event,
     format_tool_complete_event,
     format_tool_start_event,
 )
@@ -573,6 +574,9 @@ class ExecuteService:
                             title=generated_title,
                         )
                         logger.info("タイトル更新完了", title=generated_title)
+
+                        # タイトル生成イベントをストリーミングで送信
+                        yield format_title_generated_event(generated_title)
 
                     # 結果イベントを送信
                     yield format_result_event(
