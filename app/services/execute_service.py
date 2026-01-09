@@ -120,8 +120,12 @@ class ExecuteService:
             "permission_mode": agent_config.permission_mode,
             "mcp_servers": mcp_servers if mcp_servers else None,
             "cwd": cwd,
-            "setting_sources": ["project"],  # .claude/skills/ からSkillsを読み込み
         }
+
+        # Skillsが設定されている場合のみ、setting_sourcesを追加
+        # setting_sourcesを指定すると、.claude/から設定を読み込もうとする
+        if agent_config.agent_skills:
+            options["setting_sources"] = ["project"]
 
         # セッション継続・フォークの設定
         if resume_session_id:
@@ -163,7 +167,8 @@ class ExecuteService:
         logger.info(
             f"エージェント実行開始: tenant_id={tenant_id}, "
             f"chat_session_id={request.chat_session_id}, "
-            f"agent_config_id={request.agent_config_id}"
+            f"agent_config_id={request.agent_config_id}, "
+            f"agent_skills={agent_config.agent_skills}"
         )
 
         try:
@@ -237,6 +242,7 @@ class ExecuteService:
 
             # ClaudeAgentOptionsを構築
             logger.info("ClaudeAgentOptions 構築中...")
+            logger.info(f"SDK options: {options}")
             try:
                 sdk_options = ClaudeAgentOptions(**options)
                 logger.info("ClaudeAgentOptions 構築成功")
@@ -502,7 +508,20 @@ class ExecuteService:
             # エラー処理
             error_message = str(e)
             duration_ms = int((time.time() - start_time) * 1000)
-            logger.error(f"エージェント実行エラー: {error_message}", exc_info=True)
+
+            # ProcessErrorの場合は詳細情報を取得
+            if hasattr(e, "exit_code") and hasattr(e, "stderr"):
+                error_message = (
+                    f"Command failed with exit code {e.exit_code}\n"
+                    f"Error details: {e.stderr}"
+                )
+                logger.error(
+                    f"エージェント実行エラー (ProcessError): exit_code={e.exit_code}, "
+                    f"stderr={e.stderr}",
+                    exc_info=True,
+                )
+            else:
+                logger.error(f"エージェント実行エラー: {error_message}", exc_info=True)
 
             yield format_error_event(error_message, "execution_error")
 
