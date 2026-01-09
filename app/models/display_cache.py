@@ -49,7 +49,9 @@ class DisplayCache(Base):
 
     # メタデータ（JSON）
     # {"tokens": 1800, "cost_usd": 0.0025, "duration_ms": 5000, "num_turns": 3}
-    metadata: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    # 注: 'metadata'はSQLAlchemyの予約語のため、Python属性名は'metadata_'とし、
+    # データベースのカラム名は'metadata'として保持
+    metadata_: Mapped[Optional[dict]] = mapped_column("metadata", JSON, nullable=True)
 
     # タイムスタンプ
     created_at: Mapped[datetime] = mapped_column(

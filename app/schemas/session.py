@@ -66,11 +66,12 @@ class DisplayCacheResponse(BaseModel):
     user_message: Optional[str] = None
     assistant_message: Optional[str] = None
     tools_summary: Optional[list[ToolSummaryItem]] = None
-    metadata: Optional[MetadataItem] = None
+    metadata_: Optional[MetadataItem] = Field(None, serialization_alias="metadata")
     created_at: datetime
 
     class Config:
         from_attributes = True
+        populate_by_name = True
 
 
 class SessionListQuery(BaseModel):
