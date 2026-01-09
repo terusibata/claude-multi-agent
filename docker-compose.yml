@@ -1,6 +1,4 @@
 # AIエージェントバックエンド Docker Compose設定
-version: '3.8'
-
 services:
   # PostgreSQLデータベース
   db:
