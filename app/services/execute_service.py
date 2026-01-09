@@ -20,6 +20,7 @@ from app.services.mcp_server_service import McpServerService
 from app.services.session_service import SessionService
 from app.services.skill_service import SkillService
 from app.services.usage_service import UsageService
+from app.utils.bedrock_check import check_bedrock_setup
 from app.utils.streaming import (
     format_error_event,
     format_result_event,
@@ -65,6 +66,18 @@ class ExecuteService:
             os.environ["AWS_REGION"] = model.model_region
         elif not os.environ.get("AWS_REGION"):
             os.environ["AWS_REGION"] = settings.aws_region
+
+        # Bedrock権限チェック（開発環境のみ）
+        if settings.is_development:
+            logger.info("Bedrock権限チェック実行中...")
+            check_result = check_bedrock_setup(model.bedrock_model_id)
+            if check_result["status"] == "error":
+                logger.error(f"Bedrock権限エラー: {check_result['message']}")
+                if "recommendations" in check_result.get("details", {}):
+                    for rec in check_result["details"]["recommendations"]:
+                        logger.error(f"  推奨: {rec}")
+            else:
+                logger.info("Bedrock権限チェック完了: OK")
 
     async def _build_options(
         self,

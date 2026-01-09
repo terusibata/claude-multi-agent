@@ -14,7 +14,7 @@ services:
     ports:
       - "${DB_PORT:-5432}:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-aiagent}"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-aiagent} -d ${DB_NAME:-aiagent_db}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -35,6 +35,10 @@ services:
       AWS_REGION: ${AWS_REGION:-us-west-2}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+
+      # Claude Code CLI デバッグ設定
+      DEBUG: "1"
+      CLAUDE_CODE_LOG_LEVEL: "debug"
 
       # アプリケーション設定
       APP_ENV: ${APP_ENV:-development}
