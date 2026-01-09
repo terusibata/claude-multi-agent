@@ -320,7 +320,7 @@ class SessionService:
             user_message=user_message,
             assistant_message=assistant_message,
             tools_summary=tools_summary,
-            metadata=metadata,
+            metadata_=metadata,
         )
         self.db.add(cache)
         await self.db.flush()
