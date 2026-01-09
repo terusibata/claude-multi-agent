@@ -24,7 +24,9 @@ class ExecuteRequest(BaseModel):
     # 必須パラメータ
     agent_config_id: str = Field(..., description="エージェント実行設定ID")
     model_id: str = Field(..., description="モデルID")
-    chat_session_id: str = Field(..., description="セッションID（新規 or 継続）")
+    chat_session_id: Optional[str] = Field(
+        None, description="セッションID（省略時は新規作成、指定時は継続）"
+    )
     user_input: str = Field(..., description="ユーザー入力")
     executor: ExecutorInfo = Field(..., description="実行者情報")
 
@@ -42,9 +44,9 @@ class ExecuteRequest(BaseModel):
 
     @field_validator("chat_session_id", mode="before")
     @classmethod
-    def validate_chat_session_id(cls, v: str) -> str:
-        """chat_session_idが空文字列の場合は新しいUUIDを生成"""
-        if not v or (isinstance(v, str) and v.strip() == ""):
+    def validate_chat_session_id(cls, v: Optional[str]) -> str:
+        """chat_session_idがNoneまたは空文字列の場合は新しいUUIDを生成"""
+        if v is None or (isinstance(v, str) and v.strip() == ""):
             return str(uuid4())
         return v
 

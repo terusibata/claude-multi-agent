@@ -143,7 +143,7 @@ async def execute_agent(
 
     - **agent_config_id**: エージェント実行設定ID
     - **model_id**: 使用するモデルID
-    - **chat_session_id**: セッションID（新規 or 継続）
+    - **chat_session_id**: セッションID（省略時は新規作成、指定時は継続）
     - **user_input**: ユーザー入力
     - **executor**: 実行者情報
     - **tokens**: MCPサーバー用認証情報（オプション）
