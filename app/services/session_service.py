@@ -168,6 +168,27 @@ class SessionService:
         await self.db.refresh(session)
         return session
 
+    async def update_session_title(
+        self,
+        chat_session_id: str,
+        tenant_id: str,
+        title: str,
+    ) -> Optional[ChatSession]:
+        """
+        セッションのタイトルを更新
+
+        Args:
+            chat_session_id: チャットセッションID
+            tenant_id: テナントID
+            title: 新しいタイトル
+
+        Returns:
+            更新されたセッション（存在しない場合はNone）
+        """
+        return await self.update_session(
+            chat_session_id, tenant_id, title=title
+        )
+
     async def archive_session(
         self,
         chat_session_id: str,

@@ -2,6 +2,7 @@
 エージェント実行サービス
 Claude Agent SDKを使用したエージェント実行とストリーミング処理
 """
+import json
 import os
 import structlog
 import time
@@ -10,6 +11,7 @@ from decimal import Decimal
 from typing import Any, AsyncGenerator, Optional
 from uuid import uuid4
 
+import boto3
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -50,6 +52,73 @@ class ExecuteService:
         self.usage_service = UsageService(db)
         self.skill_service = SkillService(db)
         self.mcp_service = McpServerService(db)
+
+    def _generate_title_sync(
+        self,
+        user_input: str,
+        assistant_response: str,
+        model_region: str = "us-east-1",
+    ) -> str:
+        """
+        会話からタイトルを生成（同期版）
+
+        Args:
+            user_input: ユーザー入力
+            assistant_response: アシスタント応答
+            model_region: AWSリージョン
+
+        Returns:
+            生成されたタイトル（最大50文字）
+        """
+        try:
+            # Bedrock Runtimeクライアントを作成
+            bedrock_runtime = boto3.client(
+                service_name="bedrock-runtime",
+                region_name=model_region,
+                aws_access_key_id=settings.aws_access_key_id,
+                aws_secret_access_key=settings.aws_secret_access_key,
+                aws_session_token=settings.aws_session_token if settings.aws_session_token else None,
+            )
+
+            # タイトル生成用のプロンプト
+            prompt = f"""以下の会話から、短く簡潔な日本語のタイトルを生成してください。
+タイトルは20文字以内にしてください。
+
+ユーザー入力:
+{user_input[:200]}
+
+アシスタント応答:
+{assistant_response[:300]}
+
+タイトルのみを出力してください。説明は不要です。"""
+
+            # Bedrock経由でClaude APIを呼び出し
+            request_body = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 100,
+                "messages": [{"role": "user", "content": prompt}],
+            }
+
+            response = bedrock_runtime.invoke_model(
+                modelId="us.anthropic.claude-3-5-haiku-20241022-v1:0",  # 高速・低コストなモデル
+                body=json.dumps(request_body),
+            )
+
+            # レスポンスをパース
+            response_body = json.loads(response["body"].read())
+            title = response_body["content"][0]["text"].strip()
+
+            # 最大50文字に制限
+            if len(title) > 50:
+                title = title[:50]
+
+            logger.info("タイトル生成成功", title=title)
+            return title
+
+        except Exception as e:
+            logger.warning("タイトル生成失敗、デフォルトタイトル使用", error=str(e))
+            # 失敗した場合はユーザー入力の最初の部分を使用
+            return user_input[:50] if user_input else "新しいチャット"
 
     def _build_bedrock_env(self, model: Model) -> dict[str, str]:
         """
@@ -352,6 +421,9 @@ class ExecuteService:
                     subtype = message.subtype
                     data = message.data
 
+                    # ログエントリに詳細を追加
+                    log_entry["data"] = data
+
                     if subtype == "init":
                         session_id = data.get("session_id")
                         tools = data.get("tools", [])
@@ -380,11 +452,16 @@ class ExecuteService:
                 # アシスタントメッセージ
                 elif isinstance(message, AssistantMessage):
                     content_blocks = message.content
+
+                    # ログエントリに詳細を追加
+                    log_entry["content_blocks"] = []
+
                     for content in content_blocks:
                         # テキストブロック
                         if isinstance(content, TextBlock):
                             text = content.text
                             assistant_text += text
+                            log_entry["content_blocks"].append({"type": "text", "text": text})
                             yield format_text_delta_event(text)
 
                         # ツール使用ブロック
@@ -401,18 +478,34 @@ class ExecuteService:
                                 "started_at": timestamp,
                             }
 
+                            log_entry["content_blocks"].append({
+                                "type": "tool_use",
+                                "id": tool_id,
+                                "name": tool_name,
+                                "input": tool_input,
+                            })
+
                             summary = generate_tool_summary(tool_name, tool_input)
                             yield format_tool_start_event(tool_id, tool_name, summary)
 
                         # 思考ブロック
                         elif isinstance(content, ThinkingBlock):
                             thinking_text = content.text
+                            log_entry["content_blocks"].append({"type": "thinking", "text": thinking_text})
                             yield format_thinking_event(thinking_text)
 
                 # 結果メッセージ
                 elif isinstance(message, ResultMessage):
                     subtype = message.subtype
                     usage_data = message.usage
+
+                    # ログエントリに詳細を追加
+                    log_entry["result"] = message.result
+                    log_entry["is_error"] = message.is_error
+                    log_entry["usage"] = usage_data
+                    log_entry["total_cost_usd"] = message.total_cost_usd
+                    log_entry["num_turns"] = message.num_turns
+                    log_entry["session_id"] = message.session_id
 
                     # 使用状況の取得
                     input_tokens = usage_data.get("input_tokens", 0) if usage_data else 0
@@ -464,6 +557,22 @@ class ExecuteService:
                             "num_turns": num_turns,
                         },
                     )
+
+                    # 初回実行時のみタイトルを生成
+                    if turn_number == 1 and assistant_text and subtype == "success":
+                        logger.info("初回実行のためタイトル生成中...")
+                        generated_title = self._generate_title_sync(
+                            user_input=request.user_input,
+                            assistant_response=assistant_text,
+                            model_region=model.model_region or settings.aws_region,
+                        )
+                        # タイトルを更新
+                        await self.session_service.update_session_title(
+                            chat_session_id=request.chat_session_id,
+                            tenant_id=tenant_id,
+                            title=generated_title,
+                        )
+                        logger.info("タイトル更新完了", title=generated_title)
 
                     # 結果イベントを送信
                     yield format_result_event(
