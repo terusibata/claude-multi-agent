@@ -2,8 +2,8 @@
 エージェント実行サービス
 Claude Agent SDKを使用したエージェント実行とストリーミング処理
 """
-import logging
 import os
+import structlog
 import time
 from datetime import datetime
 from decimal import Decimal
@@ -32,7 +32,7 @@ from app.utils.streaming import (
 from app.utils.tool_summary import generate_tool_result_summary, generate_tool_summary
 
 settings = get_settings()
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class ExecuteService:
@@ -69,16 +69,39 @@ class ExecuteService:
         # Noneまたは空文字列の場合は追加しない
         if settings.aws_access_key_id and settings.aws_access_key_id.strip():
             env["AWS_ACCESS_KEY_ID"] = settings.aws_access_key_id
+            logger.info(
+                "AWS_ACCESS_KEY_ID設定",
+                prefix=settings.aws_access_key_id[:8] + "..." if len(settings.aws_access_key_id) > 8 else "短すぎ"
+            )
+        else:
+            logger.warning("AWS_ACCESS_KEY_IDが設定されていません")
+
         if settings.aws_secret_access_key and settings.aws_secret_access_key.strip():
             env["AWS_SECRET_ACCESS_KEY"] = settings.aws_secret_access_key
+            logger.info(
+                "AWS_SECRET_ACCESS_KEY設定",
+                prefix=settings.aws_secret_access_key[:8] + "..." if len(settings.aws_secret_access_key) > 8 else "短すぎ"
+            )
+        else:
+            logger.warning("AWS_SECRET_ACCESS_KEYが設定されていません")
+
         if settings.aws_session_token and settings.aws_session_token.strip():
             env["AWS_SESSION_TOKEN"] = settings.aws_session_token
+            logger.info("AWS_SESSION_TOKEN設定済み")
 
         # モデルのリージョンを設定（指定がなければデフォルト）
         if model.model_region:
             env["AWS_REGION"] = model.model_region
         else:
             env["AWS_REGION"] = settings.aws_region
+
+        logger.info(
+            "Bedrock環境変数構築完了",
+            region=env["AWS_REGION"],
+            has_access_key="AWS_ACCESS_KEY_ID" in env,
+            has_secret_key="AWS_SECRET_ACCESS_KEY" in env,
+            has_session_token="AWS_SESSION_TOKEN" in env
+        )
 
         return env
 
@@ -185,10 +208,12 @@ class ExecuteService:
         errors = []
 
         logger.info(
-            f"エージェント実行開始: tenant_id={tenant_id}, "
-            f"chat_session_id={request.chat_session_id}, "
-            f"agent_config_id={request.agent_config_id}, "
-            f"agent_skills={agent_config.agent_skills}"
+            "エージェント実行開始",
+            tenant_id=tenant_id,
+            chat_session_id=request.chat_session_id,
+            agent_config_id=request.agent_config_id,
+            model_id=model.model_id,
+            agent_skills=agent_config.agent_skills
         )
 
         try:
@@ -202,10 +227,10 @@ class ExecuteService:
                 resume_session_id=request.resume_session_id,
                 fork_session=request.fork_session,
             )
-            logger.info(f"オプション構築完了: {options}")
+            logger.info("オプション構築完了", options_keys=list(options.keys()))
 
             # セッション存在確認・作成
-            logger.info(f"セッション確認中: {request.chat_session_id}")
+            logger.info("セッション確認中", chat_session_id=request.chat_session_id)
             existing_session = await self.session_service.get_session_by_id(
                 request.chat_session_id, tenant_id
             )
@@ -226,7 +251,7 @@ class ExecuteService:
             turn_number = await self.session_service.get_latest_turn_number(
                 request.chat_session_id
             ) + 1
-            logger.info(f"ターン番号: {turn_number}")
+            logger.info("ターン番号取得", turn_number=turn_number)
 
             # Claude Agent SDKをインポート
             logger.info("Claude Agent SDK インポート中...")
@@ -258,12 +283,12 @@ class ExecuteService:
 
             # ClaudeAgentOptionsを構築
             logger.info("ClaudeAgentOptions 構築中...")
-            logger.info(f"SDK options: {options}")
+            logger.info("SDK options", options=options)
             try:
                 sdk_options = ClaudeAgentOptions(**options)
                 logger.info("ClaudeAgentOptions 構築成功")
             except Exception as e:
-                logger.error(f"ClaudeAgentOptions 構築エラー: {str(e)}", exc_info=True)
+                logger.error("ClaudeAgentOptions 構築エラー", error=str(e), exc_info=True)
                 yield format_error_event(
                     f"SDK options構築エラー: {str(e)}",
                     "options_error",
@@ -287,14 +312,14 @@ class ExecuteService:
                 return
 
             # ストリーミング実行
-            logger.info(f"Claude Agent SDK query()実行開始: user_input='{request.user_input}'")
+            logger.info("Claude Agent SDK query()実行開始", user_input=request.user_input[:100])
             async for message in query(
                 prompt=request.user_input,
                 options=sdk_options,
             ):
                 message_seq += 1
                 timestamp = datetime.utcnow()
-                logger.debug(f"メッセージ受信: seq={message_seq}, type={getattr(message, 'type', 'unknown')}")
+                logger.debug("メッセージ受信", seq=message_seq, type=getattr(message, 'type', 'unknown'))
 
                 # メッセージログに保存
                 log_entry = {
@@ -532,12 +557,13 @@ class ExecuteService:
                     f"Error details: {e.stderr}"
                 )
                 logger.error(
-                    f"エージェント実行エラー (ProcessError): exit_code={e.exit_code}, "
-                    f"stderr={e.stderr}",
+                    "エージェント実行エラー (ProcessError)",
+                    exit_code=e.exit_code,
+                    stderr=e.stderr,
                     exc_info=True,
                 )
             else:
-                logger.error(f"エージェント実行エラー: {error_message}", exc_info=True)
+                logger.error("エージェント実行エラー", error=error_message, exc_info=True)
 
             yield format_error_event(error_message, "execution_error")
 
