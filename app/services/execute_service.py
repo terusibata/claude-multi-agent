@@ -2,6 +2,7 @@
 エージェント実行サービス
 Claude Agent SDKを使用したエージェント実行とストリーミング処理
 """
+import logging
 import os
 import time
 from datetime import datetime
@@ -31,6 +32,7 @@ from app.utils.streaming import (
 from app.utils.tool_summary import generate_tool_result_summary, generate_tool_summary
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 class ExecuteService:
@@ -158,11 +160,19 @@ class ExecuteService:
         message_seq = 0
         errors = []
 
+        logger.info(
+            f"エージェント実行開始: tenant_id={tenant_id}, "
+            f"chat_session_id={request.chat_session_id}, "
+            f"agent_config_id={request.agent_config_id}"
+        )
+
         try:
             # Bedrock環境設定
+            logger.info("Bedrock環境設定中...")
             self._setup_bedrock_env(model)
 
             # オプション構築
+            logger.info("SDK オプション構築中...")
             options = await self._build_options(
                 agent_config=agent_config,
                 model=model,
@@ -171,12 +181,15 @@ class ExecuteService:
                 resume_session_id=request.resume_session_id,
                 fork_session=request.fork_session,
             )
+            logger.info(f"オプション構築完了: {options}")
 
             # セッション存在確認・作成
+            logger.info(f"セッション確認中: {request.chat_session_id}")
             existing_session = await self.session_service.get_session_by_id(
                 request.chat_session_id, tenant_id
             )
             if not existing_session:
+                logger.info("新規セッション作成中...")
                 await self.session_service.create_session(
                     chat_session_id=request.chat_session_id,
                     tenant_id=tenant_id,
@@ -184,32 +197,82 @@ class ExecuteService:
                     agent_config_id=request.agent_config_id,
                     title=request.user_input[:100] if request.user_input else None,
                 )
+                logger.info("セッション作成完了")
+            else:
+                logger.info("既存セッションを使用")
 
             # ターン番号を取得
             turn_number = await self.session_service.get_latest_turn_number(
                 request.chat_session_id
             ) + 1
+            logger.info(f"ターン番号: {turn_number}")
 
             # Claude Agent SDKをインポート
+            logger.info("Claude Agent SDK インポート中...")
             try:
                 from claude_agent_sdk import ClaudeAgentOptions, query
-            except ImportError:
+                logger.info("Claude Agent SDK インポート成功")
+            except ImportError as e:
                 yield format_error_event(
-                    "Claude Agent SDKがインストールされていません",
+                    f"Claude Agent SDKがインストールされていません: {str(e)}",
                     "sdk_not_installed",
+                )
+                yield format_result_event(
+                    subtype="error_during_execution",
+                    result=None,
+                    errors=[f"Claude Agent SDKがインストールされていません: {str(e)}"],
+                    usage={
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "cache_creation_tokens": 0,
+                        "cache_read_tokens": 0,
+                        "total_tokens": 0,
+                    },
+                    cost_usd=0,
+                    num_turns=0,
+                    duration_ms=int((time.time() - start_time) * 1000),
+                    tools_summary=[],
                 )
                 return
 
             # ClaudeAgentOptionsを構築
-            sdk_options = ClaudeAgentOptions(**options)
+            logger.info("ClaudeAgentOptions 構築中...")
+            try:
+                sdk_options = ClaudeAgentOptions(**options)
+                logger.info("ClaudeAgentOptions 構築成功")
+            except Exception as e:
+                logger.error(f"ClaudeAgentOptions 構築エラー: {str(e)}", exc_info=True)
+                yield format_error_event(
+                    f"SDK options構築エラー: {str(e)}",
+                    "options_error",
+                )
+                yield format_result_event(
+                    subtype="error_during_execution",
+                    result=None,
+                    errors=[f"SDK options構築エラー: {str(e)}"],
+                    usage={
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "cache_creation_tokens": 0,
+                        "cache_read_tokens": 0,
+                        "total_tokens": 0,
+                    },
+                    cost_usd=0,
+                    num_turns=0,
+                    duration_ms=int((time.time() - start_time) * 1000),
+                    tools_summary=[],
+                )
+                return
 
             # ストリーミング実行
+            logger.info(f"Claude Agent SDK query()実行開始: user_input='{request.user_input}'")
             async for message in query(
                 prompt=request.user_input,
                 options=sdk_options,
             ):
                 message_seq += 1
                 timestamp = datetime.utcnow()
+                logger.debug(f"メッセージ受信: seq={message_seq}, type={getattr(message, 'type', 'unknown')}")
 
                 # メッセージログに保存
                 log_entry = {
@@ -439,6 +502,7 @@ class ExecuteService:
             # エラー処理
             error_message = str(e)
             duration_ms = int((time.time() - start_time) * 1000)
+            logger.error(f"エージェント実行エラー: {error_message}", exc_info=True)
 
             yield format_error_event(error_message, "execution_error")
 
