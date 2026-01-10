@@ -6,6 +6,7 @@ from fastapi import APIRouter
 
 from app.api import (
     agent_configs,
+    artifacts,
     execute,
     mcp_servers,
     models,
@@ -58,4 +59,9 @@ api_router.include_router(
     usage.router,
     prefix="/tenants/{tenant_id}",
     tags=["使用状況・コスト"],
+)
+
+api_router.include_router(
+    artifacts.router,
+    tags=["アーティファクト"],
 )

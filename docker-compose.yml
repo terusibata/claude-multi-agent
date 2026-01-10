@@ -36,9 +36,11 @@ services:
       APP_ENV: ${APP_ENV:-development}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       SKILLS_BASE_PATH: /skills
+      ARTIFACTS_BASE_PATH: /artifacts
     volumes:
       - ./app:/app/app
       - skills_data:/skills
+      - artifacts_data:/artifacts
     ports:
       - "${APP_PORT:-8000}:8000"
     depends_on:
@@ -62,8 +64,10 @@ services:
       APP_ENV: production
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       SKILLS_BASE_PATH: /skills
+      ARTIFACTS_BASE_PATH: /artifacts
     volumes:
       - skills_data:/skills
+      - artifacts_data:/artifacts
     ports:
       - "${APP_PORT:-8000}:8000"
     depends_on:
@@ -80,4 +84,6 @@ volumes:
   postgres_data:
     driver: local
   skills_data:
+    driver: local
+  artifacts_data:
     driver: local

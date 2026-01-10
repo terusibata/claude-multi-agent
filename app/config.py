@@ -45,6 +45,12 @@ class Settings(BaseSettings):
     # Skills保存ベースパス
     skills_base_path: str = "/skills"
 
+    # Artifacts設定
+    artifacts_storage_type: str = "local"  # local / s3
+    artifacts_base_path: str = "/artifacts"  # ローカルストレージのベースパス
+    artifacts_s3_bucket: Optional[str] = None  # S3バケット名
+    artifacts_s3_prefix: str = "artifacts/"  # S3キープレフィックス
+
     # ============================================
     # セキュリティ設定
     # ============================================

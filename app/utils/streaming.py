@@ -257,3 +257,50 @@ def format_title_generated_event(title: str) -> dict:
             "title": title,
         },
     }
+
+
+def format_artifact_created_event(
+    artifact_id: str,
+    artifact_type: str,
+    filename: str,
+    file_path: str | None,
+    s3_key: str | None,
+    content: str | None,
+    mime_type: str | None,
+    file_size: int,
+    title: str | None,
+    description: str | None,
+) -> dict:
+    """
+    アーティファクト作成イベントをフォーマット
+
+    Args:
+        artifact_id: アーティファクトID
+        artifact_type: アーティファクトタイプ (file / code / notebook / image / document)
+        filename: ファイル名
+        file_path: ローカルファイルパス
+        s3_key: S3キー
+        content: ファイル内容（小さいファイルの場合のみ、プレビュー用）
+        mime_type: MIMEタイプ
+        file_size: ファイルサイズ（バイト）
+        title: タイトル
+        description: 説明
+
+    Returns:
+        イベントデータ
+    """
+    return {
+        "event": "artifact_created",
+        "data": {
+            "artifact_id": artifact_id,
+            "artifact_type": artifact_type,
+            "filename": filename,
+            "file_path": file_path,
+            "s3_key": s3_key,
+            "content": content,
+            "mime_type": mime_type,
+            "file_size": file_size,
+            "title": title,
+            "description": description,
+        },
+    }

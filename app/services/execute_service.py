@@ -14,13 +14,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.models.agent_config import AgentConfig
+from app.models.artifact import Artifact
 from app.models.model import Model
 from app.schemas.execute import ExecuteRequest
+from app.services.artifact_storage_service import ArtifactStorageService
 from app.services.mcp_server_service import McpServerService
 from app.services.session_service import SessionService
 from app.services.skill_service import SkillService
 from app.services.usage_service import UsageService
 from app.utils.streaming import (
+    format_artifact_created_event,
     format_error_event,
     format_result_event,
     format_session_start_event,
@@ -50,6 +53,7 @@ class ExecuteService:
         self.usage_service = UsageService(db)
         self.skill_service = SkillService(db)
         self.mcp_service = McpServerService(db)
+        self.artifact_storage = ArtifactStorageService()
 
     def _generate_title_sync(
         self,
@@ -493,6 +497,51 @@ class ExecuteService:
                             summary = generate_tool_summary(tool_name, tool_input)
                             yield format_tool_start_event(tool_id, tool_name, summary)
 
+                            # Writeツール・NotebookEditツールの場合、アーティファクトを作成
+                            if tool_name in ["Write", "NotebookEdit"]:
+                                try:
+                                    await self._create_artifact_from_tool(
+                                        tool_name=tool_name,
+                                        tool_input=tool_input,
+                                        tool_use_id=tool_id,
+                                        tenant_id=tenant_id,
+                                        session_id=request.chat_session_id,
+                                        turn_number=turn_number,
+                                    )
+                                    logger.info(
+                                        "アーティファクト作成完了",
+                                        tool_name=tool_name,
+                                        tool_use_id=tool_id,
+                                    )
+
+                                    # アーティファクト作成イベントを送信
+                                    artifact = await self._get_latest_artifact(request.chat_session_id)
+                                    if artifact:
+                                        # 小さいファイルの場合のみ内容をイベントに含める（10KB以下）
+                                        content_for_event = None
+                                        if artifact.file_size and artifact.file_size < 10240:
+                                            content_for_event = artifact.content
+
+                                        yield format_artifact_created_event(
+                                            artifact_id=artifact.artifact_id,
+                                            artifact_type=artifact.artifact_type,
+                                            filename=artifact.filename,
+                                            file_path=artifact.file_path,
+                                            s3_key=artifact.s3_key,
+                                            content=content_for_event,
+                                            mime_type=artifact.mime_type,
+                                            file_size=artifact.file_size or 0,
+                                            title=artifact.title,
+                                            description=artifact.description,
+                                        )
+                                except Exception as e:
+                                    logger.error(
+                                        "アーティファクト作成エラー",
+                                        tool_name=tool_name,
+                                        error=str(e),
+                                        exc_info=True,
+                                    )
+
                         # 思考ブロック
                         elif isinstance(content, ThinkingBlock):
                             thinking_text = content.text
@@ -652,3 +701,116 @@ class ExecuteService:
         finally:
             # コミット
             await self.db.commit()
+
+    async def _create_artifact_from_tool(
+        self,
+        tool_name: str,
+        tool_input: dict,
+        tool_use_id: str,
+        tenant_id: str,
+        session_id: str,
+        turn_number: int,
+    ) -> None:
+        """
+        ツール実行からアーティファクトを作成
+
+        Args:
+            tool_name: ツール名 (Write / NotebookEdit)
+            tool_input: ツール入力パラメータ
+            tool_use_id: ツール使用ID
+            tenant_id: テナントID
+            session_id: チャットセッションID
+            turn_number: ターン番号
+        """
+        from pathlib import Path
+        from uuid import uuid4
+
+        # ファイルパスと内容を取得
+        file_path = None
+        content = None
+        filename = None
+
+        if tool_name == "Write":
+            file_path = tool_input.get("file_path")
+            content = tool_input.get("content")
+        elif tool_name == "NotebookEdit":
+            file_path = tool_input.get("notebook_path")
+            content = tool_input.get("new_source")
+
+        if not file_path or not content:
+            logger.warning(
+                "アーティファクト作成スキップ: file_pathまたはcontentが見つかりません",
+                tool_name=tool_name,
+                tool_input=tool_input,
+            )
+            return
+
+        # ファイル名を抽出
+        filename = Path(file_path).name
+
+        # MIMEタイプを推定
+        mime_type = self.artifact_storage.guess_mime_type(filename)
+
+        # アーティファクトタイプを判定
+        artifact_type = self.artifact_storage.detect_artifact_type(filename, mime_type)
+
+        # ストレージに保存
+        stored_path, s3_key, file_size = await self.artifact_storage.save_artifact(
+            content=content,
+            tenant_id=tenant_id,
+            session_id=session_id,
+            filename=filename,
+        )
+
+        # タイトルと説明を生成
+        title = f"{filename}"
+        description = f"{tool_name}ツールで作成されたファイル"
+
+        # DBに保存
+        artifact = Artifact(
+            artifact_id=str(uuid4()),
+            chat_session_id=session_id,
+            turn_number=turn_number,
+            tool_execution_log_id=None,  # ツール実行ログIDは後で関連付けることも可能
+            artifact_type=artifact_type,
+            filename=filename,
+            file_path=stored_path,
+            s3_key=s3_key,
+            content=content if file_size < 10240 else None,  # 10KB以下の場合のみDB保存
+            mime_type=mime_type,
+            file_size=file_size,
+            tool_name=tool_name,
+            title=title,
+            description=description,
+        )
+        self.db.add(artifact)
+        await self.db.flush()
+
+        logger.info(
+            "アーティファクトをDBに保存",
+            artifact_id=artifact.artifact_id,
+            filename=filename,
+            artifact_type=artifact_type,
+            file_size=file_size,
+        )
+
+    async def _get_latest_artifact(self, session_id: str) -> Optional[Artifact]:
+        """
+        セッションの最新アーティファクトを取得
+
+        Args:
+            session_id: チャットセッションID
+
+        Returns:
+            最新のArtifact、存在しない場合はNone
+        """
+        from sqlalchemy import select
+
+        query = (
+            select(Artifact)
+            .where(Artifact.chat_session_id == session_id)
+            .order_by(Artifact.created_at.desc())
+            .limit(1)
+        )
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none()

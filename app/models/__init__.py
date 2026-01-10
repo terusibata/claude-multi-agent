@@ -4,6 +4,7 @@ SQLAlchemyモデル定義
 """
 from app.models.agent_config import AgentConfig
 from app.models.agent_skill import AgentSkill
+from app.models.artifact import Artifact
 from app.models.chat_session import ChatSession
 from app.models.display_cache import DisplayCache
 from app.models.mcp_server import McpServer
@@ -16,6 +17,7 @@ __all__ = [
     "Model",
     "AgentConfig",
     "AgentSkill",
+    "Artifact",
     "McpServer",
     "ChatSession",
     "MessageLog",
