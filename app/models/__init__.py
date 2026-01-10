@@ -9,6 +9,7 @@ from app.models.display_cache import DisplayCache
 from app.models.mcp_server import McpServer
 from app.models.message_log import MessageLog
 from app.models.model import Model
+from app.models.session_file import SessionFile
 from app.models.tool_execution_log import ToolExecutionLog
 from app.models.usage_log import UsageLog
 
@@ -18,6 +19,7 @@ __all__ = [
     "AgentSkill",
     "McpServer",
     "ChatSession",
+    "SessionFile",
     "MessageLog",
     "DisplayCache",
     "UsageLog",

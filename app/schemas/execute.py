@@ -42,6 +42,12 @@ class ExecuteRequest(BaseModel):
     )
     fork_session: bool = Field(default=False, description="セッションをフォークするか")
 
+    # ワークスペース設定
+    enable_workspace: bool = Field(
+        default=False,
+        description="セッション専用ワークスペースを有効にする",
+    )
+
     @model_validator(mode="after")
     def ensure_chat_session_id(self) -> "ExecuteRequest":
         """chat_session_idがNoneまたは空文字列の場合は新しいUUIDを生成"""

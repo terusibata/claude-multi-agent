@@ -20,6 +20,7 @@ from app.services.mcp_server_service import McpServerService
 from app.services.session_service import SessionService
 from app.services.skill_service import SkillService
 from app.services.usage_service import UsageService
+from app.services.workspace_service import WorkspaceService
 from app.utils.streaming import (
     format_error_event,
     format_result_event,
@@ -28,6 +29,7 @@ from app.utils.streaming import (
     format_thinking_event,
     format_title_generated_event,
     format_tool_start_event,
+    format_tool_complete_event,
 )
 from app.utils.tool_summary import generate_tool_summary
 
@@ -50,6 +52,7 @@ class ExecuteService:
         self.usage_service = UsageService(db)
         self.skill_service = SkillService(db)
         self.mcp_service = McpServerService(db)
+        self.workspace_service = WorkspaceService(db)
 
     def _generate_title_sync(
         self,
@@ -177,9 +180,11 @@ class ExecuteService:
         agent_config: AgentConfig,
         model: Model,
         tenant_id: str,
+        chat_session_id: str,
         tokens: Optional[dict[str, str]],
         resume_session_id: Optional[str],
         fork_session: bool,
+        enable_workspace: bool = False,
     ) -> dict[str, Any]:
         """
         ClaudeAgentOptions相当の設定を構築
@@ -188,9 +193,11 @@ class ExecuteService:
             agent_config: エージェント実行設定
             model: モデル定義
             tenant_id: テナントID
+            chat_session_id: チャットセッションID
             tokens: MCPサーバー用トークン
             resume_session_id: 継続セッションID
             fork_session: セッションフォークフラグ
+            enable_workspace: ワークスペース有効フラグ
 
         Returns:
             SDK用オプション辞書
@@ -216,14 +223,48 @@ class ExecuteService:
             mcp_tools = self.mcp_service.get_allowed_tools(mcp_definitions)
             allowed_tools.extend(mcp_tools)
 
-        # テナント専用のcwdを取得
-        cwd = self.skill_service.get_tenant_cwd(tenant_id)
+        # システムプロンプトの構築
+        system_prompt = agent_config.system_prompt or ""
+
+        # ワークスペースが有効な場合
+        workspace_context = None
+        if enable_workspace:
+            # ワークスペース情報を取得
+            workspace_info = await self.workspace_service.get_workspace_info(
+                tenant_id, chat_session_id
+            )
+
+            # ワークスペースが未作成の場合は作成
+            if not workspace_info:
+                await self.workspace_service.create_workspace(tenant_id, chat_session_id)
+                workspace_info = await self.workspace_service.get_workspace_info(
+                    tenant_id, chat_session_id
+                )
+
+            if workspace_info and workspace_info.workspace_enabled:
+                # セッション専用ワークスペースのcwdを使用
+                cwd = self.workspace_service.get_workspace_cwd(tenant_id, chat_session_id)
+
+                # ワークスペースコンテキストを取得
+                workspace_context = await self.workspace_service.get_context_for_ai(
+                    tenant_id, chat_session_id
+                )
+
+                if workspace_context:
+                    # システムプロンプトにワークスペース情報を追加
+                    system_prompt = f"{system_prompt}\n\n{workspace_context.instructions}"
+            else:
+                # フォールバック: テナント専用のcwdを使用
+                cwd = self.skill_service.get_tenant_cwd(tenant_id)
+        else:
+            # ワークスペース無効の場合: テナント専用のcwdを使用
+            cwd = self.skill_service.get_tenant_cwd(tenant_id)
 
         # AWS Bedrock環境変数を構築
         env = self._build_bedrock_env(model)
 
         options = {
-            "system_prompt": agent_config.system_prompt,
+            "system_prompt": system_prompt if system_prompt else None,
             "model": model.bedrock_model_id,
             "allowed_tools": allowed_tools,
             "permission_mode": agent_config.permission_mode,
@@ -314,9 +355,11 @@ class ExecuteService:
                 agent_config=agent_config,
                 model=model,
                 tenant_id=tenant_id,
+                chat_session_id=request.chat_session_id,
                 tokens=request.tokens,
                 resume_session_id=request.resume_session_id,
                 fork_session=request.fork_session,
+                enable_workspace=request.enable_workspace,
             )
             logger.info("オプション構築完了", options_keys=list(options.keys()))
 
@@ -344,6 +387,7 @@ class ExecuteService:
                     TextBlock,
                     ThinkingBlock,
                     ToolUseBlock,
+                    ToolResultBlock,
                 )
                 logger.info("Claude Agent SDK インポート成功")
             except ImportError as e:
@@ -537,6 +581,43 @@ class ExecuteService:
                             thinking_text = content.text
                             log_entry["content_blocks"].append({"type": "thinking", "text": thinking_text})
                             yield format_thinking_event(thinking_text)
+
+                        # ツール結果ブロック（tool_completeイベント送信）
+                        elif isinstance(content, ToolResultBlock):
+                            tool_use_id = content.tool_use_id
+                            tool_result = content.content
+                            is_error = content.is_error or False
+
+                            # ツール名を取得（current_toolから取得を試みる）
+                            tool_name = "unknown"
+                            if current_tool and current_tool.get("tool_use_id") == tool_use_id:
+                                tool_name = current_tool.get("tool_name", "unknown")
+                                # tools_usedに追加
+                                current_tool["status"] = "error" if is_error else "completed"
+                                tools_used.append(current_tool)
+                                current_tool = None
+
+                            # ログエントリに追加
+                            log_entry["content_blocks"].append({
+                                "type": "tool_result",
+                                "tool_use_id": tool_use_id,
+                                "content": tool_result if isinstance(tool_result, str) else str(tool_result),
+                                "is_error": is_error,
+                            })
+
+                            # 結果サマリー生成
+                            if isinstance(tool_result, str):
+                                result_summary = tool_result[:200] + "..." if len(tool_result) > 200 else tool_result
+                            else:
+                                result_summary = "Result received"
+
+                            # tool_completeイベントを送信
+                            yield format_tool_complete_event(
+                                tool_use_id=tool_use_id,
+                                tool_name=tool_name,
+                                status="error" if is_error else "completed",
+                                summary=result_summary,
+                            )
 
                 # 結果メッセージ
                 elif isinstance(message, ResultMessage):

@@ -12,6 +12,7 @@ from app.api import (
     sessions,
     skills,
     usage,
+    workspace,
 )
 
 # メインルーター
@@ -58,4 +59,10 @@ api_router.include_router(
     usage.router,
     prefix="/tenants/{tenant_id}",
     tags=["使用状況・コスト"],
+)
+
+api_router.include_router(
+    workspace.router,
+    prefix="/tenants/{tenant_id}",
+    tags=["ワークスペース"],
 )
