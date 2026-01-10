@@ -69,7 +69,7 @@ async def create_agent_config(
     - **system_prompt**: システムプロンプト
     - **model_id**: 使用するモデルID
     - **allowed_tools**: 許可するツールのリスト
-    - **permission_mode**: 権限モード
+    - **permission_mode**: 権限モード (default / acceptEdits / bypassPermissions / plan)
     """
     # モデル存在チェック
     model_service = ModelService(db)

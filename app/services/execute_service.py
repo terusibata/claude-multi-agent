@@ -3,13 +3,11 @@
 Claude Agent SDKを使用したエージェント実行とストリーミング処理
 """
 import json
-import os
 import structlog
 import time
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, AsyncGenerator, Optional
-from uuid import uuid4
 
 import boto3
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.models.agent_config import AgentConfig
 from app.models.model import Model
-from app.schemas.execute import ExecuteRequest, ExecutorInfo
+from app.schemas.execute import ExecuteRequest
 from app.services.mcp_server_service import McpServerService
 from app.services.session_service import SessionService
 from app.services.skill_service import SkillService
@@ -29,10 +27,9 @@ from app.utils.streaming import (
     format_text_delta_event,
     format_thinking_event,
     format_title_generated_event,
-    format_tool_complete_event,
     format_tool_start_event,
 )
-from app.utils.tool_summary import generate_tool_result_summary, generate_tool_summary
+from app.utils.tool_summary import generate_tool_summary
 
 settings = get_settings()
 logger = structlog.get_logger(__name__)
@@ -234,11 +231,6 @@ class ExecuteService:
             "cwd": cwd,
             "env": env,
         }
-
-        # bypassPermissionsモードの場合のみ、権限スキップフラグを追加
-        # これにより、テナントごとに権限ポリシーを柔軟に設定可能
-        if agent_config.permission_mode == "bypassPermissions":
-            options["allow_dangerously_skip_permissions"] = True
 
         # Skillsが設定されている場合のみ、setting_sourcesを追加
         # setting_sourcesを指定すると、.claude/から設定を読み込もうとする

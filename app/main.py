@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse
 from app import __version__
 from app.api import api_router
 from app.config import get_settings
-from app.database import close_db, init_db
+from app.database import close_db
 
 # 設定読み込み
 settings = get_settings()
