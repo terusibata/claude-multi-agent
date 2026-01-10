@@ -394,6 +394,23 @@ class ExecuteService:
                 )
                 return
 
+            # ユーザーメッセージをメッセージログに保存
+            message_seq += 1
+            user_message_timestamp = datetime.utcnow()
+            await self.session_service.save_message_log(
+                chat_session_id=request.chat_session_id,
+                message_seq=message_seq,
+                message_type="user",
+                message_subtype=None,
+                content={
+                    "type": "user",
+                    "subtype": None,
+                    "timestamp": user_message_timestamp.isoformat(),
+                    "text": request.user_input,
+                },
+            )
+            logger.info("ユーザーメッセージ保存完了", message_seq=message_seq)
+
             # ストリーミング実行
             logger.info("Claude Agent SDK query()実行開始", user_input=request.user_input[:100])
             async for message in query(
@@ -601,13 +618,24 @@ class ExecuteService:
                     )
 
                 # メッセージログを保存
-                await self.session_service.save_message_log(
-                    chat_session_id=request.chat_session_id,
-                    message_seq=message_seq,
-                    message_type=msg_type,
-                    message_subtype=getattr(message, "subtype", None),
-                    content=log_entry,
-                )
+                # ただし、継続実行時の system/init メッセージは重複するためスキップ
+                should_save_message = True
+                if msg_type == "system" and getattr(message, "subtype", None) == "init":
+                    if request.resume_session_id:
+                        should_save_message = False
+                        logger.info("継続実行のためsystem/initメッセージをスキップ", message_seq=message_seq)
+
+                if should_save_message:
+                    await self.session_service.save_message_log(
+                        chat_session_id=request.chat_session_id,
+                        message_seq=message_seq,
+                        message_type=msg_type,
+                        message_subtype=getattr(message, "subtype", None),
+                        content=log_entry,
+                    )
+                else:
+                    # スキップした場合は message_seq をデクリメント（番号を詰める）
+                    message_seq -= 1
 
         except Exception as e:
             # エラー処理
