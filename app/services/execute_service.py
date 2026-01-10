@@ -235,11 +235,6 @@ class ExecuteService:
             "env": env,
         }
 
-        # bypassPermissionsモードの場合のみ、権限スキップフラグを追加
-        # これにより、テナントごとに権限ポリシーを柔軟に設定可能
-        if agent_config.permission_mode == "bypassPermissions":
-            options["allow_dangerously_skip_permissions"] = True
-
         # Skillsが設定されている場合のみ、setting_sourcesを追加
         # setting_sourcesを指定すると、.claude/から設定を読み込もうとする
         if agent_config.agent_skills:
