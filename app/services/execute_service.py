@@ -229,7 +229,8 @@ class ExecuteService:
             "system_prompt": agent_config.system_prompt,
             "model": model.bedrock_model_id,
             "allowed_tools": allowed_tools,
-            "permission_mode": agent_config.permission_mode,
+            "permission_mode": "bypassPermissions",  # すべてのツールを自動承認
+            "allow_dangerously_skip_permissions": True,  # bypassPermissions有効化
             "mcp_servers": mcp_servers if mcp_servers else None,
             "cwd": cwd,
             "env": env,
