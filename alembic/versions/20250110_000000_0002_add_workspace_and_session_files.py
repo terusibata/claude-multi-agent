@@ -9,6 +9,9 @@ Create Date: 2025-01-10
   - workspace_enabled: ワークスペース有効フラグ
   - workspace_path: ワークスペースパス
   - workspace_created_at: ワークスペース作成日時
+- agent_configsテーブルにワークスペース設定を追加
+  - workspace_enabled: デフォルトでワークスペースを有効にするか
+  - workspace_auto_cleanup_days: 自動クリーンアップ日数
 - session_filesテーブルを新規作成
   - セッション内のファイル管理
   - バージョン管理対応
@@ -40,6 +43,16 @@ def upgrade() -> None:
     op.add_column(
         'chat_sessions',
         sa.Column('workspace_created_at', sa.DateTime(timezone=True), nullable=True)
+    )
+
+    # agent_configsテーブルにワークスペース設定を追加
+    op.add_column(
+        'agent_configs',
+        sa.Column('workspace_enabled', sa.Boolean(), nullable=False, server_default='false')
+    )
+    op.add_column(
+        'agent_configs',
+        sa.Column('workspace_auto_cleanup_days', sa.Integer(), nullable=False, server_default='30')
     )
 
     # session_filesテーブルを作成
@@ -94,6 +107,10 @@ def downgrade() -> None:
 
     # session_filesテーブルを削除
     op.drop_table('session_files')
+
+    # agent_configsテーブルからワークスペース設定を削除
+    op.drop_column('agent_configs', 'workspace_auto_cleanup_days')
+    op.drop_column('agent_configs', 'workspace_enabled')
 
     # chat_sessionsテーブルからワークスペース関連カラムを削除
     op.drop_column('chat_sessions', 'workspace_created_at')

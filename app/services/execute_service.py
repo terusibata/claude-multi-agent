@@ -349,8 +349,12 @@ class ExecuteService:
                         session_id=existing_session.session_id
                     )
 
+            # ワークスペース有効化判定
+            # 優先順位: 実行時リクエスト > エージェント設定
+            enable_workspace = request.enable_workspace or agent_config.workspace_enabled
+
             # オプション構築
-            logger.info("SDK オプション構築中...")
+            logger.info("SDK オプション構築中...", workspace_enabled=enable_workspace)
             options = await self._build_options(
                 agent_config=agent_config,
                 model=model,
@@ -359,7 +363,7 @@ class ExecuteService:
                 tokens=request.tokens,
                 resume_session_id=request.resume_session_id,
                 fork_session=request.fork_session,
-                enable_workspace=request.enable_workspace,
+                enable_workspace=enable_workspace,
             )
             logger.info("オプション構築完了", options_keys=list(options.keys()))
 
