@@ -229,12 +229,16 @@ class ExecuteService:
             "system_prompt": agent_config.system_prompt,
             "model": model.bedrock_model_id,
             "allowed_tools": allowed_tools,
-            "permission_mode": "bypassPermissions",  # すべてのツールを自動承認
-            "allow_dangerously_skip_permissions": True,  # bypassPermissions有効化
+            "permission_mode": agent_config.permission_mode,
             "mcp_servers": mcp_servers if mcp_servers else None,
             "cwd": cwd,
             "env": env,
         }
+
+        # bypassPermissionsモードの場合のみ、権限スキップフラグを追加
+        # これにより、テナントごとに権限ポリシーを柔軟に設定可能
+        if agent_config.permission_mode == "bypassPermissions":
+            options["allow_dangerously_skip_permissions"] = True
 
         # Skillsが設定されている場合のみ、setting_sourcesを追加
         # setting_sourcesを指定すると、.claude/から設定を読み込もうとする
