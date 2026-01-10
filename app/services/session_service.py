@@ -307,6 +307,29 @@ class SessionService:
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
+    async def get_max_message_seq(
+        self,
+        chat_session_id: str,
+    ) -> int:
+        """
+        セッションの最大メッセージ順序を取得
+
+        Args:
+            chat_session_id: チャットセッションID
+
+        Returns:
+            最大メッセージ順序（メッセージがない場合は0）
+        """
+        from sqlalchemy import func
+
+        query = (
+            select(func.max(MessageLog.message_seq))
+            .where(MessageLog.chat_session_id == chat_session_id)
+        )
+        result = await self.db.execute(query)
+        max_seq = result.scalar()
+        return max_seq if max_seq is not None else 0
+
     # ============================================
     # 表示キャッシュ操作
     # ============================================

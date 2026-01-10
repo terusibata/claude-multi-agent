@@ -271,7 +271,6 @@ class ExecuteService:
         tools_used = []
         current_tool = None
         assistant_text = ""
-        message_seq = 0
         errors = []
 
         logger.info(
@@ -326,6 +325,12 @@ class ExecuteService:
                 request.chat_session_id
             ) + 1
             logger.info("ターン番号取得", turn_number=turn_number)
+
+            # 既存のメッセージログから最大のmessage_seqを取得
+            message_seq = await self.session_service.get_max_message_seq(
+                request.chat_session_id
+            )
+            logger.info("最大メッセージ順序取得", message_seq=message_seq)
 
             # Claude Agent SDKをインポート
             logger.info("Claude Agent SDK インポート中...")
@@ -450,6 +455,23 @@ class ExecuteService:
                         session_id = data.get("session_id")
                         tools = data.get("tools", [])
                         model_name = data.get("model", model.display_name)
+
+                        # エージェント設定情報を追加
+                        log_entry["data"]["agent_config"] = {
+                            "agent_config_id": agent_config.config_id,
+                            "name": agent_config.name,
+                            "system_prompt": agent_config.system_prompt,
+                            "allowed_tools": agent_config.allowed_tools,
+                            "permission_mode": agent_config.permission_mode,
+                            "mcp_servers": agent_config.mcp_servers,
+                            "agent_skills": agent_config.agent_skills,
+                        }
+                        log_entry["data"]["model_config"] = {
+                            "model_id": model.model_id,
+                            "display_name": model.display_name,
+                            "bedrock_model_id": model.bedrock_model_id,
+                            "model_region": model.model_region,
+                        }
 
                         # セッションIDを更新
                         if session_id:
