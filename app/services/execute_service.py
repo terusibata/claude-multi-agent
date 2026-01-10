@@ -287,18 +287,6 @@ class ExecuteService:
         )
 
         try:
-            # オプション構築
-            logger.info("SDK オプション構築中...")
-            options = await self._build_options(
-                agent_config=agent_config,
-                model=model,
-                tenant_id=tenant_id,
-                tokens=request.tokens,
-                resume_session_id=request.resume_session_id,
-                fork_session=request.fork_session,
-            )
-            logger.info("オプション構築完了", options_keys=list(options.keys()))
-
             # セッション存在確認・作成
             logger.info("セッション確認中", chat_session_id=request.chat_session_id)
             existing_session = await self.session_service.get_session_by_id(
@@ -316,6 +304,25 @@ class ExecuteService:
                 logger.info("セッション作成完了")
             else:
                 logger.info("既存セッションを使用")
+                # resume_session_idが指定されていない場合、前回のセッションを自動引き継ぎ
+                if not request.resume_session_id and existing_session.session_id:
+                    request.resume_session_id = existing_session.session_id
+                    logger.info(
+                        "前回のセッションを自動復元",
+                        session_id=existing_session.session_id
+                    )
+
+            # オプション構築
+            logger.info("SDK オプション構築中...")
+            options = await self._build_options(
+                agent_config=agent_config,
+                model=model,
+                tenant_id=tenant_id,
+                tokens=request.tokens,
+                resume_session_id=request.resume_session_id,
+                fork_session=request.fork_session,
+            )
+            logger.info("オプション構築完了", options_keys=list(options.keys()))
 
             # ターン番号を取得
             turn_number = await self.session_service.get_latest_turn_number(
