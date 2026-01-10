@@ -25,7 +25,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: ai-agent-backend
+    container_name: claude-multi-agent
     env_file:
       - .env
     environment:
@@ -52,7 +52,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: ai-agent-backend-prod
+    container_name: claude-multi-agent-prod
     profiles:
       - production
     env_file:
