@@ -23,6 +23,7 @@ from app.services.usage_service import UsageService
 from app.services.workspace_service import WorkspaceService
 from app.utils.streaming import (
     format_error_event,
+    format_files_presented_event,
     format_result_event,
     format_session_start_event,
     format_text_delta_event,
@@ -310,7 +311,7 @@ class ExecuteService:
         session_id = None
         messages_log = []
         tools_used = []
-        current_tool = None
+        pending_tools = {}  # tool_use_idでツール情報をトラッキング
         assistant_text = ""
         errors = []
 
@@ -481,6 +482,13 @@ class ExecuteService:
                     msg_type = "assistant"
                 elif isinstance(message, ResultMessage):
                     msg_type = "result"
+                else:
+                    # 未知のメッセージタイプをログに記録
+                    logger.warning(
+                        "未知のメッセージタイプを受信",
+                        message_class=type(message).__name__,
+                        message_attrs=dir(message),
+                    )
 
                 logger.debug("メッセージ受信", seq=message_seq, type=msg_type)
 
@@ -562,7 +570,8 @@ class ExecuteService:
                             tool_name = content.name
                             tool_input = content.input
 
-                            current_tool = {
+                            # pending_toolsに追加（tool_use_idでトラッキング）
+                            pending_tools[tool_id] = {
                                 "tool_use_id": tool_id,
                                 "tool_name": tool_name,
                                 "tool_input": tool_input,
@@ -592,22 +601,24 @@ class ExecuteService:
                             tool_result = content.content
                             is_error = content.is_error or False
 
-                            # ツール名を取得（current_toolから取得を試みる）
-                            tool_name = "unknown"
-                            if current_tool and current_tool.get("tool_use_id") == tool_use_id:
-                                tool_name = current_tool.get("tool_name", "unknown")
-                                # tools_usedに追加
-                                current_tool["status"] = "error" if is_error else "completed"
-                                tools_used.append(current_tool)
-                                current_tool = None
+                            # pending_toolsからツール情報を取得
+                            tool_info = pending_tools.pop(tool_use_id, None)
+                            tool_name = tool_info.get("tool_name", "unknown") if tool_info else "unknown"
+                            tool_input = tool_info.get("tool_input", {}) if tool_info else {}
 
                             # ログエントリに追加
                             log_entry["content_blocks"].append({
                                 "type": "tool_result",
                                 "tool_use_id": tool_use_id,
+                                "tool_name": tool_name,
                                 "content": tool_result if isinstance(tool_result, str) else str(tool_result),
                                 "is_error": is_error,
                             })
+
+                            # tools_usedに追加
+                            if tool_info:
+                                tool_info["status"] = "error" if is_error else "completed"
+                                tools_used.append(tool_info)
 
                             # 結果サマリー生成
                             if isinstance(tool_result, str):
@@ -622,6 +633,45 @@ class ExecuteService:
                                 status="error" if is_error else "completed",
                                 summary=result_summary,
                             )
+
+                            # ワークスペースが有効で、ファイル操作ツールの場合はファイルを登録
+                            if enable_workspace and not is_error:
+                                if tool_name in ("Write", "Edit", "NotebookEdit"):
+                                    file_path = tool_input.get("file_path") or tool_input.get("notebook_path")
+                                    if file_path:
+                                        try:
+                                            # ファイルをDBに登録
+                                            file_info = await self.workspace_service.register_ai_file(
+                                                tenant_id=tenant_id,
+                                                chat_session_id=request.chat_session_id,
+                                                file_path=file_path,
+                                                source="ai_created" if tool_name == "Write" else "ai_modified",
+                                                is_presented=True,
+                                                description=f"AIが{tool_name}ツールで作成/編集しました",
+                                            )
+                                            if file_info:
+                                                # files_presentedイベントを送信
+                                                yield format_files_presented_event(
+                                                    files=[{
+                                                        "file_path": file_info.file_path,
+                                                        "file_name": file_info.original_name,
+                                                        "file_size": file_info.file_size,
+                                                        "version": file_info.version,
+                                                        "description": file_info.description,
+                                                    }],
+                                                    message=f"ファイル '{file_info.original_name}' を作成しました",
+                                                )
+                                                logger.info(
+                                                    "AIファイル登録成功",
+                                                    file_path=file_path,
+                                                    tool_name=tool_name,
+                                                )
+                                        except Exception as e:
+                                            logger.warning(
+                                                "AIファイル登録失敗",
+                                                file_path=file_path,
+                                                error=str(e),
+                                            )
 
                 # 結果メッセージ
                 elif isinstance(message, ResultMessage):
@@ -725,9 +775,12 @@ class ExecuteService:
                     )
 
                 # メッセージログを保存
-                # ただし、継続実行時の system/init メッセージは重複するためスキップ
+                # ただし、継続実行時の system/init メッセージと unknown タイプは重複/不要なためスキップ
                 should_save_message = True
-                if msg_type == "system" and getattr(message, "subtype", None) == "init":
+                if msg_type == "unknown":
+                    should_save_message = False
+                    logger.info("unknownメッセージタイプをスキップ", message_seq=message_seq)
+                elif msg_type == "system" and getattr(message, "subtype", None) == "init":
                     if request.resume_session_id:
                         should_save_message = False
                         logger.info("継続実行のためsystem/initメッセージをスキップ", message_seq=message_seq)

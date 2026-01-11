@@ -257,3 +257,28 @@ def format_title_generated_event(title: str) -> dict:
             "title": title,
         },
     }
+
+
+def format_files_presented_event(
+    files: list[dict],
+    message: str = "",
+) -> dict:
+    """
+    ファイル提示イベントをフォーマット
+    AIがユーザーに提供するファイルを通知
+
+    Args:
+        files: ファイル情報のリスト
+            [{"file_path": "...", "file_name": "...", "file_size": 123, "description": "..."}]
+        message: AIからのメッセージ
+
+    Returns:
+        イベントデータ
+    """
+    return {
+        "event": "files_presented",
+        "data": {
+            "files": files,
+            "message": message,
+        },
+    }
