@@ -581,7 +581,7 @@ class ExecuteService:
                                 "tool_name": tool_name,
                                 "tool_input": tool_input,
                                 "status": "running",
-                                "started_at": timestamp,
+                                "started_at": timestamp.isoformat(),  # JSONシリアライズ可能な形式に変換
                             }
 
                             log_entry["content_blocks"].append({
