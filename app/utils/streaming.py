@@ -111,6 +111,7 @@ def format_tool_start_event(
     tool_use_id: str,
     tool_name: str,
     summary: str,
+    tool_input: dict | None = None,
 ) -> dict:
     """
     ツール開始イベントをフォーマット
@@ -119,17 +120,28 @@ def format_tool_start_event(
         tool_use_id: ツール使用ID
         tool_name: ツール名
         summary: サマリー
+        tool_input: ツール入力パラメータ
 
     Returns:
         イベントデータ
     """
+    data = {
+        "tool_use_id": tool_use_id,
+        "tool_name": tool_name,
+        "summary": summary,
+    }
+    if tool_input is not None:
+        # 大きな入力値は切り詰める
+        truncated_input = {}
+        for key, value in tool_input.items():
+            if isinstance(value, str) and len(value) > 500:
+                truncated_input[key] = value[:500] + "..."
+            else:
+                truncated_input[key] = value
+        data["tool_input"] = truncated_input
     return {
         "event": "tool_start",
-        "data": {
-            "tool_use_id": tool_use_id,
-            "tool_name": tool_name,
-            "summary": summary,
-        },
+        "data": data,
     }
 
 
@@ -138,6 +150,8 @@ def format_tool_complete_event(
     tool_name: str,
     status: str,
     summary: str,
+    result_preview: str | None = None,
+    is_error: bool = False,
 ) -> dict:
     """
     ツール完了イベントをフォーマット
@@ -147,18 +161,24 @@ def format_tool_complete_event(
         tool_name: ツール名
         status: ステータス
         summary: サマリー
+        result_preview: 結果のプレビュー
+        is_error: エラーかどうか
 
     Returns:
         イベントデータ
     """
+    data = {
+        "tool_use_id": tool_use_id,
+        "tool_name": tool_name,
+        "status": status,
+        "summary": summary,
+        "is_error": is_error,
+    }
+    if result_preview is not None:
+        data["result_preview"] = result_preview
     return {
         "event": "tool_complete",
-        "data": {
-            "tool_use_id": tool_use_id,
-            "tool_name": tool_name,
-            "status": status,
-            "summary": summary,
-        },
+        "data": data,
     }
 
 
@@ -189,6 +209,8 @@ def format_result_event(
     num_turns: int,
     duration_ms: int,
     tools_summary: list[dict],
+    session_id: str | None = None,
+    files_presented: list[dict] | None = None,
 ) -> dict:
     """
     結果イベントをフォーマット
@@ -202,22 +224,29 @@ def format_result_event(
         num_turns: ターン数
         duration_ms: 実行時間（ミリ秒）
         tools_summary: ツール使用サマリー
+        session_id: セッションID
+        files_presented: 今回の処理で提供されたファイル一覧
 
     Returns:
         イベントデータ
     """
+    data = {
+        "subtype": subtype,
+        "result": result,
+        "errors": errors,
+        "usage": usage,
+        "cost_usd": cost_usd,
+        "num_turns": num_turns,
+        "duration_ms": duration_ms,
+        "tools_summary": tools_summary,
+    }
+    if session_id is not None:
+        data["session_id"] = session_id
+    if files_presented is not None:
+        data["files_presented"] = files_presented
     return {
         "event": "result",
-        "data": {
-            "subtype": subtype,
-            "result": result,
-            "errors": errors,
-            "usage": usage,
-            "cost_usd": cost_usd,
-            "num_turns": num_turns,
-            "duration_ms": duration_ms,
-            "tools_summary": tools_summary,
-        },
+        "data": data,
     }
 
 

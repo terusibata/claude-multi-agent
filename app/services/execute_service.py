@@ -3,6 +3,7 @@
 Claude Agent SDKを使用したエージェント実行とストリーミング処理
 """
 import json
+import os
 import structlog
 import time
 from datetime import datetime
@@ -312,6 +313,7 @@ class ExecuteService:
         messages_log = []
         tools_used = []
         pending_tools = {}  # tool_use_idでツール情報をトラッキング
+        files_presented = []  # 今回の処理で提供されたファイル一覧
         assistant_text = ""
         errors = []
 
@@ -389,6 +391,7 @@ class ExecuteService:
                     AssistantMessage,
                     SystemMessage,
                     ResultMessage,
+                    UserMessage,
                     TextBlock,
                     ThinkingBlock,
                     ToolUseBlock,
@@ -480,6 +483,8 @@ class ExecuteService:
                     msg_type = "system"
                 elif isinstance(message, AssistantMessage):
                     msg_type = "assistant"
+                elif isinstance(message, UserMessage):
+                    msg_type = "user_result"  # ツール結果を含むユーザーメッセージ
                 elif isinstance(message, ResultMessage):
                     msg_type = "result"
                 else:
@@ -587,7 +592,9 @@ class ExecuteService:
                             })
 
                             summary = generate_tool_summary(tool_name, tool_input)
-                            yield format_tool_start_event(tool_id, tool_name, summary)
+                            yield format_tool_start_event(
+                                tool_id, tool_name, summary, tool_input=tool_input
+                            )
 
                         # 思考ブロック
                         elif isinstance(content, ThinkingBlock):
@@ -611,13 +618,17 @@ class ExecuteService:
                                 "type": "tool_result",
                                 "tool_use_id": tool_use_id,
                                 "tool_name": tool_name,
-                                "content": tool_result if isinstance(tool_result, str) else str(tool_result),
+                                "content": tool_result if isinstance(tool_result, str) else str(tool_result)[:500],
                                 "is_error": is_error,
                             })
 
                             # tools_usedに追加
                             if tool_info:
                                 tool_info["status"] = "error" if is_error else "completed"
+                                tool_info["result_preview"] = (
+                                    tool_result[:200] + "..." if isinstance(tool_result, str) and len(tool_result) > 200
+                                    else str(tool_result)[:200] if tool_result else ""
+                                )
                                 tools_used.append(tool_info)
 
                             # 結果サマリー生成
@@ -632,6 +643,8 @@ class ExecuteService:
                                 tool_name=tool_name,
                                 status="error" if is_error else "completed",
                                 summary=result_summary,
+                                result_preview=result_summary,
+                                is_error=is_error,
                             )
 
                             # ワークスペースが有効で、ファイル操作ツールの場合はファイルを登録
@@ -640,35 +653,159 @@ class ExecuteService:
                                     file_path = tool_input.get("file_path") or tool_input.get("notebook_path")
                                     if file_path:
                                         try:
+                                            # 絶対パスを相対パスに変換
+                                            workspace_cwd = self.workspace_service.get_workspace_cwd(tenant_id, request.chat_session_id)
+                                            if file_path.startswith(workspace_cwd):
+                                                relative_path = file_path[len(workspace_cwd):].lstrip("/")
+                                            elif file_path.startswith("/"):
+                                                # 他の絶対パスの場合はファイル名のみを使用
+                                                relative_path = os.path.basename(file_path)
+                                            else:
+                                                relative_path = file_path
+
                                             # ファイルをDBに登録
                                             file_info = await self.workspace_service.register_ai_file(
                                                 tenant_id=tenant_id,
                                                 chat_session_id=request.chat_session_id,
-                                                file_path=file_path,
+                                                file_path=relative_path,
                                                 source="ai_created" if tool_name == "Write" else "ai_modified",
                                                 is_presented=True,
                                                 description=f"AIが{tool_name}ツールで作成/編集しました",
                                             )
                                             if file_info:
+                                                # files_presentedリストに追加
+                                                file_data = {
+                                                    "file_id": file_info.file_id,
+                                                    "file_path": file_info.file_path,
+                                                    "file_name": file_info.original_name,
+                                                    "file_size": file_info.file_size,
+                                                    "mime_type": file_info.mime_type,
+                                                    "version": file_info.version,
+                                                    "description": file_info.description,
+                                                }
+                                                files_presented.append(file_data)
+
                                                 # files_presentedイベントを送信
                                                 yield format_files_presented_event(
-                                                    files=[{
-                                                        "file_path": file_info.file_path,
-                                                        "file_name": file_info.original_name,
-                                                        "file_size": file_info.file_size,
-                                                        "version": file_info.version,
-                                                        "description": file_info.description,
-                                                    }],
+                                                    files=[file_data],
                                                     message=f"ファイル '{file_info.original_name}' を作成しました",
                                                 )
                                                 logger.info(
-                                                    "AIファイル登録成功",
-                                                    file_path=file_path,
+                                                    "AIファイル登録成功 (AssistantMessage)",
+                                                    file_path=relative_path,
+                                                    original_path=file_path,
                                                     tool_name=tool_name,
                                                 )
                                         except Exception as e:
                                             logger.warning(
-                                                "AIファイル登録失敗",
+                                                "AIファイル登録失敗 (AssistantMessage)",
+                                                file_path=file_path,
+                                                error=str(e),
+                                            )
+
+                # UserMessage（ツール結果を含む）
+                elif isinstance(message, UserMessage):
+                    content_blocks = getattr(message, "content", [])
+                    log_entry["content_blocks"] = []
+
+                    for content in content_blocks:
+                        # ツール結果ブロックの処理
+                        if isinstance(content, ToolResultBlock):
+                            tool_use_id = content.tool_use_id
+                            tool_result = content.content
+                            is_error = getattr(content, "is_error", False) or False
+
+                            # pending_toolsからツール情報を取得
+                            tool_info = pending_tools.pop(tool_use_id, None)
+                            tool_name = tool_info.get("tool_name", "unknown") if tool_info else "unknown"
+                            tool_input = tool_info.get("tool_input", {}) if tool_info else {}
+
+                            # ログエントリに追加
+                            log_entry["content_blocks"].append({
+                                "type": "tool_result",
+                                "tool_use_id": tool_use_id,
+                                "tool_name": tool_name,
+                                "content": tool_result if isinstance(tool_result, str) else str(tool_result)[:500],
+                                "is_error": is_error,
+                            })
+
+                            # tools_usedに追加
+                            if tool_info:
+                                tool_info["status"] = "error" if is_error else "completed"
+                                tool_info["result_preview"] = (
+                                    tool_result[:200] + "..." if isinstance(tool_result, str) and len(tool_result) > 200
+                                    else str(tool_result)[:200] if tool_result else ""
+                                )
+                                tools_used.append(tool_info)
+
+                            # 結果サマリー生成
+                            if isinstance(tool_result, str):
+                                result_summary = tool_result[:200] + "..." if len(tool_result) > 200 else tool_result
+                            else:
+                                result_summary = "Result received"
+
+                            # tool_completeイベントを送信
+                            yield format_tool_complete_event(
+                                tool_use_id=tool_use_id,
+                                tool_name=tool_name,
+                                status="error" if is_error else "completed",
+                                summary=result_summary,
+                                result_preview=result_summary,
+                                is_error=is_error,
+                            )
+
+                            # ワークスペースが有効で、ファイル操作ツールの場合はファイルを登録
+                            if enable_workspace and not is_error:
+                                if tool_name in ("Write", "Edit", "NotebookEdit"):
+                                    file_path = tool_input.get("file_path") or tool_input.get("notebook_path")
+                                    if file_path:
+                                        try:
+                                            # 絶対パスを相対パスに変換
+                                            workspace_cwd = self.workspace_service.get_workspace_cwd(tenant_id, request.chat_session_id)
+                                            if file_path.startswith(workspace_cwd):
+                                                relative_path = file_path[len(workspace_cwd):].lstrip("/")
+                                            elif file_path.startswith("/"):
+                                                # 他の絶対パスの場合はファイル名のみを使用
+                                                relative_path = os.path.basename(file_path)
+                                            else:
+                                                relative_path = file_path
+
+                                            # ファイルをDBに登録
+                                            file_info = await self.workspace_service.register_ai_file(
+                                                tenant_id=tenant_id,
+                                                chat_session_id=request.chat_session_id,
+                                                file_path=relative_path,
+                                                source="ai_created" if tool_name == "Write" else "ai_modified",
+                                                is_presented=True,
+                                                description=f"AIが{tool_name}ツールで作成/編集しました",
+                                            )
+                                            if file_info:
+                                                # files_presentedリストに追加
+                                                file_data = {
+                                                    "file_id": file_info.file_id,
+                                                    "file_path": file_info.file_path,
+                                                    "file_name": file_info.original_name,
+                                                    "file_size": file_info.file_size,
+                                                    "mime_type": file_info.mime_type,
+                                                    "version": file_info.version,
+                                                    "description": file_info.description,
+                                                }
+                                                files_presented.append(file_data)
+
+                                                # files_presentedイベントを送信
+                                                yield format_files_presented_event(
+                                                    files=[file_data],
+                                                    message=f"ファイル '{file_info.original_name}' を作成しました",
+                                                )
+                                                logger.info(
+                                                    "AIファイル登録成功 (UserMessage)",
+                                                    file_path=relative_path,
+                                                    original_path=file_path,
+                                                    tool_name=tool_name,
+                                                )
+                                        except Exception as e:
+                                            logger.warning(
+                                                "AIファイル登録失敗 (UserMessage)",
                                                 file_path=file_path,
                                                 error=str(e),
                                             )
@@ -772,6 +909,8 @@ class ExecuteService:
                         num_turns=num_turns,
                         duration_ms=duration_ms,
                         tools_summary=tools_used,
+                        session_id=session_id,
+                        files_presented=files_presented if files_presented else None,
                     )
 
                 # メッセージログを保存
