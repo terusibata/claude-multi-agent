@@ -506,7 +506,7 @@ class ExecuteService:
 
                         # エージェント設定情報を追加
                         log_entry["data"]["agent_config"] = {
-                            "agent_config_id": agent_config.config_id,
+                            "agent_config_id": agent_config.agent_config_id,
                             "name": agent_config.name,
                             "system_prompt": agent_config.system_prompt,
                             "allowed_tools": agent_config.allowed_tools,
