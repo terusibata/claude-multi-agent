@@ -734,10 +734,11 @@ class WorkspaceService:
         if version:
             query = query.where(SessionFile.version == version)
         else:
-            query = query.order_by(SessionFile.version.desc())
+            # バージョン指定なしの場合は最新バージョンを取得
+            query = query.order_by(SessionFile.version.desc()).limit(1)
 
         result = await self.db.execute(query)
-        session_file = result.scalar_one_or_none()
+        session_file = result.scalars().first()
 
         if not session_file:
             raise WorkspaceSecurityError("ファイルが見つかりません")
