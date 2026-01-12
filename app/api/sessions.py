@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.schemas.session import (
     ChatSessionResponse,
-    DisplayCacheResponse,
     MessageLogResponse,
     SessionUpdateRequest,
 )
@@ -141,25 +140,6 @@ async def delete_session(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"セッション '{session_id}' が見つかりません",
         )
-
-
-@router.get(
-    "/{session_id}/display",
-    response_model=list[DisplayCacheResponse],
-    summary="表示用キャッシュ取得",
-)
-async def get_display_cache(
-    tenant_id: str,
-    session_id: str,
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    セッションの表示用キャッシュを取得します。
-    UI表示用に最適化されたデータです。
-    """
-    service = SessionService(db)
-    cache = await service.get_display_cache(session_id, tenant_id)
-    return cache
 
 
 @router.get(

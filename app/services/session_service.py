@@ -6,11 +6,10 @@ from datetime import datetime
 from typing import Any, Optional
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.chat_session import ChatSession
-from app.models.display_cache import DisplayCache
 from app.models.message_log import MessageLog
 
 
@@ -227,15 +226,10 @@ class SessionService:
         if not session:
             return False
 
-        # 関連するメッセージログと表示キャッシュも削除
+        # 関連するメッセージログを削除
         await self.db.execute(
             MessageLog.__table__.delete().where(
                 MessageLog.chat_session_id == chat_session_id
-            )
-        )
-        await self.db.execute(
-            DisplayCache.__table__.delete().where(
-                DisplayCache.chat_session_id == chat_session_id
             )
         )
 
@@ -320,8 +314,6 @@ class SessionService:
         Returns:
             最大メッセージ順序（メッセージがない場合は0）
         """
-        from sqlalchemy import func
-
         query = (
             select(func.max(MessageLog.message_seq))
             .where(MessageLog.chat_session_id == chat_session_id)
@@ -330,80 +322,13 @@ class SessionService:
         max_seq = result.scalar()
         return max_seq if max_seq is not None else 0
 
-    # ============================================
-    # 表示キャッシュ操作
-    # ============================================
-
-    async def save_display_cache(
-        self,
-        chat_session_id: str,
-        turn_number: int,
-        user_message: Optional[str],
-        assistant_message: Optional[str],
-        tools_summary: Optional[list[dict]],
-        metadata: Optional[dict],
-    ) -> DisplayCache:
-        """
-        表示キャッシュを保存
-
-        Args:
-            chat_session_id: チャットセッションID
-            turn_number: ターン番号
-            user_message: ユーザーメッセージ
-            assistant_message: アシスタントメッセージ
-            tools_summary: ツールサマリー
-            metadata: メタデータ
-
-        Returns:
-            保存された表示キャッシュ
-        """
-        cache = DisplayCache(
-            cache_id=str(uuid4()),
-            chat_session_id=chat_session_id,
-            turn_number=turn_number,
-            user_message=user_message,
-            assistant_message=assistant_message,
-            tools_summary=tools_summary,
-            metadata_=metadata,
-        )
-        self.db.add(cache)
-        await self.db.flush()
-        return cache
-
-    async def get_display_cache(
-        self,
-        chat_session_id: str,
-        tenant_id: str,
-    ) -> list[DisplayCache]:
-        """
-        セッションの表示キャッシュを取得
-
-        Args:
-            chat_session_id: チャットセッションID
-            tenant_id: テナントID（権限チェック用）
-
-        Returns:
-            表示キャッシュリスト
-        """
-        # まずセッションの存在確認
-        session = await self.get_session_by_id(chat_session_id, tenant_id)
-        if not session:
-            return []
-
-        query = (
-            select(DisplayCache)
-            .where(DisplayCache.chat_session_id == chat_session_id)
-            .order_by(DisplayCache.turn_number)
-        )
-        result = await self.db.execute(query)
-        return list(result.scalars().all())
-
     async def get_latest_turn_number(
         self,
         chat_session_id: str,
     ) -> int:
         """
         最新のターン番号を取得
+        ターン番号はユーザーメッセージの数として計算
 
         Args:
             chat_session_id: チャットセッションID
@@ -412,11 +337,13 @@ class SessionService:
             最新のターン番号（存在しない場合は0）
         """
         query = (
-            select(DisplayCache.turn_number)
-            .where(DisplayCache.chat_session_id == chat_session_id)
-            .order_by(DisplayCache.turn_number.desc())
-            .limit(1)
+            select(func.count())
+            .select_from(MessageLog)
+            .where(
+                MessageLog.chat_session_id == chat_session_id,
+                MessageLog.message_type == "user",
+            )
         )
         result = await self.db.execute(query)
-        turn = result.scalar_one_or_none()
-        return turn if turn else 0
+        count = result.scalar()
+        return count if count else 0
