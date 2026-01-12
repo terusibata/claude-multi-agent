@@ -5,7 +5,7 @@ API層での共通エラー処理
 import structlog
 from fastapi import HTTPException, status
 from functools import wraps
-from typing import Any, Callable, Optional, Type, TypeVar
+from typing import Any, Callable, Optional, TypeVar
 
 from app.utils.exceptions import (
     AppError,
