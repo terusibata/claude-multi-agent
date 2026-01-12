@@ -22,6 +22,10 @@ from app.services.session_service import SessionService
 from app.services.skill_service import SkillService
 from app.services.usage_service import UsageService
 from app.services.workspace_service import WorkspaceService
+from app.services.builtin_tools import (
+    create_file_presentation_mcp_server,
+    FILE_PRESENTATION_PROMPT,
+)
 from app.utils.streaming import (
     format_error_event,
     format_result_event,
@@ -227,6 +231,9 @@ class ExecuteService:
         # システムプロンプトの構築
         system_prompt = agent_config.system_prompt or ""
 
+        # ワークスペースが有効な場合のcwdを事前に決定（ビルトインMCPサーバー用）
+        cwd = self.skill_service.get_tenant_cwd(tenant_id)  # デフォルト値
+
         # ワークスペースが有効な場合
         workspace_context = None
         if enable_workspace:
@@ -260,6 +267,16 @@ class ExecuteService:
         else:
             # ワークスペース無効の場合: テナント専用のcwdを使用
             cwd = self.skill_service.get_tenant_cwd(tenant_id)
+
+        # ビルトインMCPサーバー（file-presentation）を追加
+        file_presentation_server = create_file_presentation_mcp_server(cwd)
+        if file_presentation_server:
+            mcp_servers["file-presentation"] = file_presentation_server
+            # present_filesツールを許可リストに追加
+            if "mcp__file-presentation__present_files" not in allowed_tools:
+                allowed_tools.append("mcp__file-presentation__present_files")
+            # システムプロンプトにファイル提示の指示を追加
+            system_prompt = f"{system_prompt}\n\n{FILE_PRESENTATION_PROMPT}"
 
         # AWS Bedrock環境変数を構築
         env = self._build_bedrock_env(model)
