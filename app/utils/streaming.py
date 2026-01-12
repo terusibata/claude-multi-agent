@@ -404,3 +404,5 @@ def format_title_generated_event(title: str) -> dict:
             "timestamp": _get_timestamp(),
         },
     }
+
+

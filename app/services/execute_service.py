@@ -17,15 +17,15 @@ from app.config import get_settings
 from app.models.agent_config import AgentConfig
 from app.models.model import Model
 from app.schemas.execute import ExecuteRequest
+from app.services.builtin_tools import (
+    create_file_presentation_mcp_server,
+    FILE_PRESENTATION_PROMPT,
+)
 from app.services.mcp_server_service import McpServerService
 from app.services.session_service import SessionService
 from app.services.skill_service import SkillService
 from app.services.usage_service import UsageService
 from app.services.workspace_service import WorkspaceService
-from app.services.builtin_tools import (
-    create_file_presentation_mcp_server,
-    FILE_PRESENTATION_PROMPT,
-)
 from app.utils.streaming import (
     format_error_event,
     format_result_event,
@@ -268,15 +268,16 @@ class ExecuteService:
             # ワークスペース無効の場合: テナント専用のcwdを使用
             cwd = self.skill_service.get_tenant_cwd(tenant_id)
 
-        # ビルトインMCPサーバー（file-presentation）を追加
+        # ビルトインMCPサーバー（present_filesツール）を作成
         file_presentation_server = create_file_presentation_mcp_server(cwd)
         if file_presentation_server:
+            # MCPサーバー設定にビルトインサーバーを追加
             mcp_servers["file-presentation"] = file_presentation_server
-            # present_filesツールを許可リストに追加
-            if "mcp__file-presentation__present_files" not in allowed_tools:
-                allowed_tools.append("mcp__file-presentation__present_files")
+            # 許可するツールリストに追加
+            allowed_tools.append("mcp__file-presentation__present_files")
             # システムプロンプトにファイル提示の指示を追加
             system_prompt = f"{system_prompt}\n\n{FILE_PRESENTATION_PROMPT}"
+            logger.info("ビルトインMCPサーバー追加完了", server_name="file-presentation")
 
         # AWS Bedrock環境変数を構築
         env = self._build_bedrock_env(model)
@@ -402,7 +403,7 @@ class ExecuteService:
             try:
                 from claude_agent_sdk import (
                     ClaudeAgentOptions,
-                    query,
+                    ClaudeSDKClient,
                     AssistantMessage,
                     SystemMessage,
                     ResultMessage,
@@ -483,345 +484,344 @@ class ExecuteService:
             )
             logger.info("ユーザーメッセージ保存完了", message_seq=message_seq)
 
-            # ストリーミング実行
-            logger.info("Claude Agent SDK query()実行開始", user_input=request.user_input[:100])
-            async for message in query(
-                prompt=request.user_input,
-                options=sdk_options,
-            ):
-                message_seq += 1
-                timestamp = datetime.utcnow()
+            # ストリーミング実行（ClaudeSDKClientを使用してカスタムツールをサポート）
+            logger.info("ClaudeSDKClient実行開始", user_input=request.user_input[:100])
+            async with ClaudeSDKClient(options=sdk_options) as client:
+                await client.query(request.user_input)
+                async for message in client.receive_response():
+                    message_seq += 1
+                    timestamp = datetime.utcnow()
 
-                # メッセージタイプを判定
-                msg_type = "unknown"
-                if isinstance(message, SystemMessage):
-                    msg_type = "system"
-                elif isinstance(message, AssistantMessage):
-                    msg_type = "assistant"
-                elif isinstance(message, UserMessage):
-                    msg_type = "user_result"  # ツール結果を含むユーザーメッセージ
-                elif isinstance(message, ResultMessage):
-                    msg_type = "result"
-                else:
-                    # 未知のメッセージタイプをログに記録
-                    logger.warning(
-                        "未知のメッセージタイプを受信",
-                        message_class=type(message).__name__,
-                        message_attrs=dir(message),
-                    )
-
-                logger.debug("メッセージ受信", seq=message_seq, type=msg_type)
-
-                # メッセージログに保存用のエントリ
-                log_entry = {
-                    "type": msg_type,
-                    "subtype": getattr(message, "subtype", None),
-                    "timestamp": timestamp.isoformat(),
-                }
-
-                # システムメッセージ
-                if isinstance(message, SystemMessage):
-                    subtype = message.subtype
-                    data = message.data
-
-                    # ログエントリに詳細を追加
-                    log_entry["data"] = data
-
-                    if subtype == "init":
-                        session_id = data.get("session_id")
-                        tools = data.get("tools", [])
-                        model_name = data.get("model", model.display_name)
-
-                        # エージェント設定情報を追加
-                        log_entry["data"]["agent_config"] = {
-                            "agent_config_id": agent_config.agent_config_id,
-                            "name": agent_config.name,
-                            "system_prompt": agent_config.system_prompt,
-                            "allowed_tools": agent_config.allowed_tools,
-                            "permission_mode": agent_config.permission_mode,
-                            "mcp_servers": agent_config.mcp_servers,
-                            "agent_skills": agent_config.agent_skills,
-                        }
-                        log_entry["data"]["model_config"] = {
-                            "model_id": model.model_id,
-                            "display_name": model.display_name,
-                            "bedrock_model_id": model.bedrock_model_id,
-                            "model_region": model.model_region,
-                        }
-
-                        # セッションIDを更新
-                        if session_id:
-                            parent_id = (
-                                request.resume_session_id
-                                if request.fork_session
-                                else None
-                            )
-                            await self.session_service.update_session(
-                                chat_session_id=request.chat_session_id,
-                                tenant_id=tenant_id,
-                                session_id=session_id,
-                                parent_session_id=parent_id,
-                            )
-
-                        yield format_session_start_event(
-                            session_id=session_id or "",
-                            tools=tools,
-                            model=model_name,
+                    # メッセージタイプを判定
+                    msg_type = "unknown"
+                    if isinstance(message, SystemMessage):
+                        msg_type = "system"
+                    elif isinstance(message, AssistantMessage):
+                        msg_type = "assistant"
+                    elif isinstance(message, UserMessage):
+                        msg_type = "user_result"  # ツール結果を含むユーザーメッセージ
+                    elif isinstance(message, ResultMessage):
+                        msg_type = "result"
+                    else:
+                        # 未知のメッセージタイプをログに記録
+                        logger.warning(
+                            "未知のメッセージタイプを受信",
+                            message_class=type(message).__name__,
+                            message_attrs=dir(message),
                         )
 
-                # アシスタントメッセージ
-                elif isinstance(message, AssistantMessage):
-                    content_blocks = message.content
+                    logger.debug("メッセージ受信", seq=message_seq, type=msg_type)
 
-                    # ログエントリに詳細を追加
-                    log_entry["content_blocks"] = []
+                    # メッセージログに保存用のエントリ
+                    log_entry = {
+                        "type": msg_type,
+                        "subtype": getattr(message, "subtype", None),
+                        "timestamp": timestamp.isoformat(),
+                    }
 
-                    for content in content_blocks:
-                        # テキストブロック
-                        if isinstance(content, TextBlock):
-                            text = content.text
-                            assistant_text += text
-                            log_entry["content_blocks"].append({"type": "text", "text": text})
-                            yield format_text_delta_event(text)
+                    # システムメッセージ
+                    if isinstance(message, SystemMessage):
+                        subtype = message.subtype
+                        data = message.data
 
-                        # ツール使用ブロック
-                        elif isinstance(content, ToolUseBlock):
-                            tool_id = content.id
-                            tool_name = content.name
-                            tool_input = content.input
+                        # ログエントリに詳細を追加
+                        log_entry["data"] = data
 
-                            # pending_toolsに追加（tool_use_idでトラッキング）
-                            pending_tools[tool_id] = {
-                                "tool_use_id": tool_id,
-                                "tool_name": tool_name,
-                                "tool_input": tool_input,
-                                "status": "running",
-                                "started_at": timestamp.isoformat(),  # JSONシリアライズ可能な形式に変換
+                        if subtype == "init":
+                            session_id = data.get("session_id")
+                            tools = data.get("tools", [])
+                            model_name = data.get("model", model.display_name)
+
+                            # エージェント設定情報を追加
+                            log_entry["data"]["agent_config"] = {
+                                "agent_config_id": agent_config.agent_config_id,
+                                "name": agent_config.name,
+                                "system_prompt": agent_config.system_prompt,
+                                "allowed_tools": agent_config.allowed_tools,
+                                "permission_mode": agent_config.permission_mode,
+                                "mcp_servers": agent_config.mcp_servers,
+                                "agent_skills": agent_config.agent_skills,
+                            }
+                            log_entry["data"]["model_config"] = {
+                                "model_id": model.model_id,
+                                "display_name": model.display_name,
+                                "bedrock_model_id": model.bedrock_model_id,
+                                "model_region": model.model_region,
                             }
 
-                            log_entry["content_blocks"].append({
-                                "type": "tool_use",
-                                "id": tool_id,
-                                "name": tool_name,
-                                "input": tool_input,
-                            })
-
-                            summary = generate_tool_summary(tool_name, tool_input)
-                            yield format_tool_start_event(
-                                tool_id, tool_name, summary, tool_input=tool_input
-                            )
-
-                        # 思考ブロック
-                        elif isinstance(content, ThinkingBlock):
-                            thinking_text = content.text
-                            log_entry["content_blocks"].append({"type": "thinking", "text": thinking_text})
-                            yield format_thinking_event(thinking_text)
-
-                        # ツール結果ブロック（tool_completeイベント送信）
-                        elif isinstance(content, ToolResultBlock):
-                            tool_use_id = content.tool_use_id
-                            tool_result = content.content
-                            is_error = content.is_error or False
-
-                            # pending_toolsからツール情報を取得
-                            tool_info = pending_tools.pop(tool_use_id, None)
-                            tool_name = tool_info.get("tool_name", "unknown") if tool_info else "unknown"
-                            tool_input = tool_info.get("tool_input", {}) if tool_info else {}
-
-                            # ログエントリに追加
-                            log_entry["content_blocks"].append({
-                                "type": "tool_result",
-                                "tool_use_id": tool_use_id,
-                                "tool_name": tool_name,
-                                "content": tool_result if isinstance(tool_result, str) else str(tool_result)[:500],
-                                "is_error": is_error,
-                            })
-
-                            # tools_usedに追加
-                            if tool_info:
-                                tool_info["status"] = "error" if is_error else "completed"
-                                tool_info["result_preview"] = (
-                                    tool_result[:200] + "..." if isinstance(tool_result, str) and len(tool_result) > 200
-                                    else str(tool_result)[:200] if tool_result else ""
+                            # セッションIDを更新
+                            if session_id:
+                                parent_id = (
+                                    request.resume_session_id
+                                    if request.fork_session
+                                    else None
                                 )
-                                tools_used.append(tool_info)
-
-                            # 結果サマリー生成
-                            if isinstance(tool_result, str):
-                                result_summary = tool_result[:200] + "..." if len(tool_result) > 200 else tool_result
-                            else:
-                                result_summary = "Result received"
-
-                            # tool_completeイベントを送信
-                            yield format_tool_complete_event(
-                                tool_use_id=tool_use_id,
-                                tool_name=tool_name,
-                                status="error" if is_error else "completed",
-                                summary=result_summary,
-                                result_preview=result_summary,
-                                is_error=is_error,
-                            )
-
-                # UserMessage（ツール結果を含む）
-                elif isinstance(message, UserMessage):
-                    content_blocks = getattr(message, "content", [])
-                    log_entry["content_blocks"] = []
-
-                    for content in content_blocks:
-                        # ツール結果ブロックの処理
-                        if isinstance(content, ToolResultBlock):
-                            tool_use_id = content.tool_use_id
-                            tool_result = content.content
-                            is_error = getattr(content, "is_error", False) or False
-
-                            # pending_toolsからツール情報を取得
-                            tool_info = pending_tools.pop(tool_use_id, None)
-                            tool_name = tool_info.get("tool_name", "unknown") if tool_info else "unknown"
-                            tool_input = tool_info.get("tool_input", {}) if tool_info else {}
-
-                            # ログエントリに追加
-                            log_entry["content_blocks"].append({
-                                "type": "tool_result",
-                                "tool_use_id": tool_use_id,
-                                "tool_name": tool_name,
-                                "content": tool_result if isinstance(tool_result, str) else str(tool_result)[:500],
-                                "is_error": is_error,
-                            })
-
-                            # tools_usedに追加
-                            if tool_info:
-                                tool_info["status"] = "error" if is_error else "completed"
-                                tool_info["result_preview"] = (
-                                    tool_result[:200] + "..." if isinstance(tool_result, str) and len(tool_result) > 200
-                                    else str(tool_result)[:200] if tool_result else ""
+                                await self.session_service.update_session(
+                                    chat_session_id=request.chat_session_id,
+                                    tenant_id=tenant_id,
+                                    session_id=session_id,
+                                    parent_session_id=parent_id,
                                 )
-                                tools_used.append(tool_info)
 
-                            # 結果サマリー生成
-                            if isinstance(tool_result, str):
-                                result_summary = tool_result[:200] + "..." if len(tool_result) > 200 else tool_result
-                            else:
-                                result_summary = "Result received"
-
-                            # tool_completeイベントを送信
-                            yield format_tool_complete_event(
-                                tool_use_id=tool_use_id,
-                                tool_name=tool_name,
-                                status="error" if is_error else "completed",
-                                summary=result_summary,
-                                result_preview=result_summary,
-                                is_error=is_error,
+                            yield format_session_start_event(
+                                session_id=session_id or "",
+                                tools=tools,
+                                model=model_name,
                             )
 
-                # 結果メッセージ
-                elif isinstance(message, ResultMessage):
-                    subtype = message.subtype
-                    usage_data = message.usage
+                    # アシスタントメッセージ
+                    elif isinstance(message, AssistantMessage):
+                        content_blocks = message.content
 
-                    # ログエントリに詳細を追加
-                    log_entry["result"] = message.result
-                    log_entry["is_error"] = message.is_error
-                    log_entry["usage"] = usage_data
-                    log_entry["total_cost_usd"] = message.total_cost_usd
-                    log_entry["num_turns"] = message.num_turns
-                    log_entry["session_id"] = message.session_id
+                        # ログエントリに詳細を追加
+                        log_entry["content_blocks"] = []
 
-                    # 使用状況の取得
-                    input_tokens = usage_data.get("input_tokens", 0) if usage_data else 0
-                    output_tokens = usage_data.get("output_tokens", 0) if usage_data else 0
-                    cache_creation = usage_data.get("cache_creation_input_tokens", 0) if usage_data else 0
-                    cache_read = usage_data.get("cache_read_input_tokens", 0) if usage_data else 0
-                    total_cost = message.total_cost_usd or 0
-                    num_turns = message.num_turns
-                    duration_ms = int((time.time() - start_time) * 1000)
+                        for content in content_blocks:
+                            # テキストブロック
+                            if isinstance(content, TextBlock):
+                                text = content.text
+                                assistant_text += text
+                                log_entry["content_blocks"].append({"type": "text", "text": text})
+                                yield format_text_delta_event(text)
 
-                    # エラーチェック
-                    if message.is_error:
-                        errors.append(message.result or "Unknown error")
+                            # ツール使用ブロック
+                            elif isinstance(content, ToolUseBlock):
+                                tool_id = content.id
+                                tool_name = content.name
+                                tool_input = content.input
 
-                    # コストを計算（SDKから取得できない場合）
-                    if not total_cost:
-                        total_cost = float(
-                            model.calculate_cost(
-                                input_tokens, output_tokens, cache_creation, cache_read
+                                # pending_toolsに追加（tool_use_idでトラッキング）
+                                pending_tools[tool_id] = {
+                                    "tool_use_id": tool_id,
+                                    "tool_name": tool_name,
+                                    "tool_input": tool_input,
+                                    "status": "running",
+                                    "started_at": timestamp.isoformat(),  # JSONシリアライズ可能な形式に変換
+                                }
+
+                                log_entry["content_blocks"].append({
+                                    "type": "tool_use",
+                                    "id": tool_id,
+                                    "name": tool_name,
+                                    "input": tool_input,
+                                })
+
+                                summary = generate_tool_summary(tool_name, tool_input)
+                                yield format_tool_start_event(
+                                    tool_id, tool_name, summary, tool_input=tool_input
+                                )
+
+                            # 思考ブロック
+                            elif isinstance(content, ThinkingBlock):
+                                thinking_text = content.text
+                                log_entry["content_blocks"].append({"type": "thinking", "text": thinking_text})
+                                yield format_thinking_event(thinking_text)
+
+                            # ツール結果ブロック（tool_completeイベント送信）
+                            elif isinstance(content, ToolResultBlock):
+                                tool_use_id = content.tool_use_id
+                                tool_result = content.content
+                                is_error = content.is_error or False
+
+                                # pending_toolsからツール情報を取得
+                                tool_info = pending_tools.pop(tool_use_id, None)
+                                tool_name = tool_info.get("tool_name", "unknown") if tool_info else "unknown"
+                                tool_input = tool_info.get("tool_input", {}) if tool_info else {}
+
+                                # ログエントリに追加
+                                log_entry["content_blocks"].append({
+                                    "type": "tool_result",
+                                    "tool_use_id": tool_use_id,
+                                    "tool_name": tool_name,
+                                    "content": tool_result if isinstance(tool_result, str) else str(tool_result)[:500],
+                                    "is_error": is_error,
+                                })
+
+                                # tools_usedに追加
+                                if tool_info:
+                                    tool_info["status"] = "error" if is_error else "completed"
+                                    tool_info["result_preview"] = (
+                                        tool_result[:200] + "..." if isinstance(tool_result, str) and len(tool_result) > 200
+                                        else str(tool_result)[:200] if tool_result else ""
+                                    )
+                                    tools_used.append(tool_info)
+
+                                # 結果サマリー生成
+                                if isinstance(tool_result, str):
+                                    result_summary = tool_result[:200] + "..." if len(tool_result) > 200 else tool_result
+                                else:
+                                    result_summary = "Result received"
+
+                                # tool_completeイベントを送信
+                                yield format_tool_complete_event(
+                                    tool_use_id=tool_use_id,
+                                    tool_name=tool_name,
+                                    status="error" if is_error else "completed",
+                                    summary=result_summary,
+                                    result_preview=result_summary,
+                                    is_error=is_error,
+                                )
+
+                    # UserMessage（ツール結果を含む）
+                    elif isinstance(message, UserMessage):
+                        content_blocks = getattr(message, "content", [])
+                        log_entry["content_blocks"] = []
+
+                        for content in content_blocks:
+                            # ツール結果ブロックの処理
+                            if isinstance(content, ToolResultBlock):
+                                tool_use_id = content.tool_use_id
+                                tool_result = content.content
+                                is_error = getattr(content, "is_error", False) or False
+
+                                # pending_toolsからツール情報を取得
+                                tool_info = pending_tools.pop(tool_use_id, None)
+                                tool_name = tool_info.get("tool_name", "unknown") if tool_info else "unknown"
+                                tool_input = tool_info.get("tool_input", {}) if tool_info else {}
+
+                                # ログエントリに追加
+                                log_entry["content_blocks"].append({
+                                    "type": "tool_result",
+                                    "tool_use_id": tool_use_id,
+                                    "tool_name": tool_name,
+                                    "content": tool_result if isinstance(tool_result, str) else str(tool_result)[:500],
+                                    "is_error": is_error,
+                                })
+
+                                # tools_usedに追加
+                                if tool_info:
+                                    tool_info["status"] = "error" if is_error else "completed"
+                                    tool_info["result_preview"] = (
+                                        tool_result[:200] + "..." if isinstance(tool_result, str) and len(tool_result) > 200
+                                        else str(tool_result)[:200] if tool_result else ""
+                                    )
+                                    tools_used.append(tool_info)
+
+                                # 結果サマリー生成
+                                if isinstance(tool_result, str):
+                                    result_summary = tool_result[:200] + "..." if len(tool_result) > 200 else tool_result
+                                else:
+                                    result_summary = "Result received"
+
+                                # tool_completeイベントを送信
+                                yield format_tool_complete_event(
+                                    tool_use_id=tool_use_id,
+                                    tool_name=tool_name,
+                                    status="error" if is_error else "completed",
+                                    summary=result_summary,
+                                    result_preview=result_summary,
+                                    is_error=is_error,
+                                )
+
+                    # 結果メッセージ
+                    elif isinstance(message, ResultMessage):
+                        subtype = message.subtype
+                        usage_data = message.usage
+
+                        # ログエントリに詳細を追加
+                        log_entry["result"] = message.result
+                        log_entry["is_error"] = message.is_error
+                        log_entry["usage"] = usage_data
+                        log_entry["total_cost_usd"] = message.total_cost_usd
+                        log_entry["num_turns"] = message.num_turns
+                        log_entry["session_id"] = message.session_id
+
+                        # 使用状況の取得
+                        input_tokens = usage_data.get("input_tokens", 0) if usage_data else 0
+                        output_tokens = usage_data.get("output_tokens", 0) if usage_data else 0
+                        cache_creation = usage_data.get("cache_creation_input_tokens", 0) if usage_data else 0
+                        cache_read = usage_data.get("cache_read_input_tokens", 0) if usage_data else 0
+                        total_cost = message.total_cost_usd or 0
+                        num_turns = message.num_turns
+                        duration_ms = int((time.time() - start_time) * 1000)
+
+                        # エラーチェック
+                        if message.is_error:
+                            errors.append(message.result or "Unknown error")
+
+                        # コストを計算（SDKから取得できない場合）
+                        if not total_cost:
+                            total_cost = float(
+                                model.calculate_cost(
+                                    input_tokens, output_tokens, cache_creation, cache_read
+                                )
                             )
-                        )
 
-                    # 使用状況ログを保存
-                    await self.usage_service.save_usage_log(
-                        tenant_id=tenant_id,
-                        user_id=request.executor.user_id,
-                        model_id=request.model_id,
-                        input_tokens=input_tokens,
-                        output_tokens=output_tokens,
-                        cache_creation_tokens=cache_creation,
-                        cache_read_tokens=cache_read,
-                        cost_usd=Decimal(str(total_cost)),
-                        agent_config_id=request.agent_config_id,
-                        session_id=session_id,
-                        chat_session_id=request.chat_session_id,
-                    )
-
-                    # 初回実行時のみタイトルを生成
-                    if turn_number == 1 and assistant_text and subtype == "success":
-                        logger.info("初回実行のためタイトル生成中...")
-                        generated_title = self._generate_title_sync(
-                            user_input=request.user_input,
-                            assistant_response=assistant_text,
-                            model_region=model.model_region or settings.aws_region,
-                        )
-                        # タイトルを更新
-                        await self.session_service.update_session_title(
-                            chat_session_id=request.chat_session_id,
+                        # 使用状況ログを保存
+                        await self.usage_service.save_usage_log(
                             tenant_id=tenant_id,
-                            title=generated_title,
+                            user_id=request.executor.user_id,
+                            model_id=request.model_id,
+                            input_tokens=input_tokens,
+                            output_tokens=output_tokens,
+                            cache_creation_tokens=cache_creation,
+                            cache_read_tokens=cache_read,
+                            cost_usd=Decimal(str(total_cost)),
+                            agent_config_id=request.agent_config_id,
+                            session_id=session_id,
+                            chat_session_id=request.chat_session_id,
                         )
-                        logger.info("タイトル更新完了", title=generated_title)
 
-                        # タイトル生成イベントをストリーミングで送信
-                        yield format_title_generated_event(generated_title)
+                        # 初回実行時のみタイトルを生成
+                        if turn_number == 1 and assistant_text and subtype == "success":
+                            logger.info("初回実行のためタイトル生成中...")
+                            generated_title = self._generate_title_sync(
+                                user_input=request.user_input,
+                                assistant_response=assistant_text,
+                                model_region=model.model_region or settings.aws_region,
+                            )
+                            # タイトルを更新
+                            await self.session_service.update_session_title(
+                                chat_session_id=request.chat_session_id,
+                                tenant_id=tenant_id,
+                                title=generated_title,
+                            )
+                            logger.info("タイトル更新完了", title=generated_title)
 
-                    # 結果イベントを送信
-                    yield format_result_event(
-                        subtype=subtype,
-                        result=assistant_text if subtype == "success" else None,
-                        errors=errors if errors else None,
-                        usage={
-                            "input_tokens": input_tokens,
-                            "output_tokens": output_tokens,
-                            "cache_creation_tokens": cache_creation,
-                            "cache_read_tokens": cache_read,
-                            "total_tokens": input_tokens + output_tokens,
-                        },
-                        cost_usd=total_cost,
-                        num_turns=num_turns,
-                        duration_ms=duration_ms,
-                        tools_summary=tools_used,
-                        session_id=session_id,
-                    )
+                            # タイトル生成イベントをストリーミングで送信
+                            yield format_title_generated_event(generated_title)
 
-                # メッセージログを保存
-                # ただし、継続実行時の system/init メッセージと unknown タイプは重複/不要なためスキップ
-                should_save_message = True
-                if msg_type == "unknown":
-                    should_save_message = False
-                    logger.info("unknownメッセージタイプをスキップ", message_seq=message_seq)
-                elif msg_type == "system" and getattr(message, "subtype", None) == "init":
-                    if request.resume_session_id:
+                        # 結果イベントを送信
+                        yield format_result_event(
+                            subtype=subtype,
+                            result=assistant_text if subtype == "success" else None,
+                            errors=errors if errors else None,
+                            usage={
+                                "input_tokens": input_tokens,
+                                "output_tokens": output_tokens,
+                                "cache_creation_tokens": cache_creation,
+                                "cache_read_tokens": cache_read,
+                                "total_tokens": input_tokens + output_tokens,
+                            },
+                            cost_usd=total_cost,
+                            num_turns=num_turns,
+                            duration_ms=duration_ms,
+                            tools_summary=tools_used,
+                            session_id=session_id,
+                        )
+
+                    # メッセージログを保存
+                    # ただし、継続実行時の system/init メッセージと unknown タイプは重複/不要なためスキップ
+                    should_save_message = True
+                    if msg_type == "unknown":
                         should_save_message = False
-                        logger.info("継続実行のためsystem/initメッセージをスキップ", message_seq=message_seq)
+                        logger.info("unknownメッセージタイプをスキップ", message_seq=message_seq)
+                    elif msg_type == "system" and getattr(message, "subtype", None) == "init":
+                        if request.resume_session_id:
+                            should_save_message = False
+                            logger.info("継続実行のためsystem/initメッセージをスキップ", message_seq=message_seq)
 
-                if should_save_message:
-                    await self.session_service.save_message_log(
-                        chat_session_id=request.chat_session_id,
-                        message_seq=message_seq,
-                        message_type=msg_type,
-                        message_subtype=getattr(message, "subtype", None),
-                        content=log_entry,
-                    )
-                else:
-                    # スキップした場合は message_seq をデクリメント（番号を詰める）
-                    message_seq -= 1
+                    if should_save_message:
+                        await self.session_service.save_message_log(
+                            chat_session_id=request.chat_session_id,
+                            message_seq=message_seq,
+                            message_type=msg_type,
+                            message_subtype=getattr(message, "subtype", None),
+                            content=log_entry,
+                        )
+                    else:
+                        # スキップした場合は message_seq をデクリメント（番号を詰める）
+                        message_seq -= 1
 
         except Exception as e:
             # エラー処理
