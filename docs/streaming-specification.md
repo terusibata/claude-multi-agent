@@ -76,6 +76,7 @@ data: {"type": "result", "subtype": "success", ...}
   "timestamp": "2024-01-01T00:00:00.000000",
   "data": {
     "session_id": "session-uuid-from-sdk",
+    "chat_session_id": "chat-session-uuid",
     "tools": ["Read", "Write", "Bash", "Glob", "Grep"],
     "model": "Claude Sonnet 4",
     "agent_config": {
@@ -355,6 +356,7 @@ export interface ModelConfigInfo {
 
 export interface SystemInitData {
   session_id: string;
+  chat_session_id?: string;
   tools: string[];
   model: string;
   agent_config?: AgentConfigInfo;

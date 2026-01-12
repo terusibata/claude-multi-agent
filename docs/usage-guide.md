@@ -34,11 +34,15 @@ Claude Multi-Agent は、Claude Agent SDK を使用したマルチテナント�
 # データベース
 DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/dbname
 
-# AWS Bedrock
+# AWS Bedrock & S3
 CLAUDE_CODE_USE_BEDROCK=1
 AWS_REGION=us-west-2
 AWS_ACCESS_KEY_ID=your-access-key
 AWS_SECRET_ACCESS_KEY=your-secret-key
+
+# S3ワークスペース
+S3_BUCKET_NAME=your-app-workspaces
+S3_WORKSPACE_PREFIX=workspaces/
 
 # アプリケーション
 APP_ENV=development
@@ -47,6 +51,38 @@ SKILLS_BASE_PATH=/skills
 
 # CORS
 CORS_ORIGINS=http://localhost:3000
+```
+
+**重要**: AWS認証情報には **Bedrock** と **S3** の両方の権限が必要です。
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:DeleteObject",
+        "s3:ListBucket",
+        "s3:HeadObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::your-app-workspaces",
+        "arn:aws:s3:::your-app-workspaces/*"
+      ]
+    }
+  ]
+}
 ```
 
 ### Docker起動
@@ -173,19 +209,24 @@ curl -X POST http://localhost:8000/api/tenants/tenant-001/execute \
 }
 ```
 
-## ワークスペース機能
+## ワークスペース機能（S3）
 
-ワークスペースは、セッションごとに独立したファイル空間を提供します。
+ワークスペースは、セッションごとに独立したファイル空間を提供します。ファイルはAmazon S3に保存されます。
+
+### 事前準備
+
+1. S3バケットを作成（パブリックアクセスはブロック）
+2. IAMポリシーでS3へのアクセス権限を付与
+3. 環境変数を設定
+
+```bash
+S3_BUCKET_NAME=your-app-workspaces
+S3_WORKSPACE_PREFIX=workspaces/
+```
 
 ### ワークスペースの有効化
 
-```json
-{
-  "enable_workspace": true
-}
-```
-
-または、エージェント設定で有効化：
+エージェント設定で有効化：
 
 ```json
 {
@@ -193,42 +234,52 @@ curl -X POST http://localhost:8000/api/tenants/tenant-001/execute \
 }
 ```
 
-### ファイルのアップロード
+### ファイルアップロード付きエージェント実行
+
+`/execute` APIでファイルを添付できます（multipart/form-data）：
 
 ```bash
-curl -X POST "http://localhost:8000/api/tenants/tenant-001/sessions/session-001/upload-files" \
-  -F "files=@data.csv" \
-  -F "target_dir=uploads"
+curl -X POST "http://localhost:8000/api/tenants/tenant-001/execute" \
+  -F 'request_data={
+    "agent_config_id": "default-agent",
+    "model_id": "claude-sonnet-4",
+    "user_input": "このファイルを分析してください",
+    "executor": {
+      "user_id": "user-001",
+      "name": "田中太郎",
+      "email": "tanaka@example.com"
+    }
+  }' \
+  -F "files=@data.csv"
 ```
 
 ### ファイル一覧の取得
 
 ```bash
-curl "http://localhost:8000/api/tenants/tenant-001/sessions/session-001/list-files"
+curl "http://localhost:8000/api/tenants/tenant-001/sessions/session-001/files"
 ```
 
 ### ファイルのダウンロード
 
 ```bash
-curl -O "http://localhost:8000/api/tenants/tenant-001/sessions/session-001/download-file?path=outputs/result.json"
+curl -O "http://localhost:8000/api/tenants/tenant-001/sessions/session-001/files/download?path=outputs/result.json"
 ```
 
 ### Presentedファイル
 
-AIが生成してユーザーに提示したいファイルは「Presented」としてマークされます。
+AIが生成してユーザーに提示したいファイルは自動的に「Presented」としてマークされます（`outputs/`ディレクトリ以下）。
 
 ```bash
 # Presentedファイル一覧の取得
-curl "http://localhost:8000/api/tenants/tenant-001/sessions/session-001/presented-files"
+curl "http://localhost:8000/api/tenants/tenant-001/sessions/session-001/files/presented"
 ```
 
 ### セキュリティ
 
-ワークスペースには以下のセキュリティ機能があります：
+- **S3アクセス制御**: バケットは完全プライベート、APIサーバー経由でのみアクセス
+- **テナント・セッション分離**: 異なるテナント・セッション間でのアクセスを禁止
 
-- **パストラバーサル防止**: ワークスペース外へのアクセスを禁止
-- **ファイルサイズ制限**: 単一ファイル50MB、合計500MB
-- **テナント分離**: 異なるテナント間でのアクセスを禁止
+詳細は [workspace.md](./workspace.md) を参照してください。
 
 ## MCPサーバー
 

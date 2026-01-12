@@ -16,6 +16,7 @@ AWS Bedrock + Claude Agent SDKを利用したマルチテナント対応AIエー
 - **エージェント実行**: Server-Sent Events (SSE) によるストリーミング実行
 - **セッション管理**: 会話履歴とセッションの管理
 - **使用状況監視**: トークン使用量とコストのレポート
+- **S3ワークスペース**: セッションごとの独立したファイル空間（Amazon S3ベース）
 
 ## 技術スタック
 
@@ -51,7 +52,8 @@ requirements.txt
 ### 前提条件
 
 - Docker & Docker Compose
-- AWS認証情報（Bedrock用）
+- AWS認証情報（Bedrock + S3用）
+- S3バケット（ワークスペース用、パブリックアクセスブロック推奨）
 
 ### 開発環境の起動
 
@@ -127,8 +129,44 @@ uvicorn app.main:app --reload
 | AWS_REGION | AWSリージョン | us-west-2 |
 | AWS_ACCESS_KEY_ID | AWSアクセスキー | - |
 | AWS_SECRET_ACCESS_KEY | AWSシークレットキー | - |
+| S3_BUCKET_NAME | ワークスペース用S3バケット名 | - |
+| S3_WORKSPACE_PREFIX | S3内のプレフィックス | workspaces/ |
 | APP_ENV | 環境 | development |
 | SKILLS_BASE_PATH | Skills保存パス | /skills |
+
+### AWS IAMポリシー要件
+
+AWS認証情報には **Bedrock** と **S3** の両方の権限が必要です：
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:DeleteObject",
+        "s3:ListBucket",
+        "s3:HeadObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::your-bucket-name",
+        "arn:aws:s3:::your-bucket-name/*"
+      ]
+    }
+  ]
+}
+```
 
 ## ライセンス
 

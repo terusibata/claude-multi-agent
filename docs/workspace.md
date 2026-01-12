@@ -1,8 +1,37 @@
-# セッション専用ワークスペース機能
+# セッション専用ワークスペース機能（S3版）
 
 ## 概要
 
-セッション専用ワークスペースは、AIエージェントがファイル操作を行う際に、セッションごとに独立した作業ディレクトリを提供する機能です。これにより、異なるセッション間でのファイルの競合を防ぎ、セキュアなファイル管理を実現します。
+セッション専用ワークスペースは、AIエージェントがファイル操作を行う際に、セッションごとに独立したファイル空間を提供する機能です。ファイルはAmazon S3に保存され、APIサーバー経由でのみアクセス可能です。
+
+### アーキテクチャ
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  フロントエンド                                                  │
+│                                                                 │
+│  ファイル送信: POST /execute (multipart/form-data)              │
+│  ファイル取得: GET /files/download?path=xxx                     │
+│               → バイナリデータが返る                             │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  バックエンド API                                               │
+│                                                                 │
+│  S3との通信はすべてここで行う                                    │
+│  フロントエンドはS3に直接アクセスしない                          │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Amazon S3 (完全プライベート)                                   │
+│                                                                 │
+│  - パブリックアクセス: すべてブロック                            │
+│  - CORS: 不要                                                   │
+│  - アクセス: IAM認証のみ                                        │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 ### ユースケース
 
@@ -13,7 +42,71 @@
 | データ変換 | **必要** | CSV→JSON変換など、ファイル入出力が必要なタスク |
 | 翻訳・校正 | 不要 | テキストの入出力のみで完結 |
 | 質問応答 | 不要 | 会話のみで完結 |
-| 情報検索 | 不要 | MCPサーバー経由でデータ取得のみ |
+
+---
+
+## 事前準備
+
+### 1. S3バケットの作成
+
+```
+設定:
+├── バケット名: your-app-workspaces（任意）
+├── リージョン: ap-northeast-1（任意）
+├── パブリックアクセス: すべてブロック ✓
+├── バージョニング: 有効（推奨）
+├── CORS: 不要（サーバー経由のため）
+└── 暗号化: SSE-S3
+```
+
+### 2. IAMポリシーの設定
+
+AWS認証情報（`AWS_ACCESS_KEY_ID`、`AWS_SECRET_ACCESS_KEY`）に以下の権限が必要です：
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:DeleteObject",
+        "s3:ListBucket",
+        "s3:HeadObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::your-app-workspaces",
+        "arn:aws:s3:::your-app-workspaces/*"
+      ]
+    }
+  ]
+}
+```
+
+**注意**: AWS認証情報には **Bedrock** と **S3** の両方の権限が必要です。
+
+### 3. 環境変数の設定
+
+```bash
+# S3ワークスペース設定
+S3_BUCKET_NAME=your-app-workspaces
+S3_WORKSPACE_PREFIX=workspaces/
+```
+
+### 4. ライフサイクルポリシー（推奨）
+
+古いファイルの自動削除・移行を設定：
+
+```
+ルール名: workspace-lifecycle
+プレフィックス: workspaces/
+移行:
+├── 7日後 → S3 標準-IA
+├── 30日後 → Glacier Instant Retrieval
+└── 90日後 → Glacier Deep Archive（または削除）
+```
 
 ---
 
@@ -29,108 +122,85 @@ PUT /api/tenants/{tenant_id}/agent-configs/{config_id}
   "name": "ドキュメント分析エージェント",
   "system_prompt": "...",
   "allowed_tools": ["Read", "Write", "Bash", "Glob"],
-  "workspace_enabled": true,  // ← エージェント設定で有効化
-  "workspace_auto_cleanup_days": 30  // ← 自動クリーンアップ日数
+  "workspace_enabled": true
 }
 ```
 
 ### 2. 実行時の有効化
 
-エージェント設定で無効でも、実行時に有効化できます：
-
-```json
-POST /api/tenants/{tenant_id}/execute
-{
-  "agent_config_id": "...",
-  "model_id": "...",
-  "user_input": "このファイルを分析してください",
-  "executor": {...},
-  "enable_workspace": true  // ← 実行時に有効化（オプション）
-}
-```
-
-> **優先順位**: `enable_workspace`（実行時） > `workspace_enabled`（エージェント設定）
+エージェント設定で無効でも、実行時に有効化できます。
 
 ---
 
-## ファイルアップロード
+## ファイルアップロード（/execute API）
+
+ファイルのアップロードは `/execute` APIで行います。
 
 ### エンドポイント
 
 ```
-POST /api/tenants/{tenant_id}/sessions/{session_id}/upload-files
+POST /api/tenants/{tenant_id}/execute
+Content-Type: multipart/form-data
 ```
 
-### リクエスト形式
-
-**Content-Type**: `multipart/form-data`
+### リクエストパラメータ
 
 | パラメータ | 型 | 必須 | 説明 |
 |-----------|-----|------|------|
-| `files` | File[] | ○ | アップロードするファイル（複数可） |
-| `target_dir` | string | - | 保存先ディレクトリ（デフォルト: `uploads`） |
+| `request_data` | string | ○ | ExecuteRequestのJSON文字列 |
+| `files` | File[] | - | アップロードするファイル（複数可） |
 
 ### cURLの例
 
 ```bash
-# 単一ファイルのアップロード
-curl -X POST \
-  "http://localhost:8000/api/tenants/tenant-1/sessions/session-123/upload-files" \
+# ファイル添付付きで実行
+curl -X POST "http://localhost:8000/api/tenants/tenant-001/execute" \
+  -F 'request_data={
+    "agent_config_id": "default-agent",
+    "model_id": "claude-sonnet-4",
+    "user_input": "このファイルを分析してください",
+    "executor": {
+      "user_id": "user-001",
+      "name": "田中太郎",
+      "email": "tanaka@example.com"
+    }
+  }' \
   -F "files=@/path/to/document.pdf" \
-  -F "target_dir=uploads"
-
-# 複数ファイルのアップロード
-curl -X POST \
-  "http://localhost:8000/api/tenants/tenant-1/sessions/session-123/upload-files" \
-  -F "files=@/path/to/file1.csv" \
-  -F "files=@/path/to/file2.xlsx" \
-  -F "target_dir=data"
+  -F "files=@/path/to/data.csv"
 ```
 
 ### JavaScriptの例
 
 ```javascript
 const formData = new FormData();
+
+// ExecuteRequestをJSON文字列として追加
+const requestData = {
+  agent_config_id: "default-agent",
+  model_id: "claude-sonnet-4",
+  user_input: "このファイルを分析してください",
+  executor: {
+    user_id: "user-001",
+    name: "田中太郎",
+    email: "tanaka@example.com"
+  }
+};
+formData.append('request_data', JSON.stringify(requestData));
+
+// ファイルを追加
 formData.append('files', file1);
 formData.append('files', file2);
-formData.append('target_dir', 'uploads');
 
 const response = await fetch(
-  `/api/tenants/${tenantId}/sessions/${sessionId}/upload-files`,
+  `/api/tenants/${tenantId}/execute`,
   {
     method: 'POST',
     body: formData,
   }
 );
-
-const result = await response.json();
-console.log(result.uploaded_files);
 ```
 
-### レスポンス例
-
-```json
-{
-  "success": true,
-  "uploaded_files": [
-    {
-      "file_id": "a1b2c3d4-...",
-      "file_path": "uploads/document.pdf",
-      "original_name": "document.pdf",
-      "file_size": 1048576,
-      "mime_type": "application/pdf",
-      "version": 1,
-      "source": "user_upload",
-      "is_presented": false,
-      "checksum": "abc123...",
-      "created_at": "2025-01-10T12:00:00Z",
-      "updated_at": "2025-01-10T12:00:00Z"
-    }
-  ],
-  "failed_files": [],
-  "message": "1ファイルをアップロードしました"
-}
-```
+ファイルがアップロードされると、自動的にワークスペースが有効化され、S3に保存されます。
 
 ---
 
@@ -139,14 +209,8 @@ console.log(result.uploaded_files);
 ### エンドポイント
 
 ```
-GET /api/tenants/{tenant_id}/sessions/{session_id}/list-files
+GET /api/tenants/{tenant_id}/sessions/{session_id}/files
 ```
-
-### クエリパラメータ
-
-| パラメータ | 型 | デフォルト | 説明 |
-|-----------|-----|----------|------|
-| `include_all_versions` | boolean | false | 全バージョンを含めるか |
 
 ### レスポンス例
 
@@ -159,9 +223,11 @@ GET /api/tenants/{tenant_id}/sessions/{session_id}/list-files
       "file_path": "uploads/data.csv",
       "original_name": "data.csv",
       "file_size": 2048,
-      "version": 2,
+      "version": 1,
       "source": "user_upload",
-      "is_presented": false
+      "is_presented": false,
+      "created_at": "2024-01-01T00:00:00Z",
+      "updated_at": "2024-01-01T00:00:00Z"
     },
     {
       "file_id": "e5f6g7h8-...",
@@ -170,7 +236,9 @@ GET /api/tenants/{tenant_id}/sessions/{session_id}/list-files
       "file_size": 512,
       "version": 1,
       "source": "ai_created",
-      "is_presented": true
+      "is_presented": true,
+      "created_at": "2024-01-01T00:00:05Z",
+      "updated_at": "2024-01-01T00:00:05Z"
     }
   ],
   "total_count": 2,
@@ -185,7 +253,7 @@ GET /api/tenants/{tenant_id}/sessions/{session_id}/list-files
 ### エンドポイント
 
 ```
-GET /api/tenants/{tenant_id}/sessions/{session_id}/download-file
+GET /api/tenants/{tenant_id}/sessions/{session_id}/files/download?path=xxx
 ```
 
 ### クエリパラメータ
@@ -193,116 +261,105 @@ GET /api/tenants/{tenant_id}/sessions/{session_id}/download-file
 | パラメータ | 型 | 必須 | 説明 |
 |-----------|-----|------|------|
 | `path` | string | ○ | ファイルパス（ワークスペース内） |
-| `version` | integer | - | バージョン番号（省略時は最新） |
 
 ### 使用例
 
 ```bash
-# 最新バージョンをダウンロード
-curl -O "http://localhost:8000/api/tenants/tenant-1/sessions/session-123/download-file?path=outputs/result.json"
+# アップロードファイルをダウンロード
+curl -O "http://localhost:8000/api/tenants/tenant-001/sessions/session-123/files/download?path=uploads/data.csv"
 
-# 特定バージョンをダウンロード
-curl -O "http://localhost:8000/api/tenants/tenant-1/sessions/session-123/download-file?path=uploads/data.csv&version=1"
+# AI生成ファイルをダウンロード
+curl -O "http://localhost:8000/api/tenants/tenant-001/sessions/session-123/files/download?path=outputs/result.json"
 ```
+
+### レスポンス
+
+- `Content-Type`: ファイルのMIMEタイプ
+- `Content-Disposition`: `attachment; filename="ファイル名"`
+- Body: ファイルのバイナリデータ
 
 ---
 
 ## Presentedファイル
 
-AIが作成したファイルのうち、ユーザーに提示したいものを「Presented」としてマークできます。
+AIが作成したファイルのうち、ユーザーに提示したいものは自動的に「Presented」としてマークされます。
 
 ### Presentedファイル一覧取得
 
 ```
-GET /api/tenants/{tenant_id}/sessions/{session_id}/presented-files
+GET /api/tenants/{tenant_id}/sessions/{session_id}/files/presented
 ```
 
-### ファイルをPresentedとしてマーク
-
-```
-POST /api/tenants/{tenant_id}/sessions/{session_id}/present-file
-```
+### レスポンス例
 
 ```json
 {
-  "file_path": "outputs/analysis_result.xlsx",
-  "description": "売上データの分析結果"
+  "chat_session_id": "session-123",
+  "files": [
+    {
+      "file_id": "e5f6g7h8-...",
+      "file_path": "outputs/analysis_result.xlsx",
+      "original_name": "analysis_result.xlsx",
+      "file_size": 1024,
+      "version": 1,
+      "source": "ai_created",
+      "is_presented": true,
+      "created_at": "2024-01-01T00:00:05Z"
+    }
+  ]
 }
 ```
 
----
+### 自動登録
 
-## バージョン管理
-
-同じパスにファイルをアップロードすると、自動的にバージョンがインクリメントされます。
-
-```
-uploads/data.csv (version 1) → 初回アップロード
-uploads/data.csv (version 2) → 再アップロード
-uploads/data.csv (version 3) → 再アップロード
-```
-
-- デフォルトでは最新バージョンのみ表示
-- `include_all_versions=true` で全バージョン取得可能
-- 古いバージョンも `version` パラメータで個別にダウンロード可能
+`outputs/` ディレクトリ以下にAIが作成したファイルは、実行完了時に自動的にPresentedファイルとして登録されます。
 
 ---
 
-## ワークスペースのクリーンアップ
-
-### 自動クリーンアップ
-
-エージェント設定で `workspace_auto_cleanup_days` を設定すると、指定日数経過後にアーカイブ済みセッションのワークスペースが自動削除されます。
-
-### 手動クリーンアップ
+## S3キー構造
 
 ```
-POST /api/tenants/{tenant_id}/workspace/cleanup
+{S3_WORKSPACE_PREFIX}/
+└── {tenant_id}/
+    └── {session_id}/
+        ├── uploads/      # ユーザーアップロードファイル
+        ├── outputs/      # AI生成ファイル（自動登録対象）
+        └── ...           # その他のファイル
 ```
 
-```json
-{
-  "older_than_days": 30,
-  "dry_run": true  // trueの場合、削除せずにプレビューのみ
-}
+例：
+```
+workspaces/tenant-001/session-abc123/uploads/data.csv
+workspaces/tenant-001/session-abc123/outputs/result.json
 ```
 
 ---
 
-## ディレクトリ構造
+## エージェント実行フロー
 
-```
-/skills/
-└── tenant_{tenant_id}/
-    └── workspaces/
-        └── {chat_session_id}/
-            ├── uploads/      # ユーザーアップロードファイル
-            ├── outputs/      # AI生成ファイル
-            └── temp/         # 一時ファイル
-```
+1. **ファイルアップロード**: `/execute` APIでファイルをS3にアップロード
+2. **S3→ローカル同期**: 実行前にS3から一時ローカルディレクトリにファイルを同期
+3. **エージェント実行**: ローカルディレクトリでファイル操作を実行
+4. **ローカル→S3同期**: 実行後にローカルからS3にファイルを同期
+5. **AIファイル登録**: `outputs/`以下のファイルをPresentedファイルとして自動登録
+6. **ローカルクリーンアップ**: 一時ローカルディレクトリを削除
 
 ---
 
 ## セキュリティ
 
-### パストラバーサル防止
+### S3アクセス制御
 
-- すべてのパスは正規化後に検証
-- ワークスペース外へのアクセスは完全にブロック
-- `..` や絶対パスは拒否
+- S3バケットは完全プライベート
+- パブリックアクセスは完全にブロック
+- APIサーバー経由でのみアクセス可能
+- IAM認証による安全なアクセス
 
-### アイソレーション
+### テナント・セッション分離
 
 - テナント間の完全分離
 - セッション間の完全分離
 - 他のセッションのファイルにはアクセス不可
-
-### ファイルサイズ制限
-
-| 制限 | 値 |
-|------|-----|
-| 1ファイルあたり | 50MB |
-| 1セッションあたり | 500MB |
 
 ---
 
@@ -319,11 +376,21 @@ AIはファイルの内容を読まなくても、どのファイルが利用可
 
 ---
 
+## API一覧
+
+| メソッド | パス | 説明 |
+|---------|------|------|
+| POST | /tenants/{tenant_id}/execute | エージェント実行（ファイル添付可） |
+| GET | /tenants/{tenant_id}/sessions/{session_id}/files | ファイル一覧 |
+| GET | /tenants/{tenant_id}/sessions/{session_id}/files/download?path=xxx | ファイルダウンロード |
+| GET | /tenants/{tenant_id}/sessions/{session_id}/files/presented | AIが作成したファイル一覧 |
+
+---
+
 ## エラーハンドリング
 
 | HTTPステータス | 説明 |
 |---------------|------|
-| 403 Forbidden | パストラバーサル検出、アクセス権限なし |
+| 403 Forbidden | アクセス権限なし |
 | 404 Not Found | ファイルが見つからない |
-| 413 Payload Too Large | ファイルサイズ超過 |
-| 500 Internal Server Error | サーバーエラー |
+| 500 Internal Server Error | サーバーエラー（S3接続エラーなど） |
