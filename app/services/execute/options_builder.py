@@ -161,9 +161,9 @@ class OptionsBuilder:
                 context.tenant_id, context.chat_session_id
             )
 
-            # ワークスペースが未作成の場合は作成
+            # ワークスペースが未有効化の場合は有効化
             if not workspace_info:
-                await self.workspace_service.create_workspace(
+                await self.workspace_service.enable_workspace(
                     context.tenant_id, context.chat_session_id
                 )
                 workspace_info = await self.workspace_service.get_workspace_info(
@@ -171,8 +171,15 @@ class OptionsBuilder:
                 )
 
             if workspace_info and workspace_info.workspace_enabled:
-                cwd = self.workspace_service.get_workspace_cwd(
+                # S3からローカルに同期
+                cwd = await self.workspace_service.sync_to_local(
                     context.tenant_id, context.chat_session_id
+                )
+                logger.info(
+                    "S3→ローカル同期完了",
+                    tenant_id=context.tenant_id,
+                    session_id=context.chat_session_id,
+                    cwd=cwd,
                 )
 
         return cwd

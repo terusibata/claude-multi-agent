@@ -1,13 +1,13 @@
 """
 エージェント実行API
-ストリーミング対応のエージェント実行
+ストリーミング対応のエージェント実行（ファイル添付対応）
 """
 import asyncio
 import json
 import logging
 from typing import AsyncIterator
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
@@ -16,6 +16,7 @@ from app.schemas.execute import ExecuteRequest
 from app.services.agent_config_service import AgentConfigService
 from app.services.execute_service import ExecuteService
 from app.services.model_service import ModelService
+from app.services.workspace_service import WorkspaceService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -131,15 +132,23 @@ async def event_generator(
 @router.post("/execute", summary="エージェント実行")
 async def execute_agent(
     tenant_id: str,
-    request: ExecuteRequest,
+    request_data: str = Form(..., description="ExecuteRequestのJSON文字列"),
+    files: list[UploadFile] = File(default=[], description="添付ファイル（複数可、オプション）"),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    エージェントを実行します（ストリーミングレスポンス）。
+    エージェントを実行します（ストリーミングレスポンス、ファイル添付対応）。
 
     レスポンスはServer-Sent Events (SSE) 形式でストリーミング送信されます。
 
+    Content-Type: multipart/form-data
+
     ## リクエストパラメータ
+
+    - **request_data**: ExecuteRequestのJSON文字列
+    - **files**: 添付ファイル（複数可、オプション）
+
+    ## ExecuteRequest JSON フィールド
 
     - **agent_config_id**: エージェント実行設定ID
     - **model_id**: 使用するモデルID
@@ -149,6 +158,7 @@ async def execute_agent(
     - **tokens**: MCPサーバー用認証情報（オプション）
     - **resume_session_id**: 継続するSDKセッションID（オプション）
     - **fork_session**: セッションをフォークするか（オプション）
+    - **enable_workspace**: ワークスペースを有効にするか（オプション）
 
     ## イベントタイプ
 
@@ -161,6 +171,33 @@ async def execute_agent(
     - **result**: 最終結果
     - **error**: エラー
     """
+    # リクエストをパース
+    try:
+        request = ExecuteRequest.model_validate_json(request_data)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"リクエストデータのパースに失敗しました: {str(e)}",
+        )
+
+    # ファイルがある場合はS3にアップロード
+    if files:
+        workspace_service = WorkspaceService(db)
+        file_data = []
+        for file in files:
+            content = await file.read()
+            content_type = file.content_type or "application/octet-stream"
+            file_data.append((file.filename, content, content_type))
+
+        await workspace_service.upload_files(
+            tenant_id, request.chat_session_id, file_data
+        )
+
+        # ワークスペースを有効化
+        request.enable_workspace = True
+        await workspace_service.enable_workspace(tenant_id, request.chat_session_id)
+        await db.commit()
+
     # エージェント設定の取得
     config_service = AgentConfigService(db)
     agent_config = await config_service.get_by_id(request.agent_config_id, tenant_id)
@@ -203,5 +240,3 @@ async def execute_agent(
         ),
         media_type="text/event-stream",
     )
-
-

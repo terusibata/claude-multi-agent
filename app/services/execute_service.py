@@ -259,6 +259,10 @@ class ExecuteService:
                         yield event
 
                 elif isinstance(message, ResultMessage):
+                    # 実行完了後のワークスペース同期処理
+                    if context.enable_workspace:
+                        await self._sync_workspace_after_execution(context)
+
                     result_events = await self._handle_result_message(
                         message, context, tool_tracker, log_entry
                     )
@@ -505,3 +509,56 @@ class ExecuteService:
             duration_ms=duration_ms,
             tools_summary=tool_tracker.get_summary(),
         )
+
+    async def _sync_workspace_after_execution(
+        self,
+        context: ExecutionContext,
+    ) -> None:
+        """
+        実行完了後のワークスペース同期処理
+
+        1. ローカルからS3に同期
+        2. AIファイルを自動登録
+        3. ローカルクリーンアップ
+        """
+        try:
+            # ローカルからS3に同期
+            synced_files = await self.workspace_service.sync_from_local(
+                context.tenant_id, context.chat_session_id
+            )
+            logger.info(
+                "ローカル→S3同期完了",
+                tenant_id=context.tenant_id,
+                session_id=context.chat_session_id,
+                synced_count=len(synced_files),
+            )
+
+            # AIファイルを自動登録（outputs/以下のファイル）
+            for file_path in synced_files:
+                if file_path.startswith("outputs/"):
+                    await self.workspace_service.register_ai_file(
+                        context.tenant_id,
+                        context.chat_session_id,
+                        file_path,
+                        is_presented=True,
+                    )
+                    logger.info(
+                        "AIファイル自動登録",
+                        file_path=file_path,
+                    )
+
+            # ローカルクリーンアップ
+            await self.workspace_service.cleanup_local(context.chat_session_id)
+            logger.info(
+                "ローカルクリーンアップ完了",
+                session_id=context.chat_session_id,
+            )
+
+        except Exception as e:
+            logger.error(
+                "ワークスペース同期エラー",
+                error=str(e),
+                tenant_id=context.tenant_id,
+                session_id=context.chat_session_id,
+                exc_info=True,
+            )

@@ -1,34 +1,30 @@
 """
-ワークスペースサービス
-セッション専用ワークスペースの管理
+ワークスペースサービス（S3版）
 
-セキュリティ要件：
-- セッション専用ワークスペース以外へのアクセスを絶対に禁止
-- パストラバーサル攻撃の防止
-- テナント間のアイソレーション
+S3ベースのワークスペース管理を行う。
+セッション専用ワークスペースのファイル操作はS3を経由する。
 """
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from uuid import uuid4
 
 import structlog
-from sqlalchemy import and_, select, update
+from sqlalchemy import and_, select, update, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.models.chat_session import ChatSession
+from app.models.session_file import SessionFile
 from app.schemas.workspace import (
     SessionFileInfo,
     WorkspaceContextForAI,
     WorkspaceFileList,
     WorkspaceInfo,
 )
-from app.services.workspace import (
-    AIContextBuilder,
-    CleanupManager,
-    FileManager,
-    PathValidator,
-)
+from app.services.workspace.s3_storage import S3StorageBackend
+from app.services.workspace.context_builder import AIContextBuilder
 
 # 後方互換性のため例外クラスを再エクスポート
 from app.utils.exceptions import WorkspaceSecurityError
@@ -38,14 +34,7 @@ logger = structlog.get_logger(__name__)
 
 
 class WorkspaceService:
-    """
-    セッション専用ワークスペースサービス
-
-    セキュリティ原則：
-    1. すべてのパスは正規化後に検証
-    2. ワークスペースルート外へのアクセスは絶対禁止
-    3. テナントIDとセッションIDの両方で検証
-    """
+    """S3ベースのワークスペースサービス"""
 
     def __init__(self, db: AsyncSession):
         """
@@ -55,86 +44,233 @@ class WorkspaceService:
             db: データベースセッション
         """
         self.db = db
-        self.base_path = Path(settings.skills_base_path)
-
-        # サブモジュールを初期化
-        self.path_validator = PathValidator(self.base_path)
-        self.file_manager = FileManager(db, self.path_validator)
+        self.s3 = S3StorageBackend()
         self.context_builder = AIContextBuilder()
-        self.cleanup_manager = CleanupManager(db)
 
-    async def create_workspace(
+    async def upload_files(
         self,
         tenant_id: str,
-        chat_session_id: str,
-    ) -> WorkspaceInfo:
+        session_id: str,
+        files: list[tuple[str, bytes, str]],  # [(filename, content, content_type), ...]
+    ) -> list[SessionFileInfo]:
         """
-        セッション専用ワークスペースを作成
+        複数ファイルをS3にアップロード
 
         Args:
             tenant_id: テナントID
-            chat_session_id: チャットセッションID
+            session_id: セッションID
+            files: [(filename, content, content_type), ...]
 
         Returns:
-            ワークスペース情報
+            アップロードされたファイル情報のリスト
         """
-        workspace_root = self.path_validator.get_workspace_root(
-            tenant_id, chat_session_id
+        results = []
+        for filename, content, content_type in files:
+            file_path = f"uploads/{filename}"
+            await self.s3.upload(tenant_id, session_id, file_path, content, content_type)
+
+            # DBに記録
+            file_info = await self._save_file_record(
+                tenant_id=tenant_id,
+                session_id=session_id,
+                file_path=file_path,
+                original_name=filename,
+                file_size=len(content),
+                content_type=content_type,
+                source="user_upload",
+            )
+            results.append(file_info)
+
+        return results
+
+    async def download_file(
+        self,
+        tenant_id: str,
+        session_id: str,
+        file_path: str,
+    ) -> tuple[bytes, str, str]:
+        """
+        ファイルをS3からダウンロード
+
+        Args:
+            tenant_id: テナントID
+            session_id: セッションID
+            file_path: ファイルパス
+
+        Returns:
+            (content, filename, content_type)
+        """
+        content, content_type = await self.s3.download(tenant_id, session_id, file_path)
+        filename = file_path.split('/')[-1]
+        return content, filename, content_type
+
+    async def list_files(
+        self,
+        tenant_id: str,
+        session_id: str,
+    ) -> WorkspaceFileList:
+        """
+        ファイル一覧を取得（DBから）
+
+        Args:
+            tenant_id: テナントID
+            session_id: セッションID
+
+        Returns:
+            ファイル一覧
+        """
+        # セッション所有権確認
+        await self._verify_session_ownership(tenant_id, session_id)
+
+        # DBからファイルレコードを取得
+        files = await self._get_file_records(session_id)
+
+        total_size = sum(f.file_size for f in files)
+
+        return WorkspaceFileList(
+            chat_session_id=session_id,
+            files=files,
+            total_count=len(files),
+            total_size=total_size,
         )
 
-        # ディレクトリ作成
-        workspace_root.mkdir(parents=True, exist_ok=True)
+    async def get_presented_files(
+        self,
+        tenant_id: str,
+        session_id: str,
+    ) -> list[SessionFileInfo]:
+        """
+        AIが作成したファイル一覧を取得
 
-        # サブディレクトリを作成
-        (workspace_root / "uploads").mkdir(exist_ok=True)
-        (workspace_root / "outputs").mkdir(exist_ok=True)
-        (workspace_root / "temp").mkdir(exist_ok=True)
+        Args:
+            tenant_id: テナントID
+            session_id: セッションID
 
-        # セッション情報を更新
-        now = datetime.utcnow()
-        await self.db.execute(
-            update(ChatSession)
-            .where(
-                and_(
-                    ChatSession.chat_session_id == chat_session_id,
-                    ChatSession.tenant_id == tenant_id,
-                )
-            )
-            .values(
-                workspace_enabled=True,
-                workspace_path=str(workspace_root),
-                workspace_created_at=now,
-            )
-        )
-        await self.db.flush()
+        Returns:
+            Presentedファイル一覧
+        """
+        # セッション所有権確認
+        await self._verify_session_ownership(tenant_id, session_id)
 
-        logger.info(
-            "ワークスペース作成完了",
+        return await self._get_file_records(session_id, is_presented=True)
+
+    async def register_ai_file(
+        self,
+        tenant_id: str,
+        session_id: str,
+        file_path: str,
+        is_presented: bool = True,
+    ) -> Optional[SessionFileInfo]:
+        """
+        AIが作成したファイルを登録
+
+        Args:
+            tenant_id: テナントID
+            session_id: セッションID
+            file_path: ファイルパス
+            is_presented: Presentedフラグ
+
+        Returns:
+            登録されたファイル情報
+        """
+        # S3に存在するか確認
+        if not await self.s3.exists(tenant_id, session_id, file_path):
+            return None
+
+        # ファイル情報取得
+        content, content_type = await self.s3.download(tenant_id, session_id, file_path)
+
+        return await self._save_file_record(
             tenant_id=tenant_id,
-            chat_session_id=chat_session_id,
-            workspace_path=str(workspace_root),
+            session_id=session_id,
+            file_path=file_path,
+            original_name=file_path.split('/')[-1],
+            file_size=len(content),
+            content_type=content_type,
+            source="ai_created",
+            is_presented=is_presented,
         )
 
-        return WorkspaceInfo(
-            chat_session_id=chat_session_id,
-            workspace_enabled=True,
-            workspace_path=str(workspace_root),
-            workspace_created_at=now,
-            file_count=0,
-            total_size=0,
-        )
+    def get_workspace_local_path(self, session_id: str) -> str:
+        """
+        一時ローカルパスを取得
+
+        Args:
+            session_id: セッションID
+
+        Returns:
+            ローカルパス
+        """
+        return f"/tmp/workspace_{session_id}"
+
+    async def sync_to_local(self, tenant_id: str, session_id: str) -> str:
+        """
+        S3からローカルに同期
+
+        Args:
+            tenant_id: テナントID
+            session_id: セッションID
+
+        Returns:
+            ローカルディレクトリパス
+        """
+        local_dir = self.get_workspace_local_path(session_id)
+
+        # ディレクトリを作成
+        Path(local_dir).mkdir(parents=True, exist_ok=True)
+
+        await self.s3.sync_to_local(tenant_id, session_id, local_dir)
+        return local_dir
+
+    async def sync_from_local(self, tenant_id: str, session_id: str) -> list[str]:
+        """
+        ローカルからS3に同期
+
+        Args:
+            tenant_id: テナントID
+            session_id: セッションID
+
+        Returns:
+            同期されたファイルパスのリスト
+        """
+        local_dir = self.get_workspace_local_path(session_id)
+        return await self.s3.sync_from_local(tenant_id, session_id, local_dir)
+
+    async def cleanup_local(self, session_id: str) -> None:
+        """
+        ローカルの一時ファイルを削除
+
+        Args:
+            session_id: セッションID
+        """
+        local_dir = self.get_workspace_local_path(session_id)
+        shutil.rmtree(local_dir, ignore_errors=True)
+        logger.info("ローカルワークスペース削除完了", session_id=session_id)
+
+    def get_workspace_cwd(self, tenant_id: str, session_id: str) -> str:
+        """
+        セッション専用ワークスペースのcwd（作業ディレクトリ）を取得
+
+        Args:
+            tenant_id: テナントID
+            session_id: セッションID
+
+        Returns:
+            cwdパス（ローカル一時ディレクトリ）
+        """
+        return self.get_workspace_local_path(session_id)
 
     async def get_workspace_info(
         self,
         tenant_id: str,
-        chat_session_id: str,
+        session_id: str,
     ) -> Optional[WorkspaceInfo]:
         """
         ワークスペース情報を取得
 
         Args:
             tenant_id: テナントID
-            chat_session_id: チャットセッションID
+            session_id: セッションID
 
         Returns:
             ワークスペース情報（存在しない場合はNone）
@@ -143,7 +279,7 @@ class WorkspaceService:
         result = await self.db.execute(
             select(ChatSession).where(
                 and_(
-                    ChatSession.chat_session_id == chat_session_id,
+                    ChatSession.chat_session_id == session_id,
                     ChatSession.tenant_id == tenant_id,
                 )
             )
@@ -153,10 +289,10 @@ class WorkspaceService:
             return None
 
         # ファイル統計を取得
-        file_count, total_size = await self.file_manager.get_file_stats(chat_session_id)
+        file_count, total_size = await self._get_file_stats(session_id)
 
         return WorkspaceInfo(
-            chat_session_id=chat_session_id,
+            chat_session_id=session_id,
             workspace_enabled=session.workspace_enabled,
             workspace_path=session.workspace_path,
             workspace_created_at=session.workspace_created_at,
@@ -164,252 +300,241 @@ class WorkspaceService:
             total_size=total_size,
         )
 
-    async def upload_file(
+    async def enable_workspace(
         self,
         tenant_id: str,
-        chat_session_id: str,
-        file_path: str,
-        content: bytes,
-        original_name: str,
-        description: Optional[str] = None,
-    ) -> SessionFileInfo:
+        session_id: str,
+    ) -> None:
         """
-        ファイルをワークスペースにアップロード
+        ワークスペースを有効化
 
         Args:
             tenant_id: テナントID
-            chat_session_id: チャットセッションID
-            file_path: 保存先パス（ワークスペース内）
-            content: ファイル内容
-            original_name: 元のファイル名
-            description: ファイル説明
-
-        Returns:
-            アップロードされたファイル情報
+            session_id: セッションID
         """
-        # ワークスペースの存在確認と作成
-        workspace_info = await self.get_workspace_info(tenant_id, chat_session_id)
-        if not workspace_info:
-            await self.create_workspace(tenant_id, chat_session_id)
-            workspace_info = await self.get_workspace_info(tenant_id, chat_session_id)
+        now = datetime.utcnow()
+        local_path = self.get_workspace_local_path(session_id)
 
-        current_total_size = workspace_info.total_size if workspace_info else 0
+        await self.db.execute(
+            update(ChatSession)
+            .where(
+                and_(
+                    ChatSession.chat_session_id == session_id,
+                    ChatSession.tenant_id == tenant_id,
+                )
+            )
+            .values(
+                workspace_enabled=True,
+                workspace_path=local_path,
+                workspace_created_at=now,
+            )
+        )
+        await self.db.flush()
 
-        return await self.file_manager.upload_file(
+        logger.info(
+            "ワークスペース有効化完了",
             tenant_id=tenant_id,
-            chat_session_id=chat_session_id,
-            file_path=file_path,
-            content=content,
-            original_name=original_name,
-            description=description,
-            current_total_size=current_total_size,
+            session_id=session_id,
         )
-
-    async def register_ai_file(
-        self,
-        tenant_id: str,
-        chat_session_id: str,
-        file_path: str,
-        source: str = "ai_created",
-        is_presented: bool = False,
-        description: Optional[str] = None,
-    ) -> Optional[SessionFileInfo]:
-        """
-        AIが作成/編集したファイルを登録
-
-        Args:
-            tenant_id: テナントID
-            chat_session_id: チャットセッションID
-            file_path: ファイルパス（ワークスペース内）
-            source: ソース ("ai_created" or "ai_modified")
-            is_presented: Presentedフラグ
-            description: ファイル説明
-
-        Returns:
-            登録されたファイル情報
-        """
-        return await self.file_manager.register_ai_file(
-            tenant_id=tenant_id,
-            chat_session_id=chat_session_id,
-            file_path=file_path,
-            source=source,
-            is_presented=is_presented,
-            description=description,
-        )
-
-    async def list_files(
-        self,
-        tenant_id: str,
-        chat_session_id: str,
-        include_all_versions: bool = False,
-    ) -> WorkspaceFileList:
-        """
-        ワークスペース内のファイル一覧を取得
-
-        Args:
-            tenant_id: テナントID
-            chat_session_id: チャットセッションID
-            include_all_versions: 全バージョンを含めるか
-
-        Returns:
-            ファイル一覧
-        """
-        # セキュリティ検証
-        self.path_validator.validate_id(tenant_id, "tenant_id")
-        self.path_validator.validate_id(chat_session_id, "chat_session_id")
-
-        # セッション所有権確認
-        await self._verify_session_ownership(tenant_id, chat_session_id)
-
-        return await self.file_manager.list_files(
-            chat_session_id=chat_session_id,
-            include_all_versions=include_all_versions,
-        )
-
-    async def download_file(
-        self,
-        tenant_id: str,
-        chat_session_id: str,
-        file_path: str,
-        version: Optional[int] = None,
-    ) -> tuple[bytes, str, str]:
-        """
-        ファイルをダウンロード
-
-        Args:
-            tenant_id: テナントID
-            chat_session_id: チャットセッションID
-            file_path: ファイルパス
-            version: バージョン（省略時は最新）
-
-        Returns:
-            (ファイル内容, ファイル名, MIMEタイプ)
-        """
-        # セッション所有権確認
-        await self._verify_session_ownership(tenant_id, chat_session_id)
-
-        return await self.file_manager.download_file(
-            tenant_id=tenant_id,
-            chat_session_id=chat_session_id,
-            file_path=file_path,
-            version=version,
-        )
-
-    async def set_presented(
-        self,
-        tenant_id: str,
-        chat_session_id: str,
-        file_path: str,
-        description: Optional[str] = None,
-    ) -> Optional[SessionFileInfo]:
-        """
-        ファイルをPresentedとしてマーク
-
-        Args:
-            tenant_id: テナントID
-            chat_session_id: チャットセッションID
-            file_path: ファイルパス
-            description: 説明（更新する場合）
-
-        Returns:
-            更新されたファイル情報
-        """
-        return await self.file_manager.set_presented(
-            chat_session_id=chat_session_id,
-            file_path=file_path,
-            description=description,
-        )
-
-    async def get_presented_files(
-        self,
-        tenant_id: str,
-        chat_session_id: str,
-    ) -> list[SessionFileInfo]:
-        """
-        Presentedファイル一覧を取得
-
-        Args:
-            tenant_id: テナントID
-            chat_session_id: チャットセッションID
-
-        Returns:
-            Presentedファイル一覧
-        """
-        # セッション所有権確認
-        await self._verify_session_ownership(tenant_id, chat_session_id)
-
-        return await self.file_manager.get_presented_files(chat_session_id)
-
-    def get_workspace_cwd(self, tenant_id: str, chat_session_id: str) -> str:
-        """
-        セッション専用ワークスペースのcwd（作業ディレクトリ）を取得
-
-        Args:
-            tenant_id: テナントID
-            chat_session_id: チャットセッションID
-
-        Returns:
-            cwdパス
-        """
-        return self.path_validator.get_workspace_cwd(tenant_id, chat_session_id)
 
     async def get_context_for_ai(
         self,
         tenant_id: str,
-        chat_session_id: str,
+        session_id: str,
     ) -> Optional[WorkspaceContextForAI]:
         """
         AIに提供するワークスペースコンテキストを生成
 
         Args:
             tenant_id: テナントID
-            chat_session_id: チャットセッションID
+            session_id: セッションID
 
         Returns:
             AIコンテキスト（ワークスペースが無効な場合はNone）
         """
-        workspace_info = await self.get_workspace_info(tenant_id, chat_session_id)
+        workspace_info = await self.get_workspace_info(tenant_id, session_id)
         if not workspace_info or not workspace_info.workspace_enabled:
             return None
 
-        file_list = await self.list_files(tenant_id, chat_session_id)
+        file_list = await self.list_files(tenant_id, session_id)
 
         return self.context_builder.build_context(workspace_info, file_list)
 
-    async def cleanup_old_workspaces(
+    async def _save_file_record(
         self,
         tenant_id: str,
-        older_than_days: int = 30,
-        dry_run: bool = True,
-    ) -> dict:
+        session_id: str,
+        file_path: str,
+        original_name: str,
+        file_size: int,
+        content_type: str,
+        source: str,
+        is_presented: bool = False,
+    ) -> SessionFileInfo:
         """
-        古いワークスペースをクリーンアップ
+        ファイルレコードをDBに保存
 
         Args:
             tenant_id: テナントID
-            older_than_days: この日数より古いワークスペースを対象
-            dry_run: ドライラン（削除せずにリストのみ返す）
+            session_id: セッションID
+            file_path: ファイルパス
+            original_name: 元のファイル名
+            file_size: ファイルサイズ
+            content_type: MIMEタイプ
+            source: ソース
+            is_presented: Presentedフラグ
 
         Returns:
-            クリーンアップ結果
+            ファイル情報
         """
-        return await self.cleanup_manager.cleanup_old_workspaces(
-            tenant_id=tenant_id,
-            older_than_days=older_than_days,
-            dry_run=dry_run,
+        # バージョン取得
+        new_version = await self._get_next_version(session_id, file_path)
+
+        # DBに記録
+        session_file = SessionFile(
+            file_id=str(uuid4()),
+            chat_session_id=session_id,
+            file_path=file_path,
+            original_name=original_name,
+            file_size=file_size,
+            mime_type=content_type,
+            version=new_version,
+            source=source,
+            is_presented=is_presented,
+            checksum=None,  # S3版ではチェックサムは省略
+            description=None,
+            status="active",
         )
+        self.db.add(session_file)
+        await self.db.flush()
+        await self.db.refresh(session_file)
+
+        logger.info(
+            "ファイルレコード保存完了",
+            session_id=session_id,
+            file_path=file_path,
+            version=new_version,
+        )
+
+        return self._to_file_info(session_file)
+
+    async def _get_file_records(
+        self,
+        session_id: str,
+        is_presented: Optional[bool] = None,
+    ) -> list[SessionFileInfo]:
+        """
+        ファイルレコードを取得
+
+        Args:
+            session_id: セッションID
+            is_presented: Presentedフラグでフィルタ
+
+        Returns:
+            ファイル情報のリスト
+        """
+        conditions = [
+            SessionFile.chat_session_id == session_id,
+            SessionFile.status == "active",
+        ]
+
+        if is_presented is not None:
+            conditions.append(SessionFile.is_presented == is_presented)
+
+        # 最新バージョンのみ取得
+        subquery = (
+            select(
+                SessionFile.file_path,
+                func.max(SessionFile.version).label("max_version"),
+            )
+            .where(and_(*conditions))
+            .group_by(SessionFile.file_path)
+            .subquery()
+        )
+
+        query = (
+            select(SessionFile)
+            .join(
+                subquery,
+                and_(
+                    SessionFile.file_path == subquery.c.file_path,
+                    SessionFile.version == subquery.c.max_version,
+                ),
+            )
+            .where(and_(*conditions))
+            .order_by(SessionFile.created_at.desc())
+        )
+
+        result = await self.db.execute(query)
+        files = result.scalars().all()
+
+        return [self._to_file_info(f) for f in files]
+
+    async def _get_file_stats(
+        self,
+        session_id: str,
+    ) -> tuple[int, int]:
+        """
+        ファイル統計を取得
+
+        Args:
+            session_id: セッションID
+
+        Returns:
+            (ファイル数, 合計サイズ)
+        """
+        stats = await self.db.execute(
+            select(
+                func.count(SessionFile.file_id).label("file_count"),
+                func.coalesce(func.sum(SessionFile.file_size), 0).label("total_size"),
+            ).where(
+                and_(
+                    SessionFile.chat_session_id == session_id,
+                    SessionFile.status == "active",
+                )
+            )
+        )
+        row = stats.first()
+        return (row.file_count if row else 0, row.total_size if row else 0)
+
+    async def _get_next_version(
+        self,
+        session_id: str,
+        file_path: str,
+    ) -> int:
+        """
+        次のバージョン番号を取得
+
+        Args:
+            session_id: セッションID
+            file_path: ファイルパス
+
+        Returns:
+            次のバージョン番号
+        """
+        result = await self.db.execute(
+            select(func.max(SessionFile.version)).where(
+                and_(
+                    SessionFile.chat_session_id == session_id,
+                    SessionFile.file_path == file_path,
+                    SessionFile.status == "active",
+                )
+            )
+        )
+        max_version = result.scalar()
+        return (max_version + 1) if max_version else 1
 
     async def _verify_session_ownership(
         self,
         tenant_id: str,
-        chat_session_id: str,
+        session_id: str,
     ) -> None:
         """
         セッション所有権を確認
 
         Args:
             tenant_id: テナントID
-            chat_session_id: チャットセッションID
+            session_id: セッションID
 
         Raises:
             WorkspaceSecurityError: アクセス拒否
@@ -417,10 +542,35 @@ class WorkspaceService:
         session_result = await self.db.execute(
             select(ChatSession).where(
                 and_(
-                    ChatSession.chat_session_id == chat_session_id,
+                    ChatSession.chat_session_id == session_id,
                     ChatSession.tenant_id == tenant_id,
                 )
             )
         )
         if not session_result.scalar_one_or_none():
             raise WorkspaceSecurityError("セッションへのアクセスが拒否されました")
+
+    def _to_file_info(self, session_file: SessionFile) -> SessionFileInfo:
+        """
+        SessionFileをSessionFileInfoに変換
+
+        Args:
+            session_file: SessionFileモデル
+
+        Returns:
+            SessionFileInfo
+        """
+        return SessionFileInfo(
+            file_id=session_file.file_id,
+            file_path=session_file.file_path,
+            original_name=session_file.original_name,
+            file_size=session_file.file_size,
+            mime_type=session_file.mime_type,
+            version=session_file.version,
+            source=session_file.source,
+            is_presented=session_file.is_presented,
+            checksum=session_file.checksum,
+            description=session_file.description,
+            created_at=session_file.created_at,
+            updated_at=session_file.updated_at,
+        )
