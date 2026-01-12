@@ -228,6 +228,9 @@ class MessageProcessor:
 
         tool_name = tool_info.tool_name if tool_info else "unknown"
 
+        # ステータス決定
+        status = "error" if is_error else "completed"
+
         # ログエントリに追加
         log_entry.content_blocks.append({
             "type": "tool_result",
@@ -235,6 +238,7 @@ class MessageProcessor:
             "tool_name": tool_name,
             "content": tool_result if isinstance(tool_result, str) else str(tool_result)[:500],
             "is_error": is_error,
+            "status": status,
         })
 
         # 結果サマリー生成
