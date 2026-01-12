@@ -28,6 +28,16 @@ class AgentConfigBase(BaseModel):
     mcp_servers: Optional[list[str]] = Field(
         None, description="使用するMCPサーバーIDのリスト"
     )
+    workspace_enabled: bool = Field(
+        default=False,
+        description="セッション専用ワークスペースを有効にするか",
+    )
+    workspace_auto_cleanup_days: int = Field(
+        default=30,
+        ge=0,
+        le=365,
+        description="ワークスペース自動クリーンアップ日数（0=無効）",
+    )
 
 
 class AgentConfigCreate(AgentConfigBase):
@@ -47,6 +57,8 @@ class AgentConfigUpdate(BaseModel):
     permission_mode: Optional[str] = None
     agent_skills: Optional[list[str]] = None
     mcp_servers: Optional[list[str]] = None
+    workspace_enabled: Optional[bool] = None
+    workspace_auto_cleanup_days: Optional[int] = Field(None, ge=0, le=365)
     status: Optional[str] = Field(None, pattern="^(active|inactive)$")
 
 
