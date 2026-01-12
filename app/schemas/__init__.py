@@ -16,7 +16,6 @@ from app.schemas.mcp_server import (
 from app.schemas.model import ModelCreate, ModelResponse, ModelUpdate
 from app.schemas.session import (
     ChatSessionResponse,
-    DisplayCacheResponse,
     MessageLogResponse,
 )
 from app.schemas.skill import SkillCreate, SkillResponse, SkillUpdate
@@ -46,7 +45,6 @@ __all__ = [
     # セッション
     "ChatSessionResponse",
     "MessageLogResponse",
-    "DisplayCacheResponse",
     # 使用状況
     "UsageLogResponse",
     "UsageSummary",
