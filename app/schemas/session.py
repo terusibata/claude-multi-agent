@@ -40,40 +40,6 @@ class MessageLogResponse(BaseModel):
         from_attributes = True
 
 
-class ToolSummaryItem(BaseModel):
-    """ツール使用サマリー項目"""
-
-    tool_name: str
-    status: str
-    summary: str
-
-
-class MetadataItem(BaseModel):
-    """メタデータ"""
-
-    tokens: int = 0
-    cost_usd: float = 0.0
-    duration_ms: int = 0
-    num_turns: int = 0
-
-
-class DisplayCacheResponse(BaseModel):
-    """表示用キャッシュレスポンス"""
-
-    cache_id: str
-    chat_session_id: str
-    turn_number: int
-    user_message: Optional[str] = None
-    assistant_message: Optional[str] = None
-    tools_summary: Optional[list[ToolSummaryItem]] = None
-    metadata_: Optional[MetadataItem] = Field(None, serialization_alias="metadata")
-    created_at: datetime
-
-    class Config:
-        from_attributes = True
-        populate_by_name = True
-
-
 class SessionListQuery(BaseModel):
     """セッション一覧クエリ"""
 

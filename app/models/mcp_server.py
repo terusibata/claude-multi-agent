@@ -35,7 +35,8 @@ class McpServer(Base):
     # 表示名
     display_name: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
 
-    # タイプ: http / sse / stdio
+    # タイプ: http / sse / stdio / builtin
+    # builtinはアプリケーション組み込みのMCPサーバー
     type: Mapped[str] = mapped_column(String(20), nullable=False)
 
     # サーバーURL（http/sseの場合）
@@ -57,6 +58,10 @@ class McpServer(Base):
     # 許可するツール名のリスト（JSON配列）
     # 例: ["mcp__servicenow__create_ticket", "mcp__servicenow__get_ticket"]
     allowed_tools: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+
+    # ツール定義（JSON配列）- builtinタイプの場合に使用
+    # 例: [{"name": "present_files", "description": "...", "input_schema": {...}}]
+    tools: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
 
     # 説明
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

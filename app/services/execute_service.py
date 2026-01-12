@@ -24,7 +24,6 @@ from app.services.usage_service import UsageService
 from app.services.workspace_service import WorkspaceService
 from app.utils.streaming import (
     format_error_event,
-    format_files_presented_event,
     format_result_event,
     format_session_start_event,
     format_text_delta_event,
@@ -313,7 +312,6 @@ class ExecuteService:
         messages_log = []
         tools_used = []
         pending_tools = {}  # tool_use_idでツール情報をトラッキング
-        files_presented = []  # 今回の処理で提供されたファイル一覧
         assistant_text = ""
         errors = []
 
@@ -647,62 +645,6 @@ class ExecuteService:
                                 is_error=is_error,
                             )
 
-                            # ワークスペースが有効で、ファイル操作ツールの場合はファイルを登録
-                            if enable_workspace and not is_error:
-                                if tool_name in ("Write", "Edit", "NotebookEdit"):
-                                    file_path = tool_input.get("file_path") or tool_input.get("notebook_path")
-                                    if file_path:
-                                        try:
-                                            # 絶対パスを相対パスに変換
-                                            workspace_cwd = self.workspace_service.get_workspace_cwd(tenant_id, request.chat_session_id)
-                                            if file_path.startswith(workspace_cwd):
-                                                relative_path = file_path[len(workspace_cwd):].lstrip("/")
-                                            elif file_path.startswith("/"):
-                                                # 他の絶対パスの場合はファイル名のみを使用
-                                                relative_path = os.path.basename(file_path)
-                                            else:
-                                                relative_path = file_path
-
-                                            # ファイルをDBに登録
-                                            file_info = await self.workspace_service.register_ai_file(
-                                                tenant_id=tenant_id,
-                                                chat_session_id=request.chat_session_id,
-                                                file_path=relative_path,
-                                                source="ai_created" if tool_name == "Write" else "ai_modified",
-                                                is_presented=True,
-                                                description=f"AIが{tool_name}ツールで作成/編集しました",
-                                            )
-                                            if file_info:
-                                                # files_presentedリストに追加
-                                                file_data = {
-                                                    "file_id": file_info.file_id,
-                                                    "file_path": file_info.file_path,
-                                                    "file_name": file_info.original_name,
-                                                    "file_size": file_info.file_size,
-                                                    "mime_type": file_info.mime_type,
-                                                    "version": file_info.version,
-                                                    "description": file_info.description,
-                                                }
-                                                files_presented.append(file_data)
-
-                                                # files_presentedイベントを送信
-                                                yield format_files_presented_event(
-                                                    files=[file_data],
-                                                    message=f"ファイル '{file_info.original_name}' を作成しました",
-                                                )
-                                                logger.info(
-                                                    "AIファイル登録成功 (AssistantMessage)",
-                                                    file_path=relative_path,
-                                                    original_path=file_path,
-                                                    tool_name=tool_name,
-                                                )
-                                        except Exception as e:
-                                            logger.warning(
-                                                "AIファイル登録失敗 (AssistantMessage)",
-                                                file_path=file_path,
-                                                error=str(e),
-                                            )
-
                 # UserMessage（ツール結果を含む）
                 elif isinstance(message, UserMessage):
                     content_blocks = getattr(message, "content", [])
@@ -754,62 +696,6 @@ class ExecuteService:
                                 is_error=is_error,
                             )
 
-                            # ワークスペースが有効で、ファイル操作ツールの場合はファイルを登録
-                            if enable_workspace and not is_error:
-                                if tool_name in ("Write", "Edit", "NotebookEdit"):
-                                    file_path = tool_input.get("file_path") or tool_input.get("notebook_path")
-                                    if file_path:
-                                        try:
-                                            # 絶対パスを相対パスに変換
-                                            workspace_cwd = self.workspace_service.get_workspace_cwd(tenant_id, request.chat_session_id)
-                                            if file_path.startswith(workspace_cwd):
-                                                relative_path = file_path[len(workspace_cwd):].lstrip("/")
-                                            elif file_path.startswith("/"):
-                                                # 他の絶対パスの場合はファイル名のみを使用
-                                                relative_path = os.path.basename(file_path)
-                                            else:
-                                                relative_path = file_path
-
-                                            # ファイルをDBに登録
-                                            file_info = await self.workspace_service.register_ai_file(
-                                                tenant_id=tenant_id,
-                                                chat_session_id=request.chat_session_id,
-                                                file_path=relative_path,
-                                                source="ai_created" if tool_name == "Write" else "ai_modified",
-                                                is_presented=True,
-                                                description=f"AIが{tool_name}ツールで作成/編集しました",
-                                            )
-                                            if file_info:
-                                                # files_presentedリストに追加
-                                                file_data = {
-                                                    "file_id": file_info.file_id,
-                                                    "file_path": file_info.file_path,
-                                                    "file_name": file_info.original_name,
-                                                    "file_size": file_info.file_size,
-                                                    "mime_type": file_info.mime_type,
-                                                    "version": file_info.version,
-                                                    "description": file_info.description,
-                                                }
-                                                files_presented.append(file_data)
-
-                                                # files_presentedイベントを送信
-                                                yield format_files_presented_event(
-                                                    files=[file_data],
-                                                    message=f"ファイル '{file_info.original_name}' を作成しました",
-                                                )
-                                                logger.info(
-                                                    "AIファイル登録成功 (UserMessage)",
-                                                    file_path=relative_path,
-                                                    original_path=file_path,
-                                                    tool_name=tool_name,
-                                                )
-                                        except Exception as e:
-                                            logger.warning(
-                                                "AIファイル登録失敗 (UserMessage)",
-                                                file_path=file_path,
-                                                error=str(e),
-                                            )
-
                 # 結果メッセージ
                 elif isinstance(message, ResultMessage):
                     subtype = message.subtype
@@ -859,21 +745,6 @@ class ExecuteService:
                         chat_session_id=request.chat_session_id,
                     )
 
-                    # 表示キャッシュを保存
-                    await self.session_service.save_display_cache(
-                        chat_session_id=request.chat_session_id,
-                        turn_number=turn_number,
-                        user_message=request.user_input,
-                        assistant_message=assistant_text,
-                        tools_summary=tools_used,
-                        metadata={
-                            "tokens": input_tokens + output_tokens,
-                            "cost_usd": total_cost,
-                            "duration_ms": duration_ms,
-                            "num_turns": num_turns,
-                        },
-                    )
-
                     # 初回実行時のみタイトルを生成
                     if turn_number == 1 and assistant_text and subtype == "success":
                         logger.info("初回実行のためタイトル生成中...")
@@ -910,7 +781,6 @@ class ExecuteService:
                         duration_ms=duration_ms,
                         tools_summary=tools_used,
                         session_id=session_id,
-                        files_presented=files_presented if files_presented else None,
                     )
 
                 # メッセージログを保存
