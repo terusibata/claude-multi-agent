@@ -192,14 +192,16 @@ class MessageProcessor:
         # ツールトラッカーに登録
         self.tool_tracker.start_tool(tool_id, tool_name, tool_input)
 
+        summary = generate_tool_summary(tool_name, tool_input)
+
         log_entry.content_blocks.append({
             "type": "tool_use",
             "id": tool_id,
             "name": tool_name,
             "input": tool_input,
+            "summary": summary,
         })
 
-        summary = generate_tool_summary(tool_name, tool_input)
         yield format_tool_start_event(
             tool_id, tool_name, summary, tool_input=tool_input
         )
@@ -244,7 +246,7 @@ class MessageProcessor:
         # 結果サマリー生成
         result_summary = self.tool_tracker.generate_result_summary(tool_result)
 
-        # tool_completeイベントを送信
+        # tool_resultイベントを送信
         yield format_tool_complete_event(
             tool_use_id=tool_use_id,
             tool_name=tool_name,

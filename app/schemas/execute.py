@@ -81,7 +81,7 @@ class SSEEvent(BaseModel):
 
     event: str = Field(
         ...,
-        description="イベントタイプ (session_start / text_delta / tool_start / tool_complete / thinking / result)",
+        description="イベントタイプ (session_start / text_delta / tool_use / tool_result / thinking / result)",
     )
     data: dict[str, Any] = Field(..., description="イベントデータ")
 
@@ -100,16 +100,16 @@ class TextDeltaData(BaseModel):
     text: str
 
 
-class ToolStartData(BaseModel):
-    """ツール開始イベントデータ"""
+class ToolUseData(BaseModel):
+    """ツール使用開始イベントデータ"""
 
     tool_use_id: str
     tool_name: str
     summary: str
 
 
-class ToolCompleteData(BaseModel):
-    """ツール完了イベントデータ"""
+class ToolResultData(BaseModel):
+    """ツール結果イベントデータ"""
 
     tool_use_id: str
     tool_name: str
