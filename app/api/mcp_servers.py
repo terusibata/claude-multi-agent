@@ -8,7 +8,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.schemas.mcp_server import McpServerCreate, McpServerResponse, McpServerUpdate
+from app.schemas.mcp_server import (
+    McpServerCreate,
+    McpServerResponse,
+    McpServerUpdate,
+    SlashCommandListResponse,
+)
 from app.services.mcp_server_service import McpServerService
 
 router = APIRouter()
@@ -36,6 +41,26 @@ async def get_builtin_mcp_servers(
     """
     service = McpServerService(db)
     return service.get_all_builtin_servers()
+
+
+@router.get(
+    "/slash-commands",
+    response_model=SlashCommandListResponse,
+    summary="スラッシュコマンド一覧取得",
+)
+async def get_slash_commands(
+    tenant_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    ユーザーが選択可能なスラッシュコマンド一覧を取得します。
+
+    フロントエンドのオートコンプリート機能で使用します。
+    返却される`name`フィールドの値を`preferred_skills`パラメータに渡してください。
+    """
+    service = McpServerService(db)
+    items = await service.get_slash_commands(tenant_id)
+    return SlashCommandListResponse(items=items)
 
 
 @router.get("/{server_id}", response_model=McpServerResponse, summary="MCPサーバー詳細取得")
@@ -72,11 +97,16 @@ async def create_mcp_server(
     新しいMCPサーバーを登録します。
 
     - **name**: MCPサーバー名（識別子）
-    - **type**: http / sse / stdio / builtin
+    - **type**: http / sse / stdio / builtin / openapi
     - **url**: サーバーURL（http/sseの場合）
     - **command**: 起動コマンド（stdioの場合）
     - **tools**: ツール定義リスト（builtinの場合）
+    - **openapi_spec**: OpenAPI仕様（openapiの場合）
+    - **openapi_base_url**: OpenAPI APIのベースURL（openapiの場合、オプション）
     - **headers_template**: ヘッダーテンプレート（例: {"Authorization": "Bearer ${token}"}）
+    - **slash_command**: スラッシュコマンド表示名（例: /ServiceNow検索）
+    - **slash_command_description**: スラッシュコマンドの説明（オートコンプリート時に表示）
+    - **is_user_selectable**: ユーザーがUIから選択可能かどうか（デフォルト: true）
     """
     service = McpServerService(db)
 
@@ -96,10 +126,15 @@ async def create_mcp_server(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="タイプ 'builtin' にはツール定義（tools）が必要です",
         )
-    if server_data.type not in ["http", "sse", "stdio", "builtin"]:
+    if server_data.type == "openapi" and not server_data.openapi_spec:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"不正なタイプ '{server_data.type}'。http / sse / stdio / builtin のいずれかを指定してください",
+            detail="タイプ 'openapi' にはOpenAPI仕様（openapi_spec）が必要です",
+        )
+    if server_data.type not in ["http", "sse", "stdio", "builtin", "openapi"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"不正なタイプ '{server_data.type}'。http / sse / stdio / builtin / openapi のいずれかを指定してください",
         )
 
     return await service.create(tenant_id, server_data)

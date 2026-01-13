@@ -3,6 +3,9 @@
   "display_name": "ServiceNowドキュメント検索",
   "type": "openapi",
   "description": "ServiceNowの公式ドキュメントを検索・閲覧するためのMCPサーバー。ServiceNowに関する質問を受けた場合は、まずsearchDocumentsで検索し、必要に応じてgetDocumentDetailで詳細を取得してください。",
+  "slash_command": "/ServiceNowドキュメント検索",
+  "slash_command_description": "ServiceNowの公式ドキュメントを検索して回答します",
+  "is_user_selectable": true,
   "openapi_base_url": "https://servicenow-docs-proxy.terusibata.workers.dev",
   "openapi_spec": {
     "openapi": "3.1.1",

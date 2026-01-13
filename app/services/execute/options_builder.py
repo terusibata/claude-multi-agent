@@ -93,6 +93,12 @@ class OptionsBuilder:
             mcp_servers, allowed_tools, system_prompt, openapi_servers, tokens
         )
 
+        # preferred_skills の処理（システムプロンプトの先頭に追加）
+        if context.preferred_skills:
+            system_prompt = self._build_preferred_skills_prompt(
+                context.preferred_skills, allowed_tools, system_prompt
+            )
+
         # AWS環境変数の構築
         aws_config = AWSConfig(context.model)
         env = aws_config.build_env_vars()
@@ -344,3 +350,67 @@ class OptionsBuilder:
                 )
 
         return mcp_servers, allowed_tools, system_prompt
+
+    def _build_preferred_skills_prompt(
+        self,
+        preferred_skills: list[str],
+        allowed_tools: list[str],
+        system_prompt: str,
+    ) -> str:
+        """
+        preferred_skillsに基づいてシステムプロンプトを構築
+
+        ユーザーが指定したSkill/MCPサーバーを優先的に使用するよう指示を追加。
+        この指示はシステムプロンプトの先頭に追加される。
+
+        Args:
+            preferred_skills: 優先Skill/MCPサーバー名のリスト
+            allowed_tools: 許可されたツール名リスト
+            system_prompt: 既存のシステムプロンプト
+
+        Returns:
+            更新されたシステムプロンプト
+        """
+        # preferred_skillsに関連するツールを抽出
+        related_tools = []
+        for skill_name in preferred_skills:
+            # MCPツール形式: mcp__{server_name}__{tool_name}
+            prefix = f"mcp__{skill_name}__"
+            skill_tools = [t for t in allowed_tools if t.startswith(prefix)]
+            related_tools.extend(skill_tools)
+
+        if not related_tools:
+            # 関連ツールが見つからない場合はスキル名のみで指示
+            logger.warning(
+                "preferred_skillsに対応するツールが見つかりません",
+                preferred_skills=preferred_skills,
+            )
+            tools_instruction = f"スキル: {', '.join(preferred_skills)}"
+        else:
+            tools_instruction = f"ツール: {', '.join(related_tools)}"
+
+        # 優先スキル指示を構築
+        preferred_skills_prompt = f"""## 重要: 優先使用ツール指定
+
+ユーザーは以下のツール/スキルの使用を明示的に指定しました。
+質問に回答する際は、**必ずこれらのツールを最初に使用**してください。
+
+{tools_instruction}
+
+### 必須ワークフロー
+1. 上記のツールで情報を検索・取得
+2. 良い結果が得られない場合は、キーワードを変えて再検索
+3. 取得した情報を基に回答を作成
+4. ツールで情報が見つからない場合のみ、一般知識で補足（その場合は情報源がないことを明記）
+
+---
+
+"""
+        logger.info(
+            "preferred_skills指示を追加",
+            preferred_skills=preferred_skills,
+            related_tools=related_tools,
+        )
+
+        # 既存のシステムプロンプトの先頭に追加
+        return preferred_skills_prompt + system_prompt

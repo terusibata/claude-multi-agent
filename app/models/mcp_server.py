@@ -74,6 +74,21 @@ class McpServer(Base):
     # 仕様のserversセクションを上書き
     openapi_base_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
+    # スラッシュコマンド設定
+    # ユーザーがフロントエンドで選択できるようにするためのメタデータ
+    slash_command: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True,
+        comment="スラッシュコマンド表示名（例: /ServiceNowドキュメント検索）"
+    )
+    slash_command_description: Mapped[Optional[str]] = mapped_column(
+        String(500), nullable=True,
+        comment="スラッシュコマンドの説明（オートコンプリート時に表示）"
+    )
+    is_user_selectable: Mapped[bool] = mapped_column(
+        default=True,
+        comment="ユーザーがUIから選択可能かどうか"
+    )
+
     # ステータス (active / inactive)
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="active"

@@ -48,6 +48,12 @@ class ExecuteRequest(BaseModel):
         description="セッション専用ワークスペースを有効にする",
     )
 
+    # Skill/ツール優先指定
+    preferred_skills: Optional[list[str]] = Field(
+        None,
+        description="優先的に使用するSkill/MCPサーバー名のリスト（例: ['servicenow-docs']）。指定されたツールを必ず最初に使用するよう指示される",
+    )
+
     @model_validator(mode="after")
     def ensure_chat_session_id(self) -> "ExecuteRequest":
         """chat_session_idがNoneまたは空文字列の場合は新しいUUIDを生成"""
