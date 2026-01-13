@@ -15,6 +15,8 @@ class SkillBase(BaseModel):
         description="Skill名（ディレクトリ名と一致）",
         min_length=1,
         max_length=200,
+        # 英数字、ハイフン、アンダースコアのみ許可（ライブラリ互換性のため）
+        # セキュリティ上問題のある文字（/, \, .., スペース等）は禁止
         pattern=r"^[a-zA-Z0-9_\-]+$",
     )
     display_title: Optional[str] = Field(None, description="表示タイトル", max_length=300)
