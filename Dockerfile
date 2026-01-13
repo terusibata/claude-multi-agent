@@ -26,9 +26,12 @@ COPY . .
 # Skills ディレクトリの作成
 RUN mkdir -p /skills
 
+# ワークスペース用ディレクトリの作成
+RUN mkdir -p /var/lib/aiagent/workspaces
+
 # 非rootユーザーの作成
 RUN useradd -m -u 1000 appuser && \
-    chown -R appuser:appuser /app /skills
+    chown -R appuser:appuser /app /skills /var/lib/aiagent
 USER appuser
 
 # 環境変数の設定
