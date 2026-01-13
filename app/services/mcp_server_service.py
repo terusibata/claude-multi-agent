@@ -17,6 +17,7 @@ from app.services.builtin_tools import (
     get_builtin_tool_definition,
 )
 from app.utils.exceptions import ValidationError
+from app.utils.security import validate_mcp_command
 
 logger = structlog.get_logger(__name__)
 
@@ -194,6 +195,8 @@ class McpServerService:
                     "command",
                     "stdioタイプにはcommandが必要です"
                 )
+            # コマンドインジェクション対策
+            validate_mcp_command(command)
 
         elif server_type == "openapi":
             if not openapi_spec:
@@ -337,6 +340,18 @@ class McpServerService:
                     "headers": headers if headers else None,
                 }
             elif server.type == "stdio":
+                # コマンドインジェクション対策
+                try:
+                    validate_mcp_command(server.command, server.args)
+                except ValidationError as e:
+                    logger.warning(
+                        "MCPサーバーコマンド検証エラー",
+                        server_name=server.name,
+                        command=server.command,
+                        error=str(e),
+                    )
+                    continue  # このサーバーをスキップ
+
                 # 環境変数にトークンを追加
                 env = dict(server.env) if server.env else {}
                 for token_key, token_value in tokens.items():

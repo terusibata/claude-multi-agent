@@ -28,6 +28,7 @@ from app.services.session_service import SessionService
 from app.services.skill_service import SkillService
 from app.services.usage_service import UsageService
 from app.services.workspace_service import WorkspaceService
+from app.utils.log_sanitizer import sanitize_sdk_options
 from app.utils.session_lock import (
     SessionLockError,
     get_session_lock_manager,
@@ -130,7 +131,7 @@ class ExecuteService:
 
             # オプション構築
             options = await self.options_builder.build(context, request.tokens)
-            logger.info("SDK options", options=options)
+            logger.info("SDK options", options=sanitize_sdk_options(options))
 
             # ターン番号とメッセージ順序取得
             context.turn_number = await self.session_service.get_latest_turn_number(

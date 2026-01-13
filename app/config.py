@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     s3_bucket_name: str = ""
     s3_workspace_prefix: str = "workspaces/"
 
+    # ローカルワークスペース一時ディレクトリ
+    # セキュリティ向上のため、アプリケーション専用ディレクトリを使用
+    workspace_temp_dir: str = "/var/lib/aiagent/workspaces"
+
     # ============================================
     # セキュリティ設定
     # ============================================

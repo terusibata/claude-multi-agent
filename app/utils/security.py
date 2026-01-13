@@ -55,8 +55,19 @@ def validate_path_traversal(path: str, base_path: Optional[Path] = None) -> None
             base_resolved = base_path.resolve()
 
             # パスがベースディレクトリ配下にあることを確認
-            if not str(full_path).startswith(str(base_resolved) + "/") and full_path != base_resolved:
-                raise PathTraversalError(path)
+            # is_relative_to() を使用（Python 3.9+）
+            try:
+                if not full_path.is_relative_to(base_resolved):
+                    raise PathTraversalError(path)
+            except AttributeError:
+                # Python 3.8以下のフォールバック
+                # パスのパーツを比較して、ベースパスの全パーツが含まれることを確認
+                base_parts = base_resolved.parts
+                full_parts = full_path.parts
+                if len(full_parts) < len(base_parts):
+                    raise PathTraversalError(path)
+                if full_parts[:len(base_parts)] != base_parts:
+                    raise PathTraversalError(path)
         except (OSError, ValueError):
             raise PathTraversalError(path)
 
@@ -186,3 +197,117 @@ def validate_tenant_id(tenant_id: str) -> None:
 
     # パストラバーサルチェック
     validate_path_traversal(tenant_id)
+
+
+def validate_session_id(session_id: str) -> None:
+    """
+    セッションIDを検証する
+
+    Args:
+        session_id: セッションID
+
+    Raises:
+        ValidationError: セッションIDが無効な場合
+    """
+    if not session_id:
+        raise ValidationError("session_id", "セッションIDが空です")
+
+    if len(session_id) > 200:
+        raise ValidationError("session_id", "セッションIDは200文字以内にしてください")
+
+    # 英数字、ハイフン、アンダースコアのみ許可（UUIDを想定）
+    if not re.match(r"^[a-zA-Z0-9_\-]+$", session_id):
+        raise ValidationError(
+            "session_id",
+            "セッションIDには英数字、ハイフン、アンダースコアのみ使用できます"
+        )
+
+
+# MCPコマンドのホワイトリスト（安全と認められるコマンドのみ許可）
+# 本番環境では厳格に管理し、必要に応じて追加
+MCP_COMMAND_WHITELIST = {
+    "npx",
+    "node",
+    "python",
+    "python3",
+    "uvx",
+    "uv",
+}
+
+# シェルインジェクションに使われる危険な文字
+SHELL_METACHARACTERS = re.compile(r"[;&|`$(){}\\<>'\"\n\r]")
+
+
+def validate_mcp_command(command: str, args: list[str] | None = None) -> None:
+    """
+    MCPサーバーのコマンドを検証する
+
+    Args:
+        command: 実行するコマンド
+        args: コマンド引数
+
+    Raises:
+        ValidationError: コマンドが無効な場合
+    """
+    if not command:
+        raise ValidationError("command", "コマンドが空です")
+
+    # コマンド名を抽出（パス付きの場合はベース名を取得）
+    command_name = Path(command).name
+
+    # ホワイトリストチェック
+    if command_name not in MCP_COMMAND_WHITELIST:
+        raise ValidationError(
+            "command",
+            f"許可されていないコマンドです: {command_name}。"
+            f"許可されたコマンド: {', '.join(sorted(MCP_COMMAND_WHITELIST))}"
+        )
+
+    # コマンドにシェルメタ文字が含まれていないかチェック
+    if SHELL_METACHARACTERS.search(command):
+        raise ValidationError(
+            "command",
+            "コマンドにシェルメタ文字が含まれています"
+        )
+
+    # 引数のチェック
+    if args:
+        for i, arg in enumerate(args):
+            if not isinstance(arg, str):
+                raise ValidationError(
+                    "args",
+                    f"引数は文字列である必要があります: index={i}"
+                )
+            # 引数にも危険なパターンがないかチェック（シェル展開対策）
+            # ただし、引数はシェルを通さずに直接渡されるため、
+            # バッククォートとドル記号のみチェック
+            if "`" in arg or "$(" in arg:
+                raise ValidationError(
+                    "args",
+                    f"引数にシェル展開パターンが含まれています: index={i}"
+                )
+
+
+def validate_file_path(file_path: str, base_path: Path) -> Path:
+    """
+    ファイルパスを検証し、安全なパスを返す
+
+    Args:
+        file_path: 検証するファイルパス
+        base_path: ベースディレクトリ
+
+    Returns:
+        検証済みの絶対パス
+
+    Raises:
+        PathTraversalError: パストラバーサルを検出した場合
+        ValidationError: ファイルパスが無効な場合
+    """
+    if not file_path:
+        raise ValidationError("file_path", "ファイルパスが空です")
+
+    # パストラバーサルチェック
+    validate_path_traversal(file_path, base_path)
+
+    # 安全なパスを返す
+    return (base_path / file_path).resolve()

@@ -136,10 +136,25 @@ async def event_generator(
 
                 # バックグラウンドタスクが完了しているかチェック
                 if background_task.done():
-                    logger.info(
-                        "Background task completed during timeout",
-                        extra={"chat_session_id": request.chat_session_id},
-                    )
+                    # タスクの例外をチェック
+                    try:
+                        await background_task
+                    except asyncio.CancelledError:
+                        logger.info(
+                            "Background task was cancelled",
+                            extra={"chat_session_id": request.chat_session_id},
+                        )
+                    except Exception as task_error:
+                        logger.error(
+                            f"Background task error: {task_error}",
+                            exc_info=True,
+                            extra={"chat_session_id": request.chat_session_id},
+                        )
+                    else:
+                        logger.info(
+                            "Background task completed during timeout",
+                            extra={"chat_session_id": request.chat_session_id},
+                        )
                     break
 
                 # 連続タイムアウトが最大回数を超えたらエラーイベントを送信して終了
@@ -175,6 +190,13 @@ async def event_generator(
             extra={"chat_session_id": request.chat_session_id},
         )
         background_task.cancel()
+        # タスクのキャンセルを待つ
+        try:
+            await background_task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            pass  # 既にログ済み
         raise
     finally:
         # タスクが完了していない場合、ログに記録
@@ -239,25 +261,44 @@ async def execute_agent(
     if files:
         workspace_service = WorkspaceService(db)
         file_data = []
-        for file in files:
-            # ファイル名のバリデーション
-            if not file.filename:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="ファイル名が指定されていません",
-                )
-            content = await file.read()
-            content_type = file.content_type or "application/octet-stream"
-            file_data.append((file.filename, content, content_type))
+        try:
+            for file in files:
+                # ファイル名のバリデーション
+                if not file.filename:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="ファイル名が指定されていません",
+                    )
+                content = await file.read()
+                content_type = file.content_type or "application/octet-stream"
+                file_data.append((file.filename, content, content_type))
 
-        await workspace_service.upload_files(
-            tenant_id, request.chat_session_id, file_data
-        )
+            await workspace_service.upload_files(
+                tenant_id, request.chat_session_id, file_data
+            )
 
-        # ワークスペースを有効化
-        request.enable_workspace = True
-        await workspace_service.enable_workspace(tenant_id, request.chat_session_id)
-        await db.commit()
+            # ワークスペースを有効化
+            request.enable_workspace = True
+            await workspace_service.enable_workspace(tenant_id, request.chat_session_id)
+            await db.commit()
+        except HTTPException:
+            # HTTPExceptionはそのまま再送出
+            await db.rollback()
+            raise
+        except Exception as e:
+            # その他のエラー（S3エラーなど）
+            await db.rollback()
+            logger.error(
+                "ファイルアップロードエラー",
+                error=str(e),
+                tenant_id=tenant_id,
+                session_id=request.chat_session_id,
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"ファイルのアップロードに失敗しました: {str(e)}",
+            )
 
     # エージェント設定の取得
     config_service = AgentConfigService(db)

@@ -396,7 +396,17 @@ class SkillService:
         # ファイルシステムから削除
         skill_path = Path(skill.file_path)
         if skill_path.exists():
-            shutil.rmtree(skill_path)
+            try:
+                shutil.rmtree(skill_path)
+            except OSError as e:
+                logger.error(
+                    "スキルディレクトリ削除エラー",
+                    skill_id=skill_id,
+                    skill_path=str(skill_path),
+                    error=str(e),
+                )
+                # ディレクトリ削除に失敗しても、DBからは削除を続行
+                # （孤児ディレクトリは後でクリーンアップ可能）
 
         # DBから削除
         await self.db.delete(skill)

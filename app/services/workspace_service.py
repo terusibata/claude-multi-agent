@@ -95,11 +95,21 @@ class WorkspaceService:
         Args:
             tenant_id: テナントID
             session_id: セッションID
-            file_path: ファイルパス
+            file_path: ファイルパス（相対パス）
 
         Returns:
             (content, filename, content_type)
+
+        Raises:
+            WorkspaceSecurityError: パスが無効な場合
         """
+        # パストラバーサル攻撃の防止
+        from app.utils.security import validate_path_traversal
+        try:
+            validate_path_traversal(file_path)
+        except Exception as e:
+            raise WorkspaceSecurityError(f"無効なファイルパス: {str(e)}")
+
         content, content_type = await self.s3.download(tenant_id, session_id, file_path)
         filename = file_path.split('/')[-1]
         return content, filename, content_type
@@ -200,8 +210,25 @@ class WorkspaceService:
 
         Returns:
             ローカルパス
+
+        Raises:
+            WorkspaceSecurityError: セッションIDが無効な場合
         """
-        return f"/tmp/workspace_{session_id}"
+        # セッションIDのバリデーション（パストラバーサル防止）
+        from app.utils.security import validate_session_id
+        try:
+            validate_session_id(session_id)
+        except Exception as e:
+            raise WorkspaceSecurityError(f"無効なセッションID: {str(e)}")
+
+        # 設定ファイルからベースディレクトリを取得
+        base_dir = settings.workspace_temp_dir
+        workspace_path = Path(base_dir) / f"workspace_{session_id}"
+
+        # ベースディレクトリが存在しない場合は作成
+        Path(base_dir).mkdir(parents=True, exist_ok=True, mode=0o700)
+
+        return str(workspace_path)
 
     async def sync_to_local(self, tenant_id: str, session_id: str) -> str:
         """
@@ -293,8 +320,21 @@ class WorkspaceService:
             session_id: セッションID
         """
         local_dir = self.get_workspace_local_path(session_id)
-        shutil.rmtree(local_dir, ignore_errors=True)
-        logger.info("ローカルワークスペース削除完了", session_id=session_id)
+
+        def log_error(func, path, exc_info):
+            """削除エラー時のコールバック"""
+            logger.warning(
+                "ローカルワークスペース削除エラー",
+                session_id=session_id,
+                path=path,
+                error=str(exc_info[1]) if exc_info else "Unknown error",
+            )
+
+        if Path(local_dir).exists():
+            shutil.rmtree(local_dir, onerror=log_error)
+            logger.info("ローカルワークスペース削除完了", session_id=session_id)
+        else:
+            logger.debug("ローカルワークスペースは存在しません", session_id=session_id)
 
     def get_workspace_cwd(self, tenant_id: str, session_id: str) -> str:
         """
