@@ -131,7 +131,7 @@ async def upload_skill(
     display_title: Optional[str] = Form(None, description="表示タイトル"),
     description: Optional[str] = Form(None, description="説明"),
     skill_md: UploadFile = File(..., description="SKILL.mdファイル"),
-    additional_files: list[UploadFile] = File(default=[], description="追加ファイル"),
+    additional_files: Optional[list[UploadFile]] = File(default=None, description="追加ファイル"),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -158,10 +158,13 @@ async def upload_skill(
     _, skill_md_content = await _read_upload_file_safely(skill_md)
     files["SKILL.md"] = skill_md_content
 
-    # 追加ファイルを読み込み
-    for file in additional_files:
-        filename, content = await _read_upload_file_safely(file)
-        files[filename] = content
+    # 追加ファイルを読み込み（空文字列やNoneをスキップ）
+    if additional_files:
+        for file in additional_files:
+            # curlで空の-Fパラメータが渡された場合をスキップ
+            if file and file.filename:
+                filename, content = await _read_upload_file_safely(file)
+                files[filename] = content
 
     try:
         skill_data = SkillCreate(
