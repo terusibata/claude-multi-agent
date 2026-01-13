@@ -15,6 +15,10 @@ from app.services.builtin_tools import (
     get_all_builtin_tool_definitions,
     get_builtin_tool_definition,
 )
+from app.services.servicenow_docs_tools import (
+    get_all_servicenow_docs_tool_definitions,
+    get_servicenow_docs_tool_definition,
+)
 
 
 # ビルトインMCPサーバーの定義
@@ -26,7 +30,18 @@ BUILTIN_MCP_SERVERS = {
         "description": "AIが作成・編集したファイルをユーザーに提示するためのMCPサーバー",
         "tools": ["present_files"],
         "allowed_tools": ["mcp__file-presentation__present_files"],
-    }
+    },
+    "servicenow-docs": {
+        "name": "servicenow-docs",
+        "display_name": "ServiceNowドキュメント検索",
+        "type": "builtin",
+        "description": "ServiceNowの公式ドキュメントを検索・閲覧するためのMCPサーバー",
+        "tools": ["searchDocuments", "getDocumentDetail"],
+        "allowed_tools": [
+            "mcp__servicenow-docs__searchDocuments",
+            "mcp__servicenow-docs__getDocumentDetail",
+        ],
+    },
 }
 
 
@@ -263,9 +278,15 @@ class McpServerService:
                             tools_definitions.append(tool_def)
                         else:
                             # ビルトインツール名の場合、定義を取得
+                            # まずbuiltin_toolsから検索
                             builtin_def = get_builtin_tool_definition(tool_def)
                             if builtin_def:
                                 tools_definitions.append(builtin_def)
+                            else:
+                                # ServiceNowドキュメントツールから検索
+                                servicenow_def = get_servicenow_docs_tool_definition(tool_def)
+                                if servicenow_def:
+                                    tools_definitions.append(servicenow_def)
 
                 config[server.name] = {
                     "type": "builtin",

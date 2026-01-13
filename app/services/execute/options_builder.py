@@ -12,7 +12,11 @@ from app.services.builtin_tools import (
     create_file_presentation_mcp_server,
     FILE_PRESENTATION_PROMPT,
 )
-from app.services.mcp_server_service import McpServerService
+from app.services.servicenow_docs_tools import (
+    create_servicenow_docs_mcp_server,
+    SERVICENOW_DOCS_PROMPT,
+)
+from app.services.mcp_server_service import McpServerService, BUILTIN_MCP_SERVERS
 from app.services.skill_service import SkillService
 from app.services.workspace_service import WorkspaceService
 
@@ -68,7 +72,7 @@ class OptionsBuilder:
         allowed_tools = await self._build_allowed_tools(context)
 
         # MCPサーバー設定の構築
-        mcp_servers, mcp_tools = await self._build_mcp_servers(context, tokens)
+        mcp_servers, mcp_tools, builtin_servers = await self._build_mcp_servers(context, tokens)
         allowed_tools.extend(mcp_tools)
 
         # システムプロンプトの構築
@@ -81,9 +85,9 @@ class OptionsBuilder:
         # ワークスペースコンテキストの追加
         system_prompt = await self._add_workspace_context(context, system_prompt)
 
-        # ビルトインMCPサーバーの追加
+        # ビルトインMCPサーバーの追加（DB登録されたbuiltinサーバーを含む）
         mcp_servers, allowed_tools, system_prompt = self._add_builtin_mcp_server(
-            cwd, mcp_servers, allowed_tools, system_prompt
+            cwd, mcp_servers, allowed_tools, system_prompt, builtin_servers
         )
 
         # AWS環境変数の構築
@@ -134,21 +138,38 @@ class OptionsBuilder:
         self,
         context: ExecutionContext,
         tokens: Optional[dict[str, str]],
-    ) -> tuple[dict, list[str]]:
-        """MCPサーバー設定を構築"""
+    ) -> tuple[dict, list[str], list[str]]:
+        """
+        MCPサーバー設定を構築
+
+        Returns:
+            (mcp_servers設定, mcp_tools許可リスト, builtin_serverリスト)
+        """
         mcp_servers = {}
         mcp_tools = []
+        builtin_servers = []
 
         if context.agent_config.mcp_servers:
             mcp_definitions = await self.mcp_service.get_by_ids(
                 context.agent_config.mcp_servers, context.tenant_id
             )
-            mcp_servers = self.mcp_service.build_mcp_config(
-                mcp_definitions, tokens or {}
-            )
-            mcp_tools = self.mcp_service.get_allowed_tools(mcp_definitions)
 
-        return mcp_servers, mcp_tools
+            # builtinタイプのサーバーを分離
+            non_builtin_definitions = []
+            for mcp_def in mcp_definitions:
+                if mcp_def.type == "builtin":
+                    builtin_servers.append(mcp_def.name)
+                else:
+                    non_builtin_definitions.append(mcp_def)
+
+            # 非builtinサーバーの設定を構築
+            if non_builtin_definitions:
+                mcp_servers = self.mcp_service.build_mcp_config(
+                    non_builtin_definitions, tokens or {}
+                )
+                mcp_tools = self.mcp_service.get_allowed_tools(non_builtin_definitions)
+
+        return mcp_servers, mcp_tools, builtin_servers
 
     async def _determine_cwd(self, context: ExecutionContext) -> str:
         """作業ディレクトリを決定"""
@@ -213,8 +234,22 @@ class OptionsBuilder:
         mcp_servers: dict,
         allowed_tools: list[str],
         system_prompt: str,
+        requested_builtin_servers: Optional[list[str]] = None,
     ) -> tuple[dict, list[str], str]:
-        """ビルトインMCPサーバー（present_files）を追加"""
+        """
+        ビルトインMCPサーバーを追加
+
+        Args:
+            cwd: 作業ディレクトリ
+            mcp_servers: MCPサーバー設定辞書
+            allowed_tools: 許可ツールリスト
+            system_prompt: システムプロンプト
+            requested_builtin_servers: リクエストされたビルトインサーバー名のリスト
+
+        Returns:
+            更新された (mcp_servers, allowed_tools, system_prompt)
+        """
+        # file-presentationは常に追加
         file_presentation_server = create_file_presentation_mcp_server(cwd)
         if file_presentation_server:
             mcp_servers["file-presentation"] = file_presentation_server
@@ -224,5 +259,22 @@ class OptionsBuilder:
                 "ビルトインMCPサーバー追加完了",
                 server_name="file-presentation",
             )
+
+        # リクエストされたビルトインサーバーを追加
+        if requested_builtin_servers:
+            for server_name in requested_builtin_servers:
+                if server_name == "servicenow-docs":
+                    servicenow_server = create_servicenow_docs_mcp_server()
+                    if servicenow_server:
+                        mcp_servers["servicenow-docs"] = servicenow_server
+                        # BUILTIN_MCP_SERVERSから許可ツールを取得
+                        builtin_def = BUILTIN_MCP_SERVERS.get("servicenow-docs")
+                        if builtin_def and builtin_def.get("allowed_tools"):
+                            allowed_tools.extend(builtin_def["allowed_tools"])
+                        system_prompt = f"{system_prompt}\n\n{SERVICENOW_DOCS_PROMPT}"
+                        logger.info(
+                            "ビルトインMCPサーバー追加完了",
+                            server_name="servicenow-docs",
+                        )
 
         return mcp_servers, allowed_tools, system_prompt
