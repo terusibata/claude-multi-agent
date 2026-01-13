@@ -17,8 +17,8 @@ SAFE_FILENAME_PATTERN = re.compile(r"^[\w\-.\u3040-\u309F\u30A0-\u30FF\u4E00-\u9
 # ディレクトリ名として安全な文字のみ
 SAFE_SKILL_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_\-]+$")
 
-# スラッシュコマンドのパターン
-SLASH_COMMAND_PATTERN = re.compile(r"^/[\w\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\-]+$")
+# スラッシュコマンドのパターン（'/'なしで保存、フロントエンドで'/'を付けて表示）
+SLASH_COMMAND_PATTERN = re.compile(r"^[\w\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\-]+$")
 
 # パストラバーサル検出パターン
 PATH_TRAVERSAL_PATTERNS = [
@@ -147,8 +147,10 @@ def validate_slash_command(slash_command: Optional[str]) -> None:
     """
     スラッシュコマンドを検証する
 
+    Note: スラッシュコマンドは'/'なしで保存し、フロントエンドで'/'を付けて表示する
+
     Args:
-        slash_command: スラッシュコマンド
+        slash_command: スラッシュコマンド（'/'なし）
 
     Raises:
         ValidationError: スラッシュコマンドが無効な場合
@@ -158,9 +160,6 @@ def validate_slash_command(slash_command: Optional[str]) -> None:
 
     if not slash_command:
         raise ValidationError("slash_command", "スラッシュコマンドが空です")
-
-    if not slash_command.startswith("/"):
-        raise ValidationError("slash_command", "スラッシュコマンドは '/' で始める必要があります")
 
     if len(slash_command) > 100:
         raise ValidationError("slash_command", "スラッシュコマンドは100文字以内にしてください")
