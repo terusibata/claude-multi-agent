@@ -165,3 +165,37 @@ class SDKNotInstalledError(SDKError):
                 "original_error": original_error,
             },
         )
+
+
+class FileOperationError(AppError):
+    """ファイル操作エラー"""
+
+    def __init__(
+        self,
+        operation: str,
+        file_path: str,
+        original_error: Optional[str] = None,
+    ):
+        self.operation = operation
+        self.file_path = file_path
+        self.original_error = original_error
+        super().__init__(
+            message=f"ファイル{operation}に失敗しました: {file_path}",
+            error_code="FILE_OPERATION_ERROR",
+            details={
+                "operation": operation,
+                "file_path": file_path,
+                "original_error": original_error,
+            },
+        )
+
+
+class FileEncodingError(AppError):
+    """ファイルエンコーディングエラー"""
+
+    def __init__(self, filename: str):
+        super().__init__(
+            message=f"ファイル '{filename}' はUTF-8でエンコードされていません",
+            error_code="FILE_ENCODING_ERROR",
+            details={"filename": filename},
+        )

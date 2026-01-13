@@ -102,6 +102,7 @@ class ExecuteService:
             agent_skills=agent_config.agent_skills,
         )
 
+        execution_success = False
         try:
             # セッション準備
             await self._prepare_session(context)
@@ -122,12 +123,38 @@ class ExecuteService:
             async for event in self._execute_with_sdk(context, options, tool_tracker):
                 yield event
 
+            execution_success = True
+
         except Exception as e:
             for event in self._handle_error(e, context, tool_tracker):
                 yield event
 
         finally:
-            await self.db.commit()
+            if execution_success:
+                # 正常終了時のみcommit
+                try:
+                    await self.db.commit()
+                except Exception as commit_error:
+                    logger.error(
+                        "コミットエラー",
+                        error=str(commit_error),
+                        chat_session_id=context.chat_session_id,
+                    )
+                    await self.db.rollback()
+            else:
+                # エラー発生時はrollback
+                try:
+                    await self.db.rollback()
+                    logger.info(
+                        "トランザクションをロールバック",
+                        chat_session_id=context.chat_session_id,
+                    )
+                except Exception as rollback_error:
+                    logger.error(
+                        "ロールバックエラー",
+                        error=str(rollback_error),
+                        chat_session_id=context.chat_session_id,
+                    )
 
     async def _prepare_session(self, context: ExecutionContext) -> None:
         """セッション準備"""

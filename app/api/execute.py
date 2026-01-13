@@ -17,9 +17,14 @@ from app.services.agent_config_service import AgentConfigService
 from app.services.execute_service import ExecuteService
 from app.services.model_service import ModelService
 from app.services.workspace_service import WorkspaceService
+from app.utils.streaming import format_error_event
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# タイムアウト関連の定数
+EVENT_TIMEOUT_SECONDS = 300  # イベント待機タイムアウト（秒）
+MAX_CONSECUTIVE_TIMEOUTS = 3  # 連続タイムアウトの最大回数
 
 
 async def _background_execution(
@@ -50,7 +55,17 @@ async def _background_execution(
         ):
             await event_queue.put(event)
     except Exception as e:
-        logger.error(f"Background execution error: {e}", exc_info=True)
+        logger.error(
+            f"Background execution error: {e}",
+            exc_info=True,
+            extra={"chat_session_id": request.chat_session_id},
+        )
+        # エラーイベントをキューに送信してクライアントに通知
+        error_event = format_error_event(
+            f"バックグラウンド実行エラー: {str(e)}",
+            "background_execution_error",
+        )
+        await event_queue.put(error_event)
     finally:
         # 終了シグナルを送信
         await event_queue.put(None)
@@ -77,7 +92,8 @@ async def event_generator(
     Yields:
         SSEイベント
     """
-    event_queue = asyncio.Queue()
+    event_queue: asyncio.Queue = asyncio.Queue()
+    consecutive_timeouts = 0
 
     # バックグラウンドタスクとして実行を開始
     background_task = asyncio.create_task(
@@ -95,7 +111,13 @@ async def event_generator(
         while True:
             try:
                 # タイムアウトを設定してキューから取得
-                event = await asyncio.wait_for(event_queue.get(), timeout=300)
+                event = await asyncio.wait_for(
+                    event_queue.get(),
+                    timeout=EVENT_TIMEOUT_SECONDS,
+                )
+
+                # イベントを受信したらタイムアウトカウントをリセット
+                consecutive_timeouts = 0
 
                 if event is None:
                     # 処理完了シグナル
@@ -106,7 +128,36 @@ async def event_generator(
                     "data": json.dumps(event["data"], ensure_ascii=False, default=str),
                 }
             except asyncio.TimeoutError:
-                logger.warning("Event queue timeout, continuing...")
+                consecutive_timeouts += 1
+                logger.warning(
+                    f"Event queue timeout ({consecutive_timeouts}/{MAX_CONSECUTIVE_TIMEOUTS})",
+                    extra={"chat_session_id": request.chat_session_id},
+                )
+
+                # バックグラウンドタスクが完了しているかチェック
+                if background_task.done():
+                    logger.info(
+                        "Background task completed during timeout",
+                        extra={"chat_session_id": request.chat_session_id},
+                    )
+                    break
+
+                # 連続タイムアウトが最大回数を超えたらエラーイベントを送信して終了
+                if consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS:
+                    logger.error(
+                        f"Max consecutive timeouts reached, terminating",
+                        extra={"chat_session_id": request.chat_session_id},
+                    )
+                    error_event = format_error_event(
+                        "応答タイムアウト: サーバーからの応答がありません",
+                        "timeout_error",
+                    )
+                    yield {
+                        "event": error_event["event"],
+                        "data": json.dumps(error_event["data"], ensure_ascii=False, default=str),
+                    }
+                    break
+
                 continue
 
     except asyncio.CancelledError:
@@ -118,7 +169,11 @@ async def event_generator(
         # バックグラウンドタスクは継続させる（awaitしない）
         raise
     except Exception as e:
-        logger.error(f"Event generator error: {e}", exc_info=True)
+        logger.error(
+            f"Event generator error: {e}",
+            exc_info=True,
+            extra={"chat_session_id": request.chat_session_id},
+        )
         background_task.cancel()
         raise
     finally:
@@ -185,6 +240,12 @@ async def execute_agent(
         workspace_service = WorkspaceService(db)
         file_data = []
         for file in files:
+            # ファイル名のバリデーション
+            if not file.filename:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="ファイル名が指定されていません",
+                )
             content = await file.read()
             content_type = file.content_type or "application/octet-stream"
             file_data.append((file.filename, content, content_type))

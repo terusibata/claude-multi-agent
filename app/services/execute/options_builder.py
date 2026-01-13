@@ -20,6 +20,9 @@ from app.services.workspace_service import WorkspaceService
 
 logger = structlog.get_logger(__name__)
 
+# スキル名に使用可能な文字パターン（セキュリティのため制限）
+SAFE_SKILL_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_\-]+$")
+
 
 class OptionsBuilder:
     """
@@ -351,6 +354,44 @@ class OptionsBuilder:
 
         return mcp_servers, allowed_tools, system_prompt
 
+    def _validate_and_sanitize_skill_name(self, skill_name: str) -> Optional[str]:
+        """
+        スキル名を検証しサニタイズする
+
+        Args:
+            skill_name: 検証するスキル名
+
+        Returns:
+            サニタイズされたスキル名（無効な場合はNone）
+        """
+        if not skill_name:
+            return None
+
+        # 空白を除去
+        cleaned = skill_name.strip()
+
+        if not cleaned:
+            return None
+
+        # 最大長チェック（200文字）
+        if len(cleaned) > 200:
+            logger.warning(
+                "スキル名が長すぎます",
+                skill_name=cleaned[:50] + "...",
+                length=len(cleaned),
+            )
+            return None
+
+        # 安全な文字のみかチェック
+        if not SAFE_SKILL_NAME_PATTERN.match(cleaned):
+            logger.warning(
+                "不正なスキル名フォーマット",
+                skill_name=cleaned,
+            )
+            return None
+
+        return cleaned
+
     def _build_preferred_skills_prompt(
         self,
         preferred_skills: list[str],
@@ -371,7 +412,25 @@ class OptionsBuilder:
         Returns:
             更新されたシステムプロンプト
         """
-        skill_list = ", ".join(preferred_skills)
+        # スキル名をバリデーションしてサニタイズ
+        validated_skills = []
+        for skill_name in preferred_skills:
+            sanitized = self._validate_and_sanitize_skill_name(skill_name)
+            if sanitized:
+                validated_skills.append(sanitized)
+            else:
+                logger.warning(
+                    "無効なpreferred_skill名を無視",
+                    original_skill_name=skill_name[:100] if skill_name else None,
+                )
+
+        # 有効なスキルがない場合はプロンプトを変更せず返す
+        if not validated_skills:
+            logger.warning("有効なpreferred_skillsがありません")
+            return system_prompt
+
+        # スキル名をカンマ区切りで結合（各スキル名は既にサニタイズ済み）
+        skill_list = ", ".join(validated_skills)
 
         # 優先スキル指示を構築
         preferred_skills_prompt = f"""## 重要: 優先使用Skill指定
@@ -391,7 +450,9 @@ class OptionsBuilder:
 """
         logger.info(
             "preferred_skills指示を追加",
-            preferred_skills=preferred_skills,
+            preferred_skills=validated_skills,
+            original_count=len(preferred_skills),
+            validated_count=len(validated_skills),
         )
 
         # 既存のシステムプロンプトの先頭に追加

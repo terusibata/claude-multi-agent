@@ -2,6 +2,7 @@
 Agent Skills管理API
 ファイルシステムベースのSkills管理
 """
+import structlog
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
@@ -16,8 +17,17 @@ from app.schemas.skill import (
     SlashCommandListResponse,
 )
 from app.services.skill_service import SkillService
+from app.utils.exceptions import (
+    AppError,
+    FileEncodingError,
+    FileOperationError,
+    PathTraversalError,
+    ValidationError,
+)
+from app.utils.error_handler import app_error_to_http_exception
 
 router = APIRouter()
+logger = structlog.get_logger(__name__)
 
 
 @router.get("", response_model=list[SkillResponse], summary="Skills一覧取得")
@@ -72,6 +82,43 @@ async def get_skill(
     return skill
 
 
+async def _read_upload_file_safely(file: UploadFile) -> tuple[str, str]:
+    """
+    アップロードファイルを安全に読み込む
+
+    Args:
+        file: アップロードファイル
+
+    Returns:
+        (ファイル名, ファイル内容) のタプル
+
+    Raises:
+        HTTPException: ファイル名がない場合やエンコーディングエラーの場合
+    """
+    if not file.filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="ファイル名が指定されていません",
+        )
+
+    try:
+        content = await file.read()
+        decoded_content = content.decode("utf-8")
+        return file.filename, decoded_content
+    except UnicodeDecodeError:
+        logger.warning("ファイルエンコーディングエラー", filename=file.filename)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"ファイル '{file.filename}' はUTF-8でエンコードされていません",
+        )
+    except OSError as e:
+        logger.error("ファイル読み込みエラー", filename=file.filename, error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="ファイルの読み込みに失敗しました",
+        )
+
+
 @router.post(
     "",
     response_model=SkillResponse,
@@ -108,22 +155,24 @@ async def upload_skill(
     files = {}
 
     # SKILL.mdを読み込み
-    skill_md_content = await skill_md.read()
-    files["SKILL.md"] = skill_md_content.decode("utf-8")
+    _, skill_md_content = await _read_upload_file_safely(skill_md)
+    files["SKILL.md"] = skill_md_content
 
     # 追加ファイルを読み込み
     for file in additional_files:
-        content = await file.read()
-        # ファイル名にサブディレクトリが含まれる場合も対応
-        files[file.filename] = content.decode("utf-8")
+        filename, content = await _read_upload_file_safely(file)
+        files[filename] = content
 
-    skill_data = SkillCreate(
-        name=name,
-        display_title=display_title,
-        description=description,
-    )
+    try:
+        skill_data = SkillCreate(
+            name=name,
+            display_title=display_title,
+            description=description,
+        )
 
-    return await service.create(tenant_id, skill_data, files)
+        return await service.create(tenant_id, skill_data, files)
+    except AppError as e:
+        raise app_error_to_http_exception(e)
 
 
 @router.put("/{skill_id}", response_model=SkillResponse, summary="Skillメタデータ更新")
@@ -161,16 +210,19 @@ async def update_skill_files(
     # ファイル内容を読み込み
     file_contents = {}
     for file in files:
-        content = await file.read()
-        file_contents[file.filename] = content.decode("utf-8")
+        filename, content = await _read_upload_file_safely(file)
+        file_contents[filename] = content
 
-    skill = await service.update_files(skill_id, tenant_id, file_contents)
-    if not skill:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Skill '{skill_id}' が見つかりません",
-        )
-    return skill
+    try:
+        skill = await service.update_files(skill_id, tenant_id, file_contents)
+        if not skill:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Skill '{skill_id}' が見つかりません",
+            )
+        return skill
+    except AppError as e:
+        raise app_error_to_http_exception(e)
 
 
 @router.delete(
@@ -231,10 +283,13 @@ async def get_skill_file_content(
     Skillの特定ファイルの内容を取得します。
     """
     service = SkillService(db)
-    content = await service.get_file_content(skill_id, tenant_id, file_path)
-    if content is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"ファイル '{file_path}' が見つかりません",
-        )
-    return {"content": content}
+    try:
+        content = await service.get_file_content(skill_id, tenant_id, file_path)
+        if content is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"ファイル '{file_path}' が見つかりません",
+            )
+        return {"content": content}
+    except AppError as e:
+        raise app_error_to_http_exception(e)

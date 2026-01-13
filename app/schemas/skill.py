@@ -4,14 +4,18 @@ Agent Skills スキーマ
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class SkillBase(BaseModel):
     """Agent Skillsの共通フィールド"""
 
     name: str = Field(
-        ..., description="Skill名（ディレクトリ名と一致）", max_length=200
+        ...,
+        description="Skill名（ディレクトリ名と一致）",
+        min_length=1,
+        max_length=200,
+        pattern=r"^[a-zA-Z0-9_\-]+$",
     )
     display_title: Optional[str] = Field(None, description="表示タイトル", max_length=300)
     description: Optional[str] = Field(None, description="説明")
@@ -31,6 +35,16 @@ class SkillBase(BaseModel):
         description="ユーザーがUIから選択可能かどうか",
     )
 
+    @field_validator("slash_command")
+    @classmethod
+    def validate_slash_command(cls, v: Optional[str]) -> Optional[str]:
+        """スラッシュコマンドは'/'で始まる必要がある"""
+        if v is None:
+            return v
+        if not v.startswith("/"):
+            raise ValueError("スラッシュコマンドは '/' で始める必要があります")
+        return v
+
 
 class SkillCreate(SkillBase):
     """Agent Skills作成リクエスト"""
@@ -48,6 +62,16 @@ class SkillUpdate(BaseModel):
     slash_command: Optional[str] = Field(None, max_length=100)
     slash_command_description: Optional[str] = Field(None, max_length=500)
     is_user_selectable: Optional[bool] = None
+
+    @field_validator("slash_command")
+    @classmethod
+    def validate_slash_command(cls, v: Optional[str]) -> Optional[str]:
+        """スラッシュコマンドは'/'で始まる必要がある"""
+        if v is None:
+            return v
+        if not v.startswith("/"):
+            raise ValueError("スラッシュコマンドは '/' で始める必要があります")
+        return v
 
 
 class SkillResponse(SkillBase):
