@@ -17,6 +17,7 @@ from app.services.servicenow_docs_tools import (
     SERVICENOW_DOCS_PROMPT,
 )
 from app.services.mcp_server_service import McpServerService, BUILTIN_MCP_SERVERS
+from app.services.openapi_mcp_service import create_openapi_mcp_server
 from app.services.skill_service import SkillService
 from app.services.workspace_service import WorkspaceService
 
@@ -72,7 +73,7 @@ class OptionsBuilder:
         allowed_tools = await self._build_allowed_tools(context)
 
         # MCPサーバー設定の構築
-        mcp_servers, mcp_tools, builtin_servers = await self._build_mcp_servers(context, tokens)
+        mcp_servers, mcp_tools, builtin_servers, openapi_servers = await self._build_mcp_servers(context, tokens)
         allowed_tools.extend(mcp_tools)
 
         # システムプロンプトの構築
@@ -88,6 +89,11 @@ class OptionsBuilder:
         # ビルトインMCPサーバーの追加（DB登録されたbuiltinサーバーを含む）
         mcp_servers, allowed_tools, system_prompt = self._add_builtin_mcp_server(
             cwd, mcp_servers, allowed_tools, system_prompt, builtin_servers
+        )
+
+        # OpenAPI MCPサーバーの追加
+        mcp_servers, allowed_tools, system_prompt = self._add_openapi_mcp_servers(
+            mcp_servers, allowed_tools, system_prompt, openapi_servers, tokens
         )
 
         # AWS環境変数の構築
@@ -138,38 +144,41 @@ class OptionsBuilder:
         self,
         context: ExecutionContext,
         tokens: Optional[dict[str, str]],
-    ) -> tuple[dict, list[str], list[str]]:
+    ) -> tuple[dict, list[str], list[str], list]:
         """
         MCPサーバー設定を構築
 
         Returns:
-            (mcp_servers設定, mcp_tools許可リスト, builtin_serverリスト)
+            (mcp_servers設定, mcp_tools許可リスト, builtin_serverリスト, openapi_serversリスト)
         """
         mcp_servers = {}
         mcp_tools = []
         builtin_servers = []
+        openapi_servers = []  # OpenAPIタイプのサーバー定義を保持
 
         if context.agent_config.mcp_servers:
             mcp_definitions = await self.mcp_service.get_by_ids(
                 context.agent_config.mcp_servers, context.tenant_id
             )
 
-            # builtinタイプのサーバーを分離
-            non_builtin_definitions = []
+            # builtin/openapiタイプのサーバーを分離
+            non_special_definitions = []
             for mcp_def in mcp_definitions:
                 if mcp_def.type == "builtin":
                     builtin_servers.append(mcp_def.name)
+                elif mcp_def.type == "openapi":
+                    openapi_servers.append(mcp_def)
                 else:
-                    non_builtin_definitions.append(mcp_def)
+                    non_special_definitions.append(mcp_def)
 
-            # 非builtinサーバーの設定を構築
-            if non_builtin_definitions:
+            # 非特殊サーバーの設定を構築
+            if non_special_definitions:
                 mcp_servers = self.mcp_service.build_mcp_config(
-                    non_builtin_definitions, tokens or {}
+                    non_special_definitions, tokens or {}
                 )
-                mcp_tools = self.mcp_service.get_allowed_tools(non_builtin_definitions)
+                mcp_tools = self.mcp_service.get_allowed_tools(non_special_definitions)
 
-        return mcp_servers, mcp_tools, builtin_servers
+        return mcp_servers, mcp_tools, builtin_servers, openapi_servers
 
     async def _determine_cwd(self, context: ExecutionContext) -> str:
         """作業ディレクトリを決定"""
@@ -276,5 +285,80 @@ class OptionsBuilder:
                             "ビルトインMCPサーバー追加完了",
                             server_name="servicenow-docs",
                         )
+
+        return mcp_servers, allowed_tools, system_prompt
+
+    def _add_openapi_mcp_servers(
+        self,
+        mcp_servers: dict,
+        allowed_tools: list[str],
+        system_prompt: str,
+        openapi_server_defs: list,
+        tokens: Optional[dict[str, str]] = None,
+    ) -> tuple[dict, list[str], str]:
+        """
+        OpenAPI MCPサーバーを追加
+
+        Args:
+            mcp_servers: MCPサーバー設定辞書
+            allowed_tools: 許可ツールリスト
+            system_prompt: システムプロンプト
+            openapi_server_defs: OpenAPIサーバー定義のリスト
+            tokens: トークン辞書
+
+        Returns:
+            更新された (mcp_servers, allowed_tools, system_prompt)
+        """
+        for server_def in openapi_server_defs:
+            if not server_def.openapi_spec:
+                logger.warning(
+                    "OpenAPI spec not found for server",
+                    server_name=server_def.name,
+                )
+                continue
+
+            # ヘッダーを構築
+            headers = {}
+            if server_def.headers_template and tokens:
+                import re
+                for key, template in server_def.headers_template.items():
+                    def replacer(match):
+                        token_key = match.group(1)
+                        return tokens.get(token_key, match.group(0))
+                    headers[key] = re.sub(r"\$\{(\w+)\}", replacer, template)
+
+            # OpenAPI MCPサーバーを作成
+            result = create_openapi_mcp_server(
+                openapi_spec=server_def.openapi_spec,
+                server_name=server_def.name,
+                base_url=server_def.openapi_base_url,
+                headers=headers,
+            )
+
+            if result:
+                server, service = result
+                mcp_servers[server_def.name] = server
+
+                # 許可ツールを追加
+                openapi_tools = service.get_allowed_tools()
+                allowed_tools.extend(openapi_tools)
+
+                # サーバーの説明をシステムプロンプトに追加
+                if server_def.description:
+                    tool_names = ", ".join([t["name"] for t in service.get_tool_definitions()])
+                    prompt_addition = f"""
+## {server_def.display_name or server_def.name}
+
+{server_def.description}
+
+利用可能なツール: {tool_names}
+"""
+                    system_prompt = f"{system_prompt}\n\n{prompt_addition}"
+
+                logger.info(
+                    "OpenAPI MCPサーバー追加完了",
+                    server_name=server_def.name,
+                    tools_count=len(openapi_tools),
+                )
 
         return mcp_servers, allowed_tools, system_prompt
