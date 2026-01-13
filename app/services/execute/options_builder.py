@@ -2,6 +2,7 @@
 SDKオプションビルダー
 ClaudeAgentOptionsの構築を担当
 """
+import re
 from typing import Any, Optional
 
 import structlog
@@ -13,10 +14,14 @@ from app.services.builtin_tools import (
     FILE_PRESENTATION_PROMPT,
 )
 from app.services.mcp_server_service import McpServerService
+from app.services.openapi_mcp_service import create_openapi_mcp_server
 from app.services.skill_service import SkillService
 from app.services.workspace_service import WorkspaceService
 
 logger = structlog.get_logger(__name__)
+
+# スキル名に使用可能な文字パターン（セキュリティのため制限）
+SAFE_SKILL_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_\-]+$")
 
 
 class OptionsBuilder:
@@ -68,7 +73,7 @@ class OptionsBuilder:
         allowed_tools = await self._build_allowed_tools(context)
 
         # MCPサーバー設定の構築
-        mcp_servers, mcp_tools = await self._build_mcp_servers(context, tokens)
+        mcp_servers, mcp_tools, builtin_servers, openapi_servers = await self._build_mcp_servers(context, tokens)
         allowed_tools.extend(mcp_tools)
 
         # システムプロンプトの構築
@@ -81,10 +86,21 @@ class OptionsBuilder:
         # ワークスペースコンテキストの追加
         system_prompt = await self._add_workspace_context(context, system_prompt)
 
-        # ビルトインMCPサーバーの追加
+        # ビルトインMCPサーバーの追加（DB登録されたbuiltinサーバーを含む）
         mcp_servers, allowed_tools, system_prompt = self._add_builtin_mcp_server(
-            cwd, mcp_servers, allowed_tools, system_prompt
+            cwd, mcp_servers, allowed_tools, system_prompt, builtin_servers
         )
+
+        # OpenAPI MCPサーバーの追加
+        mcp_servers, allowed_tools, system_prompt = self._add_openapi_mcp_servers(
+            mcp_servers, allowed_tools, system_prompt, openapi_servers, tokens
+        )
+
+        # preferred_skills の処理（システムプロンプトの先頭に追加）
+        if context.preferred_skills:
+            system_prompt = self._build_preferred_skills_prompt(
+                context.preferred_skills, allowed_tools, system_prompt
+            )
 
         # AWS環境変数の構築
         aws_config = AWSConfig(context.model)
@@ -134,21 +150,41 @@ class OptionsBuilder:
         self,
         context: ExecutionContext,
         tokens: Optional[dict[str, str]],
-    ) -> tuple[dict, list[str]]:
-        """MCPサーバー設定を構築"""
+    ) -> tuple[dict, list[str], list[str], list]:
+        """
+        MCPサーバー設定を構築
+
+        Returns:
+            (mcp_servers設定, mcp_tools許可リスト, builtin_serverリスト, openapi_serversリスト)
+        """
         mcp_servers = {}
         mcp_tools = []
+        builtin_servers = []
+        openapi_servers = []  # OpenAPIタイプのサーバー定義を保持
 
         if context.agent_config.mcp_servers:
             mcp_definitions = await self.mcp_service.get_by_ids(
                 context.agent_config.mcp_servers, context.tenant_id
             )
-            mcp_servers = self.mcp_service.build_mcp_config(
-                mcp_definitions, tokens or {}
-            )
-            mcp_tools = self.mcp_service.get_allowed_tools(mcp_definitions)
 
-        return mcp_servers, mcp_tools
+            # builtin/openapiタイプのサーバーを分離
+            non_special_definitions = []
+            for mcp_def in mcp_definitions:
+                if mcp_def.type == "builtin":
+                    builtin_servers.append(mcp_def.name)
+                elif mcp_def.type == "openapi":
+                    openapi_servers.append(mcp_def)
+                else:
+                    non_special_definitions.append(mcp_def)
+
+            # 非特殊サーバーの設定を構築
+            if non_special_definitions:
+                mcp_servers = self.mcp_service.build_mcp_config(
+                    non_special_definitions, tokens or {}
+                )
+                mcp_tools = self.mcp_service.get_allowed_tools(non_special_definitions)
+
+        return mcp_servers, mcp_tools, builtin_servers, openapi_servers
 
     async def _determine_cwd(self, context: ExecutionContext) -> str:
         """作業ディレクトリを決定"""
@@ -161,9 +197,9 @@ class OptionsBuilder:
                 context.tenant_id, context.chat_session_id
             )
 
-            # ワークスペースが未作成の場合は作成
+            # ワークスペースが未有効化の場合は有効化
             if not workspace_info:
-                await self.workspace_service.create_workspace(
+                await self.workspace_service.enable_workspace(
                     context.tenant_id, context.chat_session_id
                 )
                 workspace_info = await self.workspace_service.get_workspace_info(
@@ -171,8 +207,15 @@ class OptionsBuilder:
                 )
 
             if workspace_info and workspace_info.workspace_enabled:
-                cwd = self.workspace_service.get_workspace_cwd(
+                # S3からローカルに同期
+                cwd = await self.workspace_service.sync_to_local(
                     context.tenant_id, context.chat_session_id
+                )
+                logger.info(
+                    "S3→ローカル同期完了",
+                    tenant_id=context.tenant_id,
+                    session_id=context.chat_session_id,
+                    cwd=cwd,
                 )
 
         return cwd
@@ -206,8 +249,22 @@ class OptionsBuilder:
         mcp_servers: dict,
         allowed_tools: list[str],
         system_prompt: str,
+        requested_builtin_servers: Optional[list[str]] = None,
     ) -> tuple[dict, list[str], str]:
-        """ビルトインMCPサーバー（present_files）を追加"""
+        """
+        ビルトインMCPサーバーを追加
+
+        Args:
+            cwd: 作業ディレクトリ
+            mcp_servers: MCPサーバー設定辞書
+            allowed_tools: 許可ツールリスト
+            system_prompt: システムプロンプト
+            requested_builtin_servers: リクエストされたビルトインサーバー名のリスト
+
+        Returns:
+            更新された (mcp_servers, allowed_tools, system_prompt)
+        """
+        # file-presentationは常に追加
         file_presentation_server = create_file_presentation_mcp_server(cwd)
         if file_presentation_server:
             mcp_servers["file-presentation"] = file_presentation_server
@@ -218,4 +275,185 @@ class OptionsBuilder:
                 server_name="file-presentation",
             )
 
+        # 注: 他のビルトインサーバーはopenapiタイプでAPI経由で登録することを推奨
+        # requested_builtin_serversは将来の拡張用に残している
+
         return mcp_servers, allowed_tools, system_prompt
+
+    def _add_openapi_mcp_servers(
+        self,
+        mcp_servers: dict,
+        allowed_tools: list[str],
+        system_prompt: str,
+        openapi_server_defs: list,
+        tokens: Optional[dict[str, str]] = None,
+    ) -> tuple[dict, list[str], str]:
+        """
+        OpenAPI MCPサーバーを追加
+
+        Args:
+            mcp_servers: MCPサーバー設定辞書
+            allowed_tools: 許可ツールリスト
+            system_prompt: システムプロンプト
+            openapi_server_defs: OpenAPIサーバー定義のリスト
+            tokens: トークン辞書
+
+        Returns:
+            更新された (mcp_servers, allowed_tools, system_prompt)
+        """
+        for server_def in openapi_server_defs:
+            if not server_def.openapi_spec:
+                logger.warning(
+                    "OpenAPI spec not found for server",
+                    server_name=server_def.name,
+                )
+                continue
+
+            # ヘッダーを構築
+            headers = {}
+            if server_def.headers_template and tokens:
+                for key, template in server_def.headers_template.items():
+                    def replacer(match: re.Match) -> str:
+                        token_key = match.group(1)
+                        return tokens.get(token_key, match.group(0))
+                    headers[key] = re.sub(r"\$\{(\w+)\}", replacer, template)
+
+            # OpenAPI MCPサーバーを作成
+            result = create_openapi_mcp_server(
+                openapi_spec=server_def.openapi_spec,
+                server_name=server_def.name,
+                base_url=server_def.openapi_base_url,
+                headers=headers,
+            )
+
+            if result:
+                server, service = result
+                mcp_servers[server_def.name] = server
+
+                # 許可ツールを追加
+                openapi_tools = service.get_allowed_tools()
+                allowed_tools.extend(openapi_tools)
+
+                # サーバーの説明をシステムプロンプトに追加
+                if server_def.description:
+                    tool_names = ", ".join([t["name"] for t in service.get_tool_definitions()])
+                    prompt_addition = f"""
+## {server_def.display_name or server_def.name}
+
+{server_def.description}
+
+利用可能なツール: {tool_names}
+"""
+                    system_prompt = f"{system_prompt}\n\n{prompt_addition}"
+
+                logger.info(
+                    "OpenAPI MCPサーバー追加完了",
+                    server_name=server_def.name,
+                    tools_count=len(openapi_tools),
+                )
+
+        return mcp_servers, allowed_tools, system_prompt
+
+    def _validate_and_sanitize_skill_name(self, skill_name: str) -> Optional[str]:
+        """
+        スキル名を検証しサニタイズする
+
+        Args:
+            skill_name: 検証するスキル名
+
+        Returns:
+            サニタイズされたスキル名（無効な場合はNone）
+        """
+        if not skill_name:
+            return None
+
+        # 空白を除去
+        cleaned = skill_name.strip()
+
+        if not cleaned:
+            return None
+
+        # 最大長チェック（200文字）
+        if len(cleaned) > 200:
+            logger.warning(
+                "スキル名が長すぎます",
+                skill_name=cleaned[:50] + "...",
+                length=len(cleaned),
+            )
+            return None
+
+        # 安全な文字のみかチェック
+        if not SAFE_SKILL_NAME_PATTERN.match(cleaned):
+            logger.warning(
+                "不正なスキル名フォーマット",
+                skill_name=cleaned,
+            )
+            return None
+
+        return cleaned
+
+    def _build_preferred_skills_prompt(
+        self,
+        preferred_skills: list[str],
+        allowed_tools: list[str],
+        system_prompt: str,
+    ) -> str:
+        """
+        preferred_skillsに基づいてシステムプロンプトを構築
+
+        ユーザーが指定したSkillを優先的に使用するよう指示を追加。
+        この指示はシステムプロンプトの先頭に追加される。
+
+        Args:
+            preferred_skills: 優先Skill名のリスト（Agent Skill名）
+            allowed_tools: 許可されたツール名リスト
+            system_prompt: 既存のシステムプロンプト
+
+        Returns:
+            更新されたシステムプロンプト
+        """
+        # スキル名をバリデーションしてサニタイズ
+        validated_skills = []
+        for skill_name in preferred_skills:
+            sanitized = self._validate_and_sanitize_skill_name(skill_name)
+            if sanitized:
+                validated_skills.append(sanitized)
+            else:
+                logger.warning(
+                    "無効なpreferred_skill名を無視",
+                    original_skill_name=skill_name[:100] if skill_name else None,
+                )
+
+        # 有効なスキルがない場合はプロンプトを変更せず返す
+        if not validated_skills:
+            logger.warning("有効なpreferred_skillsがありません")
+            return system_prompt
+
+        # スキル名をカンマ区切りで結合（各スキル名は既にサニタイズ済み）
+        skill_list = ", ".join(validated_skills)
+
+        # 優先スキル指示を構築
+        preferred_skills_prompt = f"""## 重要: 優先使用Skill指定
+
+ユーザーは以下のSkillの使用を明示的に指定しました。
+質問に回答する際は、**必ずこれらのSkillを最初に呼び出して**ください。
+
+指定されたSkill: {skill_list}
+
+### 使用手順
+1. `Skill` ツールを使って、指定されたSkillを呼び出してください
+2. Skillの指示に従って作業を進めてください
+3. Skillで対応できない場合のみ、一般知識で補足してください（その場合は情報源がないことを明記）
+
+---
+
+"""
+        logger.info(
+            "preferred_skills指示を追加",
+            preferred_skills=validated_skills,
+            original_count=len(preferred_skills),
+            validated_count=len(validated_skills),
+        )
+
+        # 既存のシステムプロンプトの先頭に追加
+        return preferred_skills_prompt + system_prompt

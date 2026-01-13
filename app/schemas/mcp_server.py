@@ -28,7 +28,10 @@ class McpServerBase(BaseModel):
 
     name: str = Field(..., description="MCPサーバー名（識別子）", max_length=200)
     display_name: Optional[str] = Field(None, description="表示名", max_length=300)
-    type: str = Field(..., description="タイプ (http / sse / stdio / builtin)")
+    type: str = Field(
+        ...,
+        description="タイプ (http / sse / stdio / builtin / openapi)",
+    )
     url: Optional[str] = Field(
         None, description="サーバーURL（http/sseの場合）", max_length=500
     )
@@ -48,6 +51,16 @@ class McpServerBase(BaseModel):
         None, description="ツール定義リスト（builtinタイプの場合）"
     )
     description: Optional[str] = Field(None, description="説明")
+    # OpenAPIタイプ用のフィールド
+    openapi_spec: Optional[dict[str, Any]] = Field(
+        None,
+        description="OpenAPI仕様（JSON形式）。openapiタイプの場合に使用",
+    )
+    openapi_base_url: Optional[str] = Field(
+        None,
+        description="OpenAPI APIのベースURL。仕様のserversセクションを上書き",
+        max_length=500,
+    )
 
 
 class McpServerCreate(McpServerBase):

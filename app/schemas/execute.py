@@ -48,6 +48,12 @@ class ExecuteRequest(BaseModel):
         description="セッション専用ワークスペースを有効にする",
     )
 
+    # Skill/ツール優先指定
+    preferred_skills: Optional[list[str]] = Field(
+        None,
+        description="優先的に使用するSkill/MCPサーバー名のリスト（例: ['servicenow-docs']）。指定されたツールを必ず最初に使用するよう指示される",
+    )
+
     @model_validator(mode="after")
     def ensure_chat_session_id(self) -> "ExecuteRequest":
         """chat_session_idがNoneまたは空文字列の場合は新しいUUIDを生成"""
@@ -68,20 +74,12 @@ class UsageInfo(BaseModel):
     total_tokens: int = 0
 
 
-class ToolSummary(BaseModel):
-    """ツール使用サマリー"""
-
-    tool_name: str
-    status: str  # completed / error
-    summary: str
-
-
 class SSEEvent(BaseModel):
     """SSEイベント"""
 
     event: str = Field(
         ...,
-        description="イベントタイプ (session_start / text_delta / tool_start / tool_complete / thinking / result)",
+        description="イベントタイプ (session_start / text_delta / tool_use / tool_result / thinking / result)",
     )
     data: dict[str, Any] = Field(..., description="イベントデータ")
 
@@ -100,16 +98,16 @@ class TextDeltaData(BaseModel):
     text: str
 
 
-class ToolStartData(BaseModel):
-    """ツール開始イベントデータ"""
+class ToolUseData(BaseModel):
+    """ツール使用開始イベントデータ"""
 
     tool_use_id: str
     tool_name: str
     summary: str
 
 
-class ToolCompleteData(BaseModel):
-    """ツール完了イベントデータ"""
+class ToolResultData(BaseModel):
+    """ツール結果イベントデータ"""
 
     tool_use_id: str
     tool_name: str
@@ -133,7 +131,6 @@ class ResultData(BaseModel):
     cost_usd: Decimal
     num_turns: int
     duration_ms: int
-    tools_summary: list[ToolSummary]
 
 
 class ExecuteResponse(BaseModel):
@@ -146,5 +143,4 @@ class ExecuteResponse(BaseModel):
     cost_usd: Decimal
     num_turns: int
     duration_ms: int
-    tools_summary: list[ToolSummary]
     created_at: datetime

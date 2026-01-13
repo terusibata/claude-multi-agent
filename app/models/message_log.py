@@ -38,7 +38,7 @@ class MessageLog(Base):
     message_seq: Mapped[int] = mapped_column(Integer, nullable=False)
 
     # メッセージタイプ
-    # system / assistant / user / result / stream_event / tool_result
+    # system / assistant / user_result / result / user
     message_type: Mapped[str] = mapped_column(String(50), nullable=False)
 
     # メッセージサブタイプ

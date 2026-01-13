@@ -8,7 +8,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.schemas.mcp_server import McpServerCreate, McpServerResponse, McpServerUpdate
+from app.schemas.mcp_server import (
+    McpServerCreate,
+    McpServerResponse,
+    McpServerUpdate,
+)
 from app.services.mcp_server_service import McpServerService
 
 router = APIRouter()
@@ -72,10 +76,12 @@ async def create_mcp_server(
     新しいMCPサーバーを登録します。
 
     - **name**: MCPサーバー名（識別子）
-    - **type**: http / sse / stdio / builtin
+    - **type**: http / sse / stdio / builtin / openapi
     - **url**: サーバーURL（http/sseの場合）
     - **command**: 起動コマンド（stdioの場合）
     - **tools**: ツール定義リスト（builtinの場合）
+    - **openapi_spec**: OpenAPI仕様（openapiの場合）
+    - **openapi_base_url**: OpenAPI APIのベースURL（openapiの場合、オプション）
     - **headers_template**: ヘッダーテンプレート（例: {"Authorization": "Bearer ${token}"}）
     """
     service = McpServerService(db)
@@ -96,10 +102,15 @@ async def create_mcp_server(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="タイプ 'builtin' にはツール定義（tools）が必要です",
         )
-    if server_data.type not in ["http", "sse", "stdio", "builtin"]:
+    if server_data.type == "openapi" and not server_data.openapi_spec:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"不正なタイプ '{server_data.type}'。http / sse / stdio / builtin のいずれかを指定してください",
+            detail="タイプ 'openapi' にはOpenAPI仕様（openapi_spec）が必要です",
+        )
+    if server_data.type not in ["http", "sse", "stdio", "builtin", "openapi"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"不正なタイプ '{server_data.type}'。http / sse / stdio / builtin / openapi のいずれかを指定してください",
         )
 
     return await service.create(tenant_id, server_data)

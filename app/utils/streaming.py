@@ -201,6 +201,7 @@ def format_session_start_event(
     session_id: str,
     tools: list[str],
     model: str,
+    chat_session_id: str | None = None,
 ) -> dict:
     """
     セッション開始イベントをフォーマット（messages形式）
@@ -209,17 +210,22 @@ def format_session_start_event(
         session_id: セッションID
         tools: 利用可能なツールリスト
         model: 使用モデル
+        chat_session_id: チャットセッションID（オプション）
 
     Returns:
         イベントデータ
     """
+    data = {
+        "session_id": session_id,
+        "tools": tools,
+        "model": model,
+    }
+    if chat_session_id:
+        data["chat_session_id"] = chat_session_id
+
     return format_system_message_event(
         subtype="init",
-        data={
-            "session_id": session_id,
-            "tools": tools,
-            "model": model,
-        },
+        data=data,
     )
 
 
@@ -334,7 +340,6 @@ def format_result_event(
     cost_usd: float,
     num_turns: int,
     duration_ms: int,
-    tools_summary: list[dict],
     session_id: str | None = None,
 ) -> dict:
     """
@@ -348,7 +353,6 @@ def format_result_event(
         cost_usd: コスト（USD）
         num_turns: ターン数
         duration_ms: 実行時間（ミリ秒）
-        tools_summary: ツール使用サマリー（互換性のため残すが、messages形式では使用しない）
         session_id: セッションID
 
     Returns:

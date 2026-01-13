@@ -3,6 +3,7 @@ AWS設定管理
 AWS Bedrock関連の設定を統合管理
 """
 import json
+import re
 import structlog
 from typing import Optional
 
@@ -13,6 +14,24 @@ from app.models.model import Model
 
 settings = get_settings()
 logger = structlog.get_logger(__name__)
+
+# 有効なAWSリージョン形式のパターン（例: us-east-1, ap-northeast-1, eu-west-2）
+AWS_REGION_PATTERN = re.compile(r'^[a-z]{2}-[a-z]+-\d+$')
+
+
+def is_valid_aws_region(region: Optional[str]) -> bool:
+    """
+    AWSリージョン名が有効な形式かチェック
+
+    Args:
+        region: リージョン名
+
+    Returns:
+        有効な形式ならTrue
+    """
+    if not region or not region.strip():
+        return False
+    return bool(AWS_REGION_PATTERN.match(region.strip()))
 
 
 class AWSConfig:
@@ -34,17 +53,16 @@ class AWSConfig:
 
     def _validate_credentials(self) -> None:
         """認証情報の検証とログ出力"""
-        if not settings.aws_access_key_id or not settings.aws_access_key_id.strip():
+        # セキュリティ上、認証情報の内容はログに出力しない
+        has_access_key = bool(settings.aws_access_key_id and settings.aws_access_key_id.strip())
+        has_secret_key = bool(settings.aws_secret_access_key and settings.aws_secret_access_key.strip())
+
+        if not has_access_key:
             logger.warning("AWS_ACCESS_KEY_IDが設定されていません")
         else:
-            logger.debug(
-                "AWS_ACCESS_KEY_ID設定済み",
-                prefix=settings.aws_access_key_id[:8] + "..."
-                if len(settings.aws_access_key_id) > 8
-                else "設定済み"
-            )
+            logger.debug("AWS_ACCESS_KEY_ID設定済み")
 
-        if not settings.aws_secret_access_key or not settings.aws_secret_access_key.strip():
+        if not has_secret_key:
             logger.warning("AWS_SECRET_ACCESS_KEYが設定されていません")
 
     @property

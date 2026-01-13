@@ -28,6 +28,11 @@ from app.services.session_service import SessionService
 from app.services.skill_service import SkillService
 from app.services.usage_service import UsageService
 from app.services.workspace_service import WorkspaceService
+from app.utils.log_sanitizer import sanitize_sdk_options
+from app.utils.session_lock import (
+    SessionLockError,
+    get_session_lock_manager,
+)
 from app.utils.streaming import (
     format_error_event,
     format_result_event,
@@ -93,6 +98,23 @@ class ExecuteService:
         # ツールトラッカーを初期化
         tool_tracker = ToolTracker()
 
+        # セッションロックを取得
+        lock_manager = get_session_lock_manager()
+        try:
+            await lock_manager.acquire(context.chat_session_id)
+        except SessionLockError as e:
+            logger.warning(
+                "セッションロック取得失敗",
+                chat_session_id=context.chat_session_id,
+                error=str(e),
+            )
+            yield format_error_event(
+                f"セッションは現在使用中です。しばらくしてから再試行してください。",
+                "session_locked",
+            )
+            yield self._create_error_result(context, [str(e)])
+            return
+
         logger.info(
             "エージェント実行開始",
             tenant_id=tenant_id,
@@ -102,13 +124,14 @@ class ExecuteService:
             agent_skills=agent_config.agent_skills,
         )
 
+        execution_success = False
         try:
             # セッション準備
             await self._prepare_session(context)
 
             # オプション構築
             options = await self.options_builder.build(context, request.tokens)
-            logger.info("SDK options", options=options)
+            logger.info("SDK options", options=sanitize_sdk_options(options))
 
             # ターン番号とメッセージ順序取得
             context.turn_number = await self.session_service.get_latest_turn_number(
@@ -122,12 +145,48 @@ class ExecuteService:
             async for event in self._execute_with_sdk(context, options, tool_tracker):
                 yield event
 
+            execution_success = True
+
         except Exception as e:
             for event in self._handle_error(e, context, tool_tracker):
                 yield event
 
         finally:
-            await self.db.commit()
+            # セッションロックを解放
+            try:
+                await lock_manager.release(context.chat_session_id)
+            except Exception as lock_error:
+                logger.error(
+                    "セッションロック解放エラー",
+                    error=str(lock_error),
+                    chat_session_id=context.chat_session_id,
+                )
+
+            if execution_success:
+                # 正常終了時のみcommit
+                try:
+                    await self.db.commit()
+                except Exception as commit_error:
+                    logger.error(
+                        "コミットエラー",
+                        error=str(commit_error),
+                        chat_session_id=context.chat_session_id,
+                    )
+                    await self.db.rollback()
+            else:
+                # エラー発生時はrollback
+                try:
+                    await self.db.rollback()
+                    logger.info(
+                        "トランザクションをロールバック",
+                        chat_session_id=context.chat_session_id,
+                    )
+                except Exception as rollback_error:
+                    logger.error(
+                        "ロールバックエラー",
+                        error=str(rollback_error),
+                        chat_session_id=context.chat_session_id,
+                    )
 
     async def _prepare_session(self, context: ExecutionContext) -> None:
         """セッション準備"""
@@ -185,7 +244,7 @@ class ExecuteService:
                 f"Claude Agent SDKがインストールされていません: {str(e)}",
                 "sdk_not_installed",
             )
-            yield self._create_error_result(context, [str(e)], tool_tracker)
+            yield self._create_error_result(context, [str(e)])
             return
 
         # オプション構築
@@ -197,7 +256,7 @@ class ExecuteService:
             yield format_error_event(
                 f"SDK options構築エラー: {str(e)}", "options_error"
             )
-            yield self._create_error_result(context, [str(e)], tool_tracker)
+            yield self._create_error_result(context, [str(e)])
             return
 
         # ユーザーメッセージを保存
@@ -259,6 +318,10 @@ class ExecuteService:
                         yield event
 
                 elif isinstance(message, ResultMessage):
+                    # 実行完了後のワークスペース同期処理
+                    if context.enable_workspace:
+                        await self._sync_workspace_after_execution(context)
+
                     result_events = await self._handle_result_message(
                         message, context, tool_tracker, log_entry
                     )
@@ -388,7 +451,6 @@ class ExecuteService:
             cost_usd=total_cost,
             num_turns=num_turns,
             duration_ms=duration_ms,
-            tools_summary=tool_tracker.get_summary(),
             session_id=context.session_id,
         )
         events.append(result_event)
@@ -478,13 +540,12 @@ class ExecuteService:
             logger.error("エージェント実行エラー", error=error_message, exc_info=True)
 
         yield format_error_event(error_message, "execution_error")
-        yield self._create_error_result(context, [error_message], tool_tracker)
+        yield self._create_error_result(context, [error_message])
 
     def _create_error_result(
         self,
         context: ExecutionContext,
         errors: list[str],
-        tool_tracker: ToolTracker,
     ) -> dict:
         """エラー結果イベントを生成"""
         duration_ms = int((time.time() - context.start_time) * 1000)
@@ -503,5 +564,56 @@ class ExecuteService:
             cost_usd=0,
             num_turns=0,
             duration_ms=duration_ms,
-            tools_summary=tool_tracker.get_summary(),
         )
+
+    async def _sync_workspace_after_execution(
+        self,
+        context: ExecutionContext,
+    ) -> None:
+        """
+        実行完了後のワークスペース同期処理
+
+        1. ローカルからS3に同期
+        2. AIファイルを自動登録
+        3. ローカルクリーンアップ
+        """
+        try:
+            # ローカルからS3に同期
+            synced_files = await self.workspace_service.sync_from_local(
+                context.tenant_id, context.chat_session_id
+            )
+            logger.info(
+                "ローカル→S3同期完了",
+                tenant_id=context.tenant_id,
+                session_id=context.chat_session_id,
+                synced_count=len(synced_files),
+            )
+
+            # AIファイルを自動登録（すべてのファイルをpresented=Trueで登録）
+            for file_path in synced_files:
+                await self.workspace_service.register_ai_file(
+                    context.tenant_id,
+                    context.chat_session_id,
+                    file_path,
+                    is_presented=True,
+                )
+                logger.info(
+                    "AIファイル自動登録",
+                    file_path=file_path,
+                )
+
+            # ローカルクリーンアップ
+            await self.workspace_service.cleanup_local(context.chat_session_id)
+            logger.info(
+                "ローカルクリーンアップ完了",
+                session_id=context.chat_session_id,
+            )
+
+        except Exception as e:
+            logger.error(
+                "ワークスペース同期エラー",
+                error=str(e),
+                tenant_id=context.tenant_id,
+                session_id=context.chat_session_id,
+                exc_info=True,
+            )

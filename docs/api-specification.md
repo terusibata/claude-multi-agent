@@ -285,9 +285,18 @@ UI表示用のメッセージ履歴を取得（整形済み）
 
 #### POST /api/tenants/{tenant_id}/execute
 
-エージェントを実行（SSEストリーミング）
+エージェントを実行（SSEストリーミング、ファイル添付対応）
 
-**リクエスト:**
+**Content-Type:** `multipart/form-data`
+
+**リクエストパラメータ:**
+
+| パラメータ | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| `request_data` | string | ○ | ExecuteRequestのJSON文字列 |
+| `files` | File[] | - | 添付ファイル（複数可、オプション） |
+
+**ExecuteRequest JSON フィールド:**
 
 ```json
 {
@@ -307,6 +316,23 @@ UI表示用のメッセージ履歴を取得（整形済み）
 }
 ```
 
+**cURLの例（ファイル添付あり）:**
+
+```bash
+curl -X POST "http://localhost:8000/api/tenants/tenant-001/execute" \
+  -F 'request_data={
+    "agent_config_id": "default-agent",
+    "model_id": "claude-sonnet-4",
+    "user_input": "このファイルを分析してください",
+    "executor": {
+      "user_id": "user-001",
+      "name": "田中太郎",
+      "email": "tanaka@example.com"
+    }
+  }' \
+  -F "files=@/path/to/document.pdf"
+```
+
 **レスポンス:** Server-Sent Events (SSE)
 
 詳細は [streaming-specification.md](./streaming-specification.md) を参照してください。
@@ -315,44 +341,20 @@ UI表示用のメッセージ履歴を取得（整形済み）
 
 ### Workspace
 
-セッション専用ワークスペースの管理API。
+セッション専用ワークスペースの管理API（S3ベース）。
 
-#### POST /api/tenants/{tenant_id}/sessions/{session_id}/workspace
+ファイルはAmazon S3に保存され、APIサーバー経由でのみアクセス可能です。
 
-ワークスペースを作成
+#### GET /api/tenants/{tenant_id}/sessions/{session_id}/files
+
+ファイル一覧を取得
 
 **レスポンス:**
 
 ```json
 {
   "chat_session_id": "session-uuid-001",
-  "workspace_enabled": true,
-  "workspace_path": "/skills/tenant_tenant-001/workspaces/session-uuid-001",
-  "workspace_created_at": "2024-01-01T00:00:00Z",
-  "file_count": 0,
-  "total_size": 0
-}
-```
-
-#### GET /api/tenants/{tenant_id}/sessions/{session_id}/workspace
-
-ワークスペース情報を取得
-
-#### POST /api/tenants/{tenant_id}/sessions/{session_id}/upload-files
-
-ファイルをアップロード
-
-**リクエスト:** multipart/form-data
-
-- `files`: アップロードするファイル（複数可）
-- `target_dir`: 保存先ディレクトリ（デフォルト: "uploads"）
-
-**レスポンス:**
-
-```json
-{
-  "success": true,
-  "uploaded_files": [
+  "files": [
     {
       "file_id": "file-uuid-001",
       "file_path": "uploads/data.csv",
@@ -362,61 +364,48 @@ UI表示用のメッセージ履歴を取得（整形済み）
       "version": 1,
       "source": "user_upload",
       "is_presented": false,
-      "checksum": "sha256hash...",
-      "description": null,
       "created_at": "2024-01-01T00:00:00Z",
       "updated_at": "2024-01-01T00:00:00Z"
     }
   ],
-  "failed_files": [],
-  "message": "1ファイルをアップロードしました"
+  "total_count": 1,
+  "total_size": 1024
 }
 ```
 
-#### GET /api/tenants/{tenant_id}/sessions/{session_id}/list-files
-
-ファイル一覧を取得
-
-**クエリパラメータ:**
-
-- `include_all_versions`: 全バージョンを含めるか（デフォルト: false）
-
-#### GET /api/tenants/{tenant_id}/sessions/{session_id}/download-file
+#### GET /api/tenants/{tenant_id}/sessions/{session_id}/files/download
 
 ファイルをダウンロード
 
 **クエリパラメータ:**
 
 - `path`: ファイルパス（必須）
-- `version`: バージョン番号（省略時は最新）
 
-#### GET /api/tenants/{tenant_id}/sessions/{session_id}/presented-files
+**レスポンス:**
+
+- `Content-Type`: ファイルのMIMEタイプ
+- `Content-Disposition`: `attachment; filename="ファイル名"`
+- Body: ファイルのバイナリデータ
+
+#### GET /api/tenants/{tenant_id}/sessions/{session_id}/files/presented
 
 AIが提示したファイル一覧を取得
 
-#### POST /api/tenants/{tenant_id}/sessions/{session_id}/present-file
-
-ファイルをPresentedとしてマーク
-
-**リクエスト:**
+**レスポンス:**
 
 ```json
 {
-  "file_path": "outputs/result.json",
-  "description": "分析結果のJSONファイル"
-}
-```
-
-#### POST /api/tenants/{tenant_id}/workspace/cleanup
-
-古いワークスペースをクリーンアップ
-
-**リクエスト:**
-
-```json
-{
-  "older_than_days": 30,
-  "dry_run": true
+  "chat_session_id": "session-uuid-001",
+  "files": [
+    {
+      "file_id": "file-uuid-002",
+      "file_path": "outputs/result.json",
+      "original_name": "result.json",
+      "file_size": 512,
+      "source": "ai_created",
+      "is_presented": true
+    }
+  ]
 }
 ```
 
@@ -564,10 +553,9 @@ MCPサーバーを削除
 
 ## 制限事項
 
-### ワークスペース
+### ワークスペース（S3）
 
-- 単一ファイルの最大サイズ: 50MB
-- ワークスペースの最大サイズ: 500MB
+ファイルはAmazon S3に保存されます。S3ライフサイクルポリシーでの自動削除・移行を推奨します。
 
 ### リクエスト
 

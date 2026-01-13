@@ -1,13 +1,13 @@
 """
 エージェント実行API
-ストリーミング対応のエージェント実行
+ストリーミング対応のエージェント実行（ファイル添付対応）
 """
 import asyncio
 import json
 import logging
 from typing import AsyncIterator
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
@@ -16,9 +16,15 @@ from app.schemas.execute import ExecuteRequest
 from app.services.agent_config_service import AgentConfigService
 from app.services.execute_service import ExecuteService
 from app.services.model_service import ModelService
+from app.services.workspace_service import WorkspaceService
+from app.utils.streaming import format_error_event
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# タイムアウト関連の定数
+EVENT_TIMEOUT_SECONDS = 300  # イベント待機タイムアウト（秒）
+MAX_CONSECUTIVE_TIMEOUTS = 3  # 連続タイムアウトの最大回数
 
 
 async def _background_execution(
@@ -49,7 +55,17 @@ async def _background_execution(
         ):
             await event_queue.put(event)
     except Exception as e:
-        logger.error(f"Background execution error: {e}", exc_info=True)
+        logger.error(
+            f"Background execution error: {e}",
+            exc_info=True,
+            extra={"chat_session_id": request.chat_session_id},
+        )
+        # エラーイベントをキューに送信してクライアントに通知
+        error_event = format_error_event(
+            f"バックグラウンド実行エラー: {str(e)}",
+            "background_execution_error",
+        )
+        await event_queue.put(error_event)
     finally:
         # 終了シグナルを送信
         await event_queue.put(None)
@@ -76,7 +92,8 @@ async def event_generator(
     Yields:
         SSEイベント
     """
-    event_queue = asyncio.Queue()
+    event_queue: asyncio.Queue = asyncio.Queue()
+    consecutive_timeouts = 0
 
     # バックグラウンドタスクとして実行を開始
     background_task = asyncio.create_task(
@@ -94,7 +111,13 @@ async def event_generator(
         while True:
             try:
                 # タイムアウトを設定してキューから取得
-                event = await asyncio.wait_for(event_queue.get(), timeout=300)
+                event = await asyncio.wait_for(
+                    event_queue.get(),
+                    timeout=EVENT_TIMEOUT_SECONDS,
+                )
+
+                # イベントを受信したらタイムアウトカウントをリセット
+                consecutive_timeouts = 0
 
                 if event is None:
                     # 処理完了シグナル
@@ -105,7 +128,51 @@ async def event_generator(
                     "data": json.dumps(event["data"], ensure_ascii=False, default=str),
                 }
             except asyncio.TimeoutError:
-                logger.warning("Event queue timeout, continuing...")
+                consecutive_timeouts += 1
+                logger.warning(
+                    f"Event queue timeout ({consecutive_timeouts}/{MAX_CONSECUTIVE_TIMEOUTS})",
+                    extra={"chat_session_id": request.chat_session_id},
+                )
+
+                # バックグラウンドタスクが完了しているかチェック
+                if background_task.done():
+                    # タスクの例外をチェック
+                    try:
+                        await background_task
+                    except asyncio.CancelledError:
+                        logger.info(
+                            "Background task was cancelled",
+                            extra={"chat_session_id": request.chat_session_id},
+                        )
+                    except Exception as task_error:
+                        logger.error(
+                            f"Background task error: {task_error}",
+                            exc_info=True,
+                            extra={"chat_session_id": request.chat_session_id},
+                        )
+                    else:
+                        logger.info(
+                            "Background task completed during timeout",
+                            extra={"chat_session_id": request.chat_session_id},
+                        )
+                    break
+
+                # 連続タイムアウトが最大回数を超えたらエラーイベントを送信して終了
+                if consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS:
+                    logger.error(
+                        f"Max consecutive timeouts reached, terminating",
+                        extra={"chat_session_id": request.chat_session_id},
+                    )
+                    error_event = format_error_event(
+                        "応答タイムアウト: サーバーからの応答がありません",
+                        "timeout_error",
+                    )
+                    yield {
+                        "event": error_event["event"],
+                        "data": json.dumps(error_event["data"], ensure_ascii=False, default=str),
+                    }
+                    break
+
                 continue
 
     except asyncio.CancelledError:
@@ -117,8 +184,19 @@ async def event_generator(
         # バックグラウンドタスクは継続させる（awaitしない）
         raise
     except Exception as e:
-        logger.error(f"Event generator error: {e}", exc_info=True)
+        logger.error(
+            f"Event generator error: {e}",
+            exc_info=True,
+            extra={"chat_session_id": request.chat_session_id},
+        )
         background_task.cancel()
+        # タスクのキャンセルを待つ
+        try:
+            await background_task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            pass  # 既にログ済み
         raise
     finally:
         # タスクが完了していない場合、ログに記録
@@ -131,15 +209,23 @@ async def event_generator(
 @router.post("/execute", summary="エージェント実行")
 async def execute_agent(
     tenant_id: str,
-    request: ExecuteRequest,
+    request_data: str = Form(..., description="ExecuteRequestのJSON文字列"),
+    files: list[UploadFile] = File(default=[], description="添付ファイル（複数可、オプション）"),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    エージェントを実行します（ストリーミングレスポンス）。
+    エージェントを実行します（ストリーミングレスポンス、ファイル添付対応）。
 
     レスポンスはServer-Sent Events (SSE) 形式でストリーミング送信されます。
 
+    Content-Type: multipart/form-data
+
     ## リクエストパラメータ
+
+    - **request_data**: ExecuteRequestのJSON文字列
+    - **files**: 添付ファイル（複数可、オプション）
+
+    ## ExecuteRequest JSON フィールド
 
     - **agent_config_id**: エージェント実行設定ID
     - **model_id**: 使用するモデルID
@@ -149,18 +235,71 @@ async def execute_agent(
     - **tokens**: MCPサーバー用認証情報（オプション）
     - **resume_session_id**: 継続するSDKセッションID（オプション）
     - **fork_session**: セッションをフォークするか（オプション）
+    - **enable_workspace**: ワークスペースを有効にするか（オプション）
 
     ## イベントタイプ
 
     - **session_start**: セッション開始
     - **text_delta**: テキスト増分
-    - **tool_start**: ツール使用開始
-    - **tool_complete**: ツール使用完了
+    - **tool_use**: ツール使用開始
+    - **tool_result**: ツール使用完了
     - **thinking**: 思考プロセス
     - **title_generated**: タイトル生成完了（初回実行時のみ）
     - **result**: 最終結果
     - **error**: エラー
     """
+    # リクエストをパース
+    try:
+        request = ExecuteRequest.model_validate_json(request_data)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"リクエストデータのパースに失敗しました: {str(e)}",
+        )
+
+    # ファイルがある場合はS3にアップロード
+    if files:
+        workspace_service = WorkspaceService(db)
+        file_data = []
+        try:
+            for file in files:
+                # ファイル名のバリデーション
+                if not file.filename:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="ファイル名が指定されていません",
+                    )
+                content = await file.read()
+                content_type = file.content_type or "application/octet-stream"
+                file_data.append((file.filename, content, content_type))
+
+            await workspace_service.upload_files(
+                tenant_id, request.chat_session_id, file_data
+            )
+
+            # ワークスペースを有効化
+            request.enable_workspace = True
+            await workspace_service.enable_workspace(tenant_id, request.chat_session_id)
+            await db.commit()
+        except HTTPException:
+            # HTTPExceptionはそのまま再送出
+            await db.rollback()
+            raise
+        except Exception as e:
+            # その他のエラー（S3エラーなど）
+            await db.rollback()
+            logger.error(
+                "ファイルアップロードエラー",
+                error=str(e),
+                tenant_id=tenant_id,
+                session_id=request.chat_session_id,
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"ファイルのアップロードに失敗しました: {str(e)}",
+            )
+
     # エージェント設定の取得
     config_service = AgentConfigService(db)
     agent_config = await config_service.get_by_id(request.agent_config_id, tenant_id)
@@ -203,5 +342,3 @@ async def execute_agent(
         ),
         media_type="text/event-stream",
     )
-
-

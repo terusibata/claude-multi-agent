@@ -46,6 +46,16 @@ class Settings(BaseSettings):
     skills_base_path: str = "/skills"
 
     # ============================================
+    # S3ワークスペース設定
+    # ============================================
+    s3_bucket_name: str = ""
+    s3_workspace_prefix: str = "workspaces/"
+
+    # ローカルワークスペース一時ディレクトリ
+    # セキュリティ向上のため、アプリケーション専用ディレクトリを使用
+    workspace_temp_dir: str = "/var/lib/aiagent/workspaces"
+
+    # ============================================
     # セキュリティ設定
     # ============================================
     # CORS許可オリジン
