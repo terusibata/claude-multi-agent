@@ -375,7 +375,7 @@ def create_openapi_mcp_server(
         headers: ヘッダー
 
     Returns:
-        SDK MCPサーバー（SDKが利用できない場合はNone）
+        SDK MCPサーバーとサービスのタプル（SDKが利用できない場合はNone）
     """
     try:
         from claude_agent_sdk import tool, create_sdk_mcp_server
@@ -399,10 +399,10 @@ def create_openapi_mcp_server(
         return None
 
     # 動的にツールを作成
-    tools = []
-    for tool_def in tool_definitions:
-        tool_name = tool_def["name"]
-        tool_description = tool_def["description"]
+    def create_tool_function(tool_def: dict, svc: OpenAPIMcpService):
+        """クロージャ問題を回避するためのファクトリ関数"""
+        t_name = tool_def["name"]
+        t_description = tool_def["description"]
         input_schema = tool_def["input_schema"]
 
         # 入力スキーマをSDK用に変換
@@ -421,14 +421,16 @@ def create_openapi_mcp_server(
                 schema_dict[prop_name] = str
 
         # ハンドラーを作成
-        handler = service.create_tool_handler(tool_name)
+        handler = svc.create_tool_handler(t_name)
 
         # ツールデコレータを適用
-        @tool(tool_name, tool_description, schema_dict)
-        async def tool_func(args: dict[str, Any], _handler=handler) -> dict[str, Any]:
-            return await _handler(args)
+        @tool(t_name, t_description, schema_dict)
+        async def tool_func(args: dict[str, Any]) -> dict[str, Any]:
+            return await handler(args)
 
-        tools.append(tool_func)
+        return tool_func
+
+    tools = [create_tool_function(td, service) for td in tool_definitions]
 
     # MCPサーバーを作成
     server = create_sdk_mcp_server(

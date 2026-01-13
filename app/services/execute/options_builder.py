@@ -2,6 +2,7 @@
 SDKオプションビルダー
 ClaudeAgentOptionsの構築を担当
 """
+import re
 from typing import Any, Optional
 
 import structlog
@@ -302,9 +303,8 @@ class OptionsBuilder:
             # ヘッダーを構築
             headers = {}
             if server_def.headers_template and tokens:
-                import re
                 for key, template in server_def.headers_template.items():
-                    def replacer(match):
+                    def replacer(match: re.Match) -> str:
                         token_key = match.group(1)
                         return tokens.get(token_key, match.group(0))
                     headers[key] = re.sub(r"\$\{(\w+)\}", replacer, template)
