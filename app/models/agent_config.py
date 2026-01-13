@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Optional
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, func
 from sqlalchemy.dialects.postgresql import JSON, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -62,11 +62,6 @@ class AgentConfig(Base):
     # セッション専用ワークスペースを有効にするか
     workspace_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
-    )
-
-    # ワークスペース自動クリーンアップ日数（0=無効）
-    workspace_auto_cleanup_days: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=30
     )
 
     # ステータス (active / inactive)
