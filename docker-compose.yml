@@ -36,9 +36,11 @@ services:
       APP_ENV: ${APP_ENV:-development}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       SKILLS_BASE_PATH: /skills
+      WORKSPACE_TEMP_DIR: /var/lib/aiagent/workspaces
     volumes:
       - ./app:/app/app
       - skills_data:/skills
+      - workspaces_data:/var/lib/aiagent/workspaces
     ports:
       - "${APP_PORT:-8000}:8000"
     depends_on:
@@ -62,8 +64,10 @@ services:
       APP_ENV: production
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       SKILLS_BASE_PATH: /skills
+      WORKSPACE_TEMP_DIR: /var/lib/aiagent/workspaces
     volumes:
       - skills_data:/skills
+      - workspaces_data:/var/lib/aiagent/workspaces
     ports:
       - "${APP_PORT:-8000}:8000"
     depends_on:
@@ -80,4 +84,6 @@ volumes:
   postgres_data:
     driver: local
   skills_data:
+    driver: local
+  workspaces_data:
     driver: local

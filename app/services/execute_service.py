@@ -589,19 +589,18 @@ class ExecuteService:
                 synced_count=len(synced_files),
             )
 
-            # AIファイルを自動登録（outputs/以下のファイル）
+            # AIファイルを自動登録（すべてのファイルをpresented=Trueで登録）
             for file_path in synced_files:
-                if file_path.startswith("outputs/"):
-                    await self.workspace_service.register_ai_file(
-                        context.tenant_id,
-                        context.chat_session_id,
-                        file_path,
-                        is_presented=True,
-                    )
-                    logger.info(
-                        "AIファイル自動登録",
-                        file_path=file_path,
-                    )
+                await self.workspace_service.register_ai_file(
+                    context.tenant_id,
+                    context.chat_session_id,
+                    file_path,
+                    is_presented=True,
+                )
+                logger.info(
+                    "AIファイル自動登録",
+                    file_path=file_path,
+                )
 
             # ローカルクリーンアップ
             await self.workspace_service.cleanup_local(context.chat_session_id)
