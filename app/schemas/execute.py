@@ -68,14 +68,6 @@ class UsageInfo(BaseModel):
     total_tokens: int = 0
 
 
-class ToolSummary(BaseModel):
-    """ツール使用サマリー"""
-
-    tool_name: str
-    status: str  # completed / error
-    summary: str
-
-
 class SSEEvent(BaseModel):
     """SSEイベント"""
 
@@ -133,7 +125,6 @@ class ResultData(BaseModel):
     cost_usd: Decimal
     num_turns: int
     duration_ms: int
-    tools_summary: list[ToolSummary]
 
 
 class ExecuteResponse(BaseModel):
@@ -146,5 +137,4 @@ class ExecuteResponse(BaseModel):
     cost_usd: Decimal
     num_turns: int
     duration_ms: int
-    tools_summary: list[ToolSummary]
     created_at: datetime

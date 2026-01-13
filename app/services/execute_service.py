@@ -185,7 +185,7 @@ class ExecuteService:
                 f"Claude Agent SDKがインストールされていません: {str(e)}",
                 "sdk_not_installed",
             )
-            yield self._create_error_result(context, [str(e)], tool_tracker)
+            yield self._create_error_result(context, [str(e)])
             return
 
         # オプション構築
@@ -197,7 +197,7 @@ class ExecuteService:
             yield format_error_event(
                 f"SDK options構築エラー: {str(e)}", "options_error"
             )
-            yield self._create_error_result(context, [str(e)], tool_tracker)
+            yield self._create_error_result(context, [str(e)])
             return
 
         # ユーザーメッセージを保存
@@ -392,7 +392,6 @@ class ExecuteService:
             cost_usd=total_cost,
             num_turns=num_turns,
             duration_ms=duration_ms,
-            tools_summary=tool_tracker.get_summary(),
             session_id=context.session_id,
         )
         events.append(result_event)
@@ -482,13 +481,12 @@ class ExecuteService:
             logger.error("エージェント実行エラー", error=error_message, exc_info=True)
 
         yield format_error_event(error_message, "execution_error")
-        yield self._create_error_result(context, [error_message], tool_tracker)
+        yield self._create_error_result(context, [error_message])
 
     def _create_error_result(
         self,
         context: ExecutionContext,
         errors: list[str],
-        tool_tracker: ToolTracker,
     ) -> dict:
         """エラー結果イベントを生成"""
         duration_ms = int((time.time() - context.start_time) * 1000)
@@ -507,7 +505,6 @@ class ExecuteService:
             cost_usd=0,
             num_turns=0,
             duration_ms=duration_ms,
-            tools_summary=tool_tracker.get_summary(),
         )
 
     async def _sync_workspace_after_execution(

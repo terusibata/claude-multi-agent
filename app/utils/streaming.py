@@ -340,7 +340,6 @@ def format_result_event(
     cost_usd: float,
     num_turns: int,
     duration_ms: int,
-    tools_summary: list[dict],
     session_id: str | None = None,
 ) -> dict:
     """
@@ -354,7 +353,6 @@ def format_result_event(
         cost_usd: コスト（USD）
         num_turns: ターン数
         duration_ms: 実行時間（ミリ秒）
-        tools_summary: ツール使用サマリー（互換性のため残すが、messages形式では使用しない）
         session_id: セッションID
 
     Returns:
