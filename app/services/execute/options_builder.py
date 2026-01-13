@@ -12,11 +12,7 @@ from app.services.builtin_tools import (
     create_file_presentation_mcp_server,
     FILE_PRESENTATION_PROMPT,
 )
-from app.services.servicenow_docs_tools import (
-    create_servicenow_docs_mcp_server,
-    SERVICENOW_DOCS_PROMPT,
-)
-from app.services.mcp_server_service import McpServerService, BUILTIN_MCP_SERVERS
+from app.services.mcp_server_service import McpServerService
 from app.services.openapi_mcp_service import create_openapi_mcp_server
 from app.services.skill_service import SkillService
 from app.services.workspace_service import WorkspaceService
@@ -269,22 +265,8 @@ class OptionsBuilder:
                 server_name="file-presentation",
             )
 
-        # リクエストされたビルトインサーバーを追加
-        if requested_builtin_servers:
-            for server_name in requested_builtin_servers:
-                if server_name == "servicenow-docs":
-                    servicenow_server = create_servicenow_docs_mcp_server()
-                    if servicenow_server:
-                        mcp_servers["servicenow-docs"] = servicenow_server
-                        # BUILTIN_MCP_SERVERSから許可ツールを取得
-                        builtin_def = BUILTIN_MCP_SERVERS.get("servicenow-docs")
-                        if builtin_def and builtin_def.get("allowed_tools"):
-                            allowed_tools.extend(builtin_def["allowed_tools"])
-                        system_prompt = f"{system_prompt}\n\n{SERVICENOW_DOCS_PROMPT}"
-                        logger.info(
-                            "ビルトインMCPサーバー追加完了",
-                            server_name="servicenow-docs",
-                        )
+        # 注: 他のビルトインサーバーはopenapiタイプでAPI経由で登録することを推奨
+        # requested_builtin_serversは将来の拡張用に残している
 
         return mcp_servers, allowed_tools, system_prompt
 

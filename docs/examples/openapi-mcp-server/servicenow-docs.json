@@ -1,0 +1,232 @@
+{
+  "name": "servicenow-docs",
+  "display_name": "ServiceNowドキュメント検索",
+  "type": "openapi",
+  "description": "ServiceNowの公式ドキュメントを検索・閲覧するためのMCPサーバー。ServiceNowに関する質問を受けた場合は、まずsearchDocumentsで検索し、必要に応じてgetDocumentDetailで詳細を取得してください。",
+  "openapi_base_url": "https://servicenow-docs-proxy.terusibata.workers.dev",
+  "openapi_spec": {
+    "openapi": "3.1.1",
+    "info": {
+      "title": "ServiceNow Documentation Search API (Proxy)",
+      "description": "ServiceNowドキュメントの検索API（Cloudflare Workers経由）。HTMLコンテンツはMarkdownに変換されて返されます。",
+      "version": "1.0.0"
+    },
+    "servers": [
+      {
+        "url": "https://servicenow-docs-proxy.terusibata.workers.dev",
+        "description": "Cloudflare Workers Proxy"
+      }
+    ],
+    "paths": {
+      "/api/search": {
+        "get": {
+          "operationId": "searchDocuments",
+          "summary": "ドキュメント検索",
+          "description": "ServiceNowドキュメントを検索します（軽量化レスポンス）。良い結果が得られない場合は、キーワードを変えて再検索してください。",
+          "parameters": [
+            {
+              "name": "q",
+              "in": "query",
+              "required": true,
+              "description": "検索クエリ文字列（例: 'incident management', 'CMDB', 'workflow'）",
+              "schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "labelkey",
+              "in": "query",
+              "required": false,
+              "description": "バージョンラベル（yokohama, xanadu, washingtondc等）。省略時は全バージョンから検索",
+              "schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "page",
+              "in": "query",
+              "required": false,
+              "description": "ページ番号（1から開始）",
+              "schema": {
+                "type": "integer",
+                "default": 1
+              }
+            },
+            {
+              "name": "rpp",
+              "in": "query",
+              "required": false,
+              "description": "1ページあたりの結果数",
+              "schema": {
+                "type": "integer",
+                "default": 5
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "description": "検索成功",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SearchResponse"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/api/bundle/{bundleId}/page/{pageId}": {
+        "get": {
+          "operationId": "getDocumentDetail",
+          "summary": "ドキュメント詳細取得",
+          "description": "ドキュメントの詳細情報をMarkdown形式で取得します。searchDocumentsで取得したbundle_idとpage_idを使用してください。",
+          "parameters": [
+            {
+              "name": "bundleId",
+              "in": "path",
+              "required": true,
+              "description": "バンドルID（例：yokohama-release-notes）",
+              "schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "pageId",
+              "in": "path",
+              "required": true,
+              "description": "ページID（例：release-notes/family-release-notes.html）",
+              "schema": {
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "description": "詳細取得成功",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/DocumentDetail"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "components": {
+      "schemas": {
+        "SearchResponse": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "description": "レスポンスステータス"
+            },
+            "total": {
+              "type": "integer",
+              "description": "総結果数"
+            },
+            "page": {
+              "type": "integer",
+              "description": "現在のページ"
+            },
+            "results": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/SearchResult"
+              }
+            }
+          }
+        },
+        "SearchResult": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "ドキュメントタイトル"
+            },
+            "url": {
+              "type": "string",
+              "description": "ドキュメントURL"
+            },
+            "bundle_id": {
+              "type": "string",
+              "description": "バンドルID"
+            },
+            "page_id": {
+              "type": "string",
+              "description": "ページID"
+            },
+            "snippet": {
+              "type": "string",
+              "description": "検索結果スニペット"
+            },
+            "version": {
+              "type": "string",
+              "description": "バージョン名"
+            }
+          }
+        },
+        "DocumentDetail": {
+          "type": "object",
+          "properties": {
+            "bundle_id": {
+              "type": "string",
+              "description": "バンドルID"
+            },
+            "page_id": {
+              "type": "string",
+              "description": "ページID"
+            },
+            "title": {
+              "type": "string",
+              "description": "ドキュメントタイトル"
+            },
+            "bundle_title": {
+              "type": "string",
+              "description": "バンドルタイトル"
+            },
+            "updated": {
+              "type": "string",
+              "description": "更新日時"
+            },
+            "views": {
+              "type": "integer",
+              "description": "閲覧数"
+            },
+            "likes": {
+              "type": "integer",
+              "description": "いいね数"
+            },
+            "content": {
+              "type": "string",
+              "description": "ドキュメント本文（Markdown形式）"
+            },
+            "related": {
+              "type": "array",
+              "description": "関連ドキュメント（最大5件）",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  },
+                  "bundle_id": {
+                    "type": "string"
+                  },
+                  "page_id": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
