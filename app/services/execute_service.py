@@ -28,6 +28,10 @@ from app.services.session_service import SessionService
 from app.services.skill_service import SkillService
 from app.services.usage_service import UsageService
 from app.services.workspace_service import WorkspaceService
+from app.utils.session_lock import (
+    SessionLockError,
+    get_session_lock_manager,
+)
 from app.utils.streaming import (
     format_error_event,
     format_result_event,
@@ -93,6 +97,23 @@ class ExecuteService:
         # ツールトラッカーを初期化
         tool_tracker = ToolTracker()
 
+        # セッションロックを取得
+        lock_manager = get_session_lock_manager()
+        try:
+            await lock_manager.acquire(context.chat_session_id)
+        except SessionLockError as e:
+            logger.warning(
+                "セッションロック取得失敗",
+                chat_session_id=context.chat_session_id,
+                error=str(e),
+            )
+            yield format_error_event(
+                f"セッションは現在使用中です。しばらくしてから再試行してください。",
+                "session_locked",
+            )
+            yield self._create_error_result(context, [str(e)])
+            return
+
         logger.info(
             "エージェント実行開始",
             tenant_id=tenant_id,
@@ -130,6 +151,16 @@ class ExecuteService:
                 yield event
 
         finally:
+            # セッションロックを解放
+            try:
+                await lock_manager.release(context.chat_session_id)
+            except Exception as lock_error:
+                logger.error(
+                    "セッションロック解放エラー",
+                    error=str(lock_error),
+                    chat_session_id=context.chat_session_id,
+                )
+
             if execution_success:
                 # 正常終了時のみcommit
                 try:

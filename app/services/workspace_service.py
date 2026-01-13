@@ -213,13 +213,36 @@ class WorkspaceService:
 
         Returns:
             ローカルディレクトリパス
+
+        Raises:
+            WorkspaceSecurityError: 同期に失敗した場合
         """
         local_dir = self.get_workspace_local_path(session_id)
 
         # ディレクトリを作成
         Path(local_dir).mkdir(parents=True, exist_ok=True)
 
-        await self.s3.sync_to_local(tenant_id, session_id, local_dir)
+        try:
+            await self.s3.sync_to_local(tenant_id, session_id, local_dir)
+        except FileNotFoundError:
+            # ファイルがない場合は正常（新規セッション）
+            logger.info(
+                "S3にファイルがありません（新規セッション）",
+                tenant_id=tenant_id,
+                session_id=session_id,
+            )
+        except Exception as e:
+            logger.error(
+                "S3→ローカル同期エラー",
+                tenant_id=tenant_id,
+                session_id=session_id,
+                error=str(e),
+                exc_info=True,
+            )
+            raise WorkspaceSecurityError(
+                f"ワークスペース同期に失敗しました: {str(e)}"
+            )
+
         return local_dir
 
     async def sync_from_local(self, tenant_id: str, session_id: str) -> list[str]:
@@ -232,9 +255,35 @@ class WorkspaceService:
 
         Returns:
             同期されたファイルパスのリスト
+
+        Raises:
+            WorkspaceSecurityError: 同期に失敗した場合
         """
         local_dir = self.get_workspace_local_path(session_id)
-        return await self.s3.sync_from_local(tenant_id, session_id, local_dir)
+
+        # ローカルディレクトリが存在しない場合は空リストを返す
+        if not Path(local_dir).exists():
+            logger.info(
+                "ローカルディレクトリが存在しません",
+                tenant_id=tenant_id,
+                session_id=session_id,
+                local_dir=local_dir,
+            )
+            return []
+
+        try:
+            return await self.s3.sync_from_local(tenant_id, session_id, local_dir)
+        except Exception as e:
+            logger.error(
+                "ローカル→S3同期エラー",
+                tenant_id=tenant_id,
+                session_id=session_id,
+                error=str(e),
+                exc_info=True,
+            )
+            raise WorkspaceSecurityError(
+                f"ワークスペース同期に失敗しました: {str(e)}"
+            )
 
     async def cleanup_local(self, session_id: str) -> None:
         """

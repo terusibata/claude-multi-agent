@@ -26,12 +26,15 @@ class OpenAPIMcpService:
     - OpenAPI仕様の解析
     - エンドポイントからMCPツール定義の生成
     - ツール実行時のHTTPプロキシ
+    - $ref, allOf, oneOf, anyOf などの複合スキーマ解決
     """
 
     # HTTP リクエストのデフォルトタイムアウト（秒）
     DEFAULT_TIMEOUT = 30.0
     # レスポンスボディの最大サイズ（バイト） - 10MB
     MAX_RESPONSE_SIZE = 10 * 1024 * 1024
+    # $ref解決の最大深度（無限ループ防止）
+    MAX_REF_DEPTH = 10
 
     def __init__(
         self,
@@ -162,6 +165,157 @@ class OpenAPIMcpService:
         parts = [p for p in clean_path.split("/") if p]
         return f"{method}_{'_'.join(parts)}"
 
+    def _resolve_ref(self, ref: str, depth: int = 0) -> dict[str, Any]:
+        """
+        $refを解決してスキーマを取得
+
+        Args:
+            ref: 参照文字列 (例: "#/components/schemas/User")
+            depth: 現在の解決深度
+
+        Returns:
+            解決されたスキーマ
+        """
+        if depth > self.MAX_REF_DEPTH:
+            logger.warning(
+                "$ref解決の最大深度に到達",
+                ref=ref,
+                max_depth=self.MAX_REF_DEPTH,
+            )
+            return {"type": "object"}
+
+        if not ref.startswith("#/"):
+            logger.warning("外部参照は未サポート", ref=ref)
+            return {"type": "object"}
+
+        # パスを分解して辿る
+        parts = ref[2:].split("/")
+        current = self.openapi_spec
+
+        try:
+            for part in parts:
+                # URLエンコードされた文字をデコード
+                part = part.replace("~1", "/").replace("~0", "~")
+                current = current[part]
+        except (KeyError, TypeError) as e:
+            logger.warning(
+                "$ref解決エラー",
+                ref=ref,
+                error=str(e),
+            )
+            return {"type": "object"}
+
+        # 解決結果自体に$refがある場合は再帰的に解決
+        if isinstance(current, dict) and "$ref" in current:
+            return self._resolve_ref(current["$ref"], depth + 1)
+
+        return current if isinstance(current, dict) else {"type": "object"}
+
+    def _resolve_schema(self, schema: dict[str, Any], depth: int = 0) -> dict[str, Any]:
+        """
+        スキーマを解決（$ref, allOf, oneOf, anyOf を処理）
+
+        Args:
+            schema: 解決するスキーマ
+            depth: 現在の解決深度
+
+        Returns:
+            解決されたスキーマ
+        """
+        if depth > self.MAX_REF_DEPTH:
+            logger.warning("スキーマ解決の最大深度に到達")
+            return schema
+
+        if not isinstance(schema, dict):
+            return schema
+
+        # $refの解決
+        if "$ref" in schema:
+            resolved = self._resolve_ref(schema["$ref"], depth)
+            # 他のプロパティがある場合はマージ
+            other_props = {k: v for k, v in schema.items() if k != "$ref"}
+            if other_props:
+                return self._merge_schemas([resolved, other_props], depth + 1)
+            return self._resolve_schema(resolved, depth + 1)
+
+        # allOfの解決（全てのスキーマをマージ）
+        if "allOf" in schema:
+            all_schemas = [
+                self._resolve_schema(s, depth + 1) for s in schema["allOf"]
+            ]
+            merged = self._merge_schemas(all_schemas, depth + 1)
+            # allOf以外のプロパティもマージ
+            other_props = {k: v for k, v in schema.items() if k != "allOf"}
+            if other_props:
+                merged = self._merge_schemas([merged, other_props], depth + 1)
+            return merged
+
+        # oneOf/anyOfの解決（最初のスキーマを採用）
+        for keyword in ("oneOf", "anyOf"):
+            if keyword in schema:
+                if schema[keyword]:
+                    first_schema = self._resolve_schema(schema[keyword][0], depth + 1)
+                    # 他のプロパティもマージ
+                    other_props = {k: v for k, v in schema.items() if k != keyword}
+                    if other_props:
+                        return self._merge_schemas([first_schema, other_props], depth + 1)
+                    return first_schema
+                return {"type": "object"}
+
+        # propertiesの各値を再帰的に解決
+        if "properties" in schema:
+            resolved_props = {}
+            for prop_name, prop_schema in schema["properties"].items():
+                resolved_props[prop_name] = self._resolve_schema(prop_schema, depth + 1)
+            schema = {**schema, "properties": resolved_props}
+
+        # itemsを再帰的に解決
+        if "items" in schema:
+            schema = {**schema, "items": self._resolve_schema(schema["items"], depth + 1)}
+
+        return schema
+
+    def _merge_schemas(self, schemas: list[dict[str, Any]], depth: int = 0) -> dict[str, Any]:
+        """
+        複数のスキーマをマージ
+
+        Args:
+            schemas: マージするスキーマのリスト
+            depth: 現在の解決深度
+
+        Returns:
+            マージされたスキーマ
+        """
+        merged: dict[str, Any] = {"type": "object", "properties": {}, "required": []}
+
+        for schema in schemas:
+            if not isinstance(schema, dict):
+                continue
+
+            # typeの設定（最後のものが優先）
+            if "type" in schema:
+                merged["type"] = schema["type"]
+
+            # propertiesのマージ
+            if "properties" in schema:
+                merged["properties"].update(schema["properties"])
+
+            # requiredのマージ
+            if "required" in schema:
+                for req in schema["required"]:
+                    if req not in merged["required"]:
+                        merged["required"].append(req)
+
+            # descriptionのマージ
+            if "description" in schema:
+                merged["description"] = schema["description"]
+
+        # 空のリストは削除
+        if not merged["required"]:
+            del merged["required"]
+
+        return merged
+
     def _create_tool_definition(
         self,
         operation_id: str,
@@ -207,13 +361,16 @@ class OpenAPIMcpService:
             if param_in == "header":
                 continue
 
+            # パラメータスキーマを解決（$ref対応）
+            resolved_param_schema = self._resolve_schema(param_schema) if isinstance(param_schema, dict) else {"type": "string"}
+
             properties[param_name] = {
-                "type": param_schema.get("type", "string"),
+                "type": resolved_param_schema.get("type", "string"),
                 "description": f"{param_description} ({param_in} parameter)",
             }
 
-            if param_schema.get("default") is not None:
-                properties[param_name]["default"] = param_schema["default"]
+            if resolved_param_schema.get("default") is not None:
+                properties[param_name]["default"] = resolved_param_schema["default"]
 
             if param_required or param_name in path_params:
                 required.append(param_name)
@@ -226,16 +383,21 @@ class OpenAPIMcpService:
             body_schema = json_content.get("schema", {})
 
             if body_schema:
+                # スキーマを解決（$ref, allOf等）
+                resolved_schema = self._resolve_schema(body_schema)
+
                 # ボディのプロパティをマージ
-                body_props = body_schema.get("properties", {})
+                body_props = resolved_schema.get("properties", {})
                 for prop_name, prop_def in body_props.items():
+                    # ネストしたスキーマも解決
+                    resolved_prop = self._resolve_schema(prop_def) if isinstance(prop_def, dict) else prop_def
                     properties[prop_name] = {
-                        "type": prop_def.get("type", "string"),
-                        "description": prop_def.get("description", f"Request body field: {prop_name}"),
+                        "type": resolved_prop.get("type", "string") if isinstance(resolved_prop, dict) else "string",
+                        "description": resolved_prop.get("description", f"Request body field: {prop_name}") if isinstance(resolved_prop, dict) else f"Request body field: {prop_name}",
                     }
 
                 # 必須フィールド
-                body_required = body_schema.get("required", [])
+                body_required = resolved_schema.get("required", [])
                 required.extend(body_required)
 
         return {

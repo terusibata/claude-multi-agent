@@ -6,6 +6,7 @@ import re
 from typing import Any, Optional
 from uuid import uuid4
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,6 +16,9 @@ from app.services.builtin_tools import (
     get_all_builtin_tool_definitions,
     get_builtin_tool_definition,
 )
+from app.utils.exceptions import ValidationError
+
+logger = structlog.get_logger(__name__)
 
 
 # ビルトインMCPサーバーの定義
@@ -123,7 +127,18 @@ class McpServerService:
 
         Returns:
             作成されたMCPサーバー
+
+        Raises:
+            ValidationError: 作成データが不正な場合
         """
+        # タイプ固有のバリデーション
+        self._validate_server_config(
+            server_type=server_data.type,
+            url=server_data.url,
+            command=server_data.command,
+            openapi_spec=server_data.openapi_spec,
+        )
+
         server = McpServer(
             mcp_server_id=str(uuid4()),
             tenant_id=tenant_id,
@@ -133,6 +148,59 @@ class McpServerService:
         await self.db.flush()
         await self.db.refresh(server)
         return server
+
+    def _validate_server_config(
+        self,
+        server_type: str,
+        url: Optional[str],
+        command: Optional[str],
+        openapi_spec: Optional[dict] = None,
+    ) -> None:
+        """
+        MCPサーバー設定を検証
+
+        Args:
+            server_type: サーバータイプ
+            url: URL
+            command: コマンド
+            openapi_spec: OpenAPI仕様
+
+        Raises:
+            ValidationError: 設定が不正な場合
+        """
+        valid_types = {"http", "sse", "stdio", "builtin", "openapi"}
+        if server_type not in valid_types:
+            raise ValidationError(
+                "type",
+                f"無効なタイプです。有効なタイプ: {', '.join(valid_types)}"
+            )
+
+        # タイプ別の必須フィールド検証
+        if server_type in ("http", "sse"):
+            if not url:
+                raise ValidationError(
+                    "url",
+                    f"{server_type}タイプにはURLが必要です"
+                )
+            if not url.startswith(("http://", "https://")):
+                raise ValidationError(
+                    "url",
+                    "URLはhttp://またはhttps://で始まる必要があります"
+                )
+
+        elif server_type == "stdio":
+            if not command:
+                raise ValidationError(
+                    "command",
+                    "stdioタイプにはcommandが必要です"
+                )
+
+        elif server_type == "openapi":
+            if not openapi_spec:
+                raise ValidationError(
+                    "openapi_spec",
+                    "openapiタイプにはopenapi_specが必要です"
+                )
 
     async def update(
         self,
@@ -150,12 +218,38 @@ class McpServerService:
 
         Returns:
             更新されたMCPサーバー（存在しない場合はNone）
+
+        Raises:
+            ValidationError: 更新データが不正な場合
         """
         server = await self.get_by_id(mcp_server_id, tenant_id)
         if not server:
             return None
 
         update_data = server_data.model_dump(exclude_unset=True)
+
+        # 更新後の値を計算（更新データがなければ既存値を使用）
+        new_type = update_data.get("type", server.type)
+        new_url = update_data.get("url", server.url)
+        new_command = update_data.get("command", server.command)
+        new_openapi_spec = update_data.get("openapi_spec", server.openapi_spec)
+
+        # タイプ固有のバリデーション
+        try:
+            self._validate_server_config(
+                server_type=new_type,
+                url=new_url,
+                command=new_command,
+                openapi_spec=new_openapi_spec,
+            )
+        except ValidationError as e:
+            logger.warning(
+                "MCPサーバー更新バリデーションエラー",
+                mcp_server_id=mcp_server_id,
+                error=str(e),
+            )
+            raise
+
         for field, value in update_data.items():
             setattr(server, field, value)
 

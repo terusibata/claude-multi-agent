@@ -58,8 +58,9 @@ class MessageProcessor:
         Yields:
             SSEイベント
         """
-        subtype = message.subtype
-        data = message.data
+        # 属性を安全に取得（SDK変更への耐性）
+        subtype = getattr(message, "subtype", None)
+        data = getattr(message, "data", {}) or {}
 
         log_entry.data = data
 
@@ -118,13 +119,14 @@ class MessageProcessor:
         Yields:
             SSEイベント
         """
-        content_blocks = message.content
+        # 属性を安全に取得
+        content_blocks = getattr(message, "content", []) or []
         log_entry.content_blocks = []
 
         for content in content_blocks:
             # テキストブロック
             if isinstance(content, text_block_class):
-                text = content.text
+                text = getattr(content, "text", "") or ""
                 self.context.assistant_text += text
                 log_entry.content_blocks.append({"type": "text", "text": text})
                 yield format_text_delta_event(text)
@@ -135,7 +137,7 @@ class MessageProcessor:
 
             # 思考ブロック
             elif isinstance(content, thinking_block_class):
-                thinking_text = content.text
+                thinking_text = getattr(content, "text", "") or ""
                 log_entry.content_blocks.append({
                     "type": "thinking",
                     "text": thinking_text,
@@ -185,9 +187,10 @@ class MessageProcessor:
         Yields:
             SSEイベント
         """
-        tool_id = content.id
-        tool_name = content.name
-        tool_input = content.input
+        # 属性を安全に取得（SDK変更への耐性）
+        tool_id = getattr(content, "id", None) or "unknown"
+        tool_name = getattr(content, "name", None) or "unknown"
+        tool_input = getattr(content, "input", {}) or {}
 
         # ツールトラッカーに登録
         self.tool_tracker.start_tool(tool_id, tool_name, tool_input)
@@ -221,8 +224,9 @@ class MessageProcessor:
         Yields:
             SSEイベント
         """
-        tool_use_id = content.tool_use_id
-        tool_result = content.content
+        # 属性を安全に取得（SDK変更への耐性）
+        tool_use_id = getattr(content, "tool_use_id", None) or "unknown"
+        tool_result = getattr(content, "content", None)
         is_error = getattr(content, "is_error", False) or False
 
         # ツールトラッカーで完了処理
