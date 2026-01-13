@@ -12,7 +12,6 @@ from app.schemas.mcp_server import (
     McpServerCreate,
     McpServerResponse,
     McpServerUpdate,
-    SlashCommandListResponse,
 )
 from app.services.mcp_server_service import McpServerService
 
@@ -41,26 +40,6 @@ async def get_builtin_mcp_servers(
     """
     service = McpServerService(db)
     return service.get_all_builtin_servers()
-
-
-@router.get(
-    "/slash-commands",
-    response_model=SlashCommandListResponse,
-    summary="スラッシュコマンド一覧取得",
-)
-async def get_slash_commands(
-    tenant_id: str,
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    ユーザーが選択可能なスラッシュコマンド一覧を取得します。
-
-    フロントエンドのオートコンプリート機能で使用します。
-    返却される`name`フィールドの値を`preferred_skills`パラメータに渡してください。
-    """
-    service = McpServerService(db)
-    items = await service.get_slash_commands(tenant_id)
-    return SlashCommandListResponse(items=items)
 
 
 @router.get("/{server_id}", response_model=McpServerResponse, summary="MCPサーバー詳細取得")
@@ -104,9 +83,6 @@ async def create_mcp_server(
     - **openapi_spec**: OpenAPI仕様（openapiの場合）
     - **openapi_base_url**: OpenAPI APIのベースURL（openapiの場合、オプション）
     - **headers_template**: ヘッダーテンプレート（例: {"Authorization": "Bearer ${token}"}）
-    - **slash_command**: スラッシュコマンド表示名（例: /ServiceNow検索）
-    - **slash_command_description**: スラッシュコマンドの説明（オートコンプリート時に表示）
-    - **is_user_selectable**: ユーザーがUIから選択可能かどうか（デフォルト: true）
     """
     service = McpServerService(db)
 

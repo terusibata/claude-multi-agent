@@ -61,21 +61,6 @@ class McpServerBase(BaseModel):
         description="OpenAPI APIのベースURL。仕様のserversセクションを上書き",
         max_length=500,
     )
-    # スラッシュコマンド設定
-    slash_command: Optional[str] = Field(
-        None,
-        description="スラッシュコマンド表示名（例: /ServiceNowドキュメント検索）",
-        max_length=100,
-    )
-    slash_command_description: Optional[str] = Field(
-        None,
-        description="スラッシュコマンドの説明（オートコンプリート時に表示）",
-        max_length=500,
-    )
-    is_user_selectable: bool = Field(
-        default=True,
-        description="ユーザーがUIから選択可能かどうか",
-    )
 
 
 class McpServerCreate(McpServerBase):
@@ -98,10 +83,6 @@ class McpServerUpdate(BaseModel):
     tools: Optional[list[McpToolDefinition]] = None
     description: Optional[str] = None
     status: Optional[str] = Field(None, pattern="^(active|inactive)$")
-    # スラッシュコマンド設定
-    slash_command: Optional[str] = Field(None, max_length=100)
-    slash_command_description: Optional[str] = Field(None, max_length=500)
-    is_user_selectable: Optional[bool] = None
 
 
 class McpServerResponse(McpServerBase):
@@ -116,21 +97,3 @@ class McpServerResponse(McpServerBase):
 
     class Config:
         from_attributes = True
-
-
-class SlashCommandItem(BaseModel):
-    """スラッシュコマンドアイテム（オートコンプリート用）"""
-
-    mcp_server_id: str = Field(..., description="MCPサーバーID")
-    name: str = Field(..., description="MCPサーバー名（preferred_skillsに渡す値）")
-    slash_command: str = Field(..., description="スラッシュコマンド表示名")
-    description: Optional[str] = Field(None, description="説明")
-
-
-class SlashCommandListResponse(BaseModel):
-    """スラッシュコマンド一覧レスポンス"""
-
-    items: list[SlashCommandItem] = Field(
-        default_factory=list,
-        description="スラッシュコマンドアイテムリスト",
-    )

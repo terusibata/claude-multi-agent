@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Optional
 from uuid import uuid4
 
-from sqlalchemy import DateTime, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -45,6 +45,21 @@ class AgentSkill(Base):
     # ファイルシステム上のパス
     # 例: /skills/tenant_xxx/.claude/skills/servicenow-operations
     file_path: Mapped[str] = mapped_column(String(500), nullable=False)
+
+    # スラッシュコマンド設定
+    # ユーザーがフロントエンドで選択できるようにするためのメタデータ
+    slash_command: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True,
+        comment="スラッシュコマンド表示名（例: /ServiceNowドキュメント検索）"
+    )
+    slash_command_description: Mapped[Optional[str]] = mapped_column(
+        String(500), nullable=True,
+        comment="スラッシュコマンドの説明（オートコンプリート時に表示）"
+    )
+    is_user_selectable: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True,
+        comment="ユーザーがUIから選択可能かどうか"
+    )
 
     # ステータス (active / inactive)
     status: Mapped[str] = mapped_column(

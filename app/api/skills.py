@@ -8,7 +8,13 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.schemas.skill import SkillCreate, SkillFilesResponse, SkillResponse, SkillUpdate
+from app.schemas.skill import (
+    SkillCreate,
+    SkillFilesResponse,
+    SkillResponse,
+    SkillUpdate,
+    SlashCommandListResponse,
+)
 from app.services.skill_service import SkillService
 
 router = APIRouter()
@@ -25,6 +31,26 @@ async def get_skills(
     """
     service = SkillService(db)
     return await service.get_all_by_tenant(tenant_id, status=status)
+
+
+@router.get(
+    "/slash-commands",
+    response_model=SlashCommandListResponse,
+    summary="スラッシュコマンド一覧取得",
+)
+async def get_slash_commands(
+    tenant_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    ユーザーが選択可能なスラッシュコマンド一覧を取得します。
+
+    フロントエンドのオートコンプリート機能で使用します。
+    返却される`name`フィールドの値を`preferred_skills`パラメータに渡してください。
+    """
+    service = SkillService(db)
+    items = await service.get_slash_commands(tenant_id)
+    return SlashCommandListResponse(items=items)
 
 
 @router.get("/{skill_id}", response_model=SkillResponse, summary="Skill詳細取得")

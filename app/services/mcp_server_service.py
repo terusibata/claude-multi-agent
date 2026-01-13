@@ -319,36 +319,3 @@ class McpServerService:
             if server.allowed_tools:
                 tools.extend(server.allowed_tools)
         return tools
-
-    async def get_slash_commands(
-        self,
-        tenant_id: str,
-    ) -> list[dict[str, Any]]:
-        """
-        ユーザーが選択可能なスラッシュコマンド一覧を取得
-
-        Args:
-            tenant_id: テナントID
-
-        Returns:
-            スラッシュコマンドアイテムのリスト
-        """
-        query = select(McpServer).where(
-            McpServer.tenant_id == tenant_id,
-            McpServer.status == "active",
-            McpServer.is_user_selectable == True,
-            McpServer.slash_command.isnot(None),
-        ).order_by(McpServer.slash_command)
-
-        result = await self.db.execute(query)
-        servers = result.scalars().all()
-
-        return [
-            {
-                "mcp_server_id": server.mcp_server_id,
-                "name": server.name,
-                "slash_command": server.slash_command,
-                "description": server.slash_command_description,
-            }
-            for server in servers
-        ]

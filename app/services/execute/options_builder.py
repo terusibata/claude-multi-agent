@@ -360,47 +360,31 @@ class OptionsBuilder:
         """
         preferred_skillsに基づいてシステムプロンプトを構築
 
-        ユーザーが指定したSkill/MCPサーバーを優先的に使用するよう指示を追加。
+        ユーザーが指定したSkillを優先的に使用するよう指示を追加。
         この指示はシステムプロンプトの先頭に追加される。
 
         Args:
-            preferred_skills: 優先Skill/MCPサーバー名のリスト
+            preferred_skills: 優先Skill名のリスト（Agent Skill名）
             allowed_tools: 許可されたツール名リスト
             system_prompt: 既存のシステムプロンプト
 
         Returns:
             更新されたシステムプロンプト
         """
-        # preferred_skillsに関連するツールを抽出
-        related_tools = []
-        for skill_name in preferred_skills:
-            # MCPツール形式: mcp__{server_name}__{tool_name}
-            prefix = f"mcp__{skill_name}__"
-            skill_tools = [t for t in allowed_tools if t.startswith(prefix)]
-            related_tools.extend(skill_tools)
-
-        if not related_tools:
-            # 関連ツールが見つからない場合はスキル名のみで指示
-            logger.warning(
-                "preferred_skillsに対応するツールが見つかりません",
-                preferred_skills=preferred_skills,
-            )
-            tools_instruction = f"スキル: {', '.join(preferred_skills)}"
-        else:
-            tools_instruction = f"ツール: {', '.join(related_tools)}"
+        skill_list = ", ".join(preferred_skills)
 
         # 優先スキル指示を構築
-        preferred_skills_prompt = f"""## 重要: 優先使用ツール指定
+        preferred_skills_prompt = f"""## 重要: 優先使用Skill指定
 
-ユーザーは以下のツール/スキルの使用を明示的に指定しました。
-質問に回答する際は、**必ずこれらのツールを最初に使用**してください。
+ユーザーは以下のSkillの使用を明示的に指定しました。
+質問に回答する際は、**必ずこれらのSkillを最初に呼び出して**ください。
 
-{tools_instruction}
+指定されたSkill: {skill_list}
 
 ### 使用手順
-1. 上記のスキル/ツールの説明（下記のシステムプロンプト内に記載）を必ず読んでください
-2. 説明に書かれている使い方や手順に従ってツールを使用してください
-3. ツールで情報が得られない場合のみ、一般知識で補足してください（その場合は情報源がないことを明記）
+1. `Skill` ツールを使って、指定されたSkillを呼び出してください
+2. Skillの指示に従って作業を進めてください
+3. Skillで対応できない場合のみ、一般知識で補足してください（その場合は情報源がないことを明記）
 
 ---
 
@@ -408,7 +392,6 @@ class OptionsBuilder:
         logger.info(
             "preferred_skills指示を追加",
             preferred_skills=preferred_skills,
-            related_tools=related_tools,
         )
 
         # 既存のシステムプロンプトの先頭に追加

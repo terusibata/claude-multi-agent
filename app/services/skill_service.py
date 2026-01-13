@@ -5,7 +5,7 @@ Agent Skillsサービス
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from uuid import uuid4
 
 import yaml
@@ -159,6 +159,9 @@ class SkillService:
             name=skill_data.name,
             display_title=skill_data.display_title,
             description=skill_data.description,
+            slash_command=skill_data.slash_command,
+            slash_command_description=skill_data.slash_command_description,
+            is_user_selectable=skill_data.is_user_selectable,
             version=1,
             file_path=str(skill_path),
             status="active",
@@ -349,3 +352,36 @@ class SkillService:
         skills_dir.mkdir(parents=True, exist_ok=True)
 
         return str(tenant_path)
+
+    async def get_slash_commands(
+        self,
+        tenant_id: str,
+    ) -> list[dict[str, Any]]:
+        """
+        ユーザーが選択可能なスラッシュコマンド一覧を取得
+
+        Args:
+            tenant_id: テナントID
+
+        Returns:
+            スラッシュコマンドアイテムのリスト
+        """
+        query = select(AgentSkill).where(
+            AgentSkill.tenant_id == tenant_id,
+            AgentSkill.status == "active",
+            AgentSkill.is_user_selectable == True,
+            AgentSkill.slash_command.isnot(None),
+        ).order_by(AgentSkill.slash_command)
+
+        result = await self.db.execute(query)
+        skills = result.scalars().all()
+
+        return [
+            {
+                "skill_id": skill.skill_id,
+                "name": skill.name,
+                "slash_command": skill.slash_command,
+                "description": skill.slash_command_description,
+            }
+            for skill in skills
+        ]
