@@ -326,7 +326,7 @@ GET /api/tenants/{tenant_id}/conversations/{conversation_id}/files/presented
 
 ### 自動登録
 
-`outputs/` ディレクトリ以下にAIが作成したファイルは、実行完了時に自動的にPresentedファイルとして登録されます。
+AIが作成・変更したファイルは、実行完了時に自動的にPresentedファイルとして登録されます。ディレクトリの場所に関係なく、ローカルワークスペースからS3に同期されたすべてのファイルが対象です。
 
 ---
 
@@ -337,15 +337,17 @@ GET /api/tenants/{tenant_id}/conversations/{conversation_id}/files/presented
 └── {tenant_id}/
     └── {conversation_id}/
         ├── uploads/      # ユーザーアップロードファイル
-        ├── outputs/      # AI生成ファイル（自動登録対象）
-        └── ...           # その他のファイル
+        └── ...           # AIが作成したファイル（任意の場所）
 ```
 
 例：
 ```
 workspaces/tenant-001/550e8400-uuid/uploads/data.csv
-workspaces/tenant-001/550e8400-uuid/outputs/result.json
+workspaces/tenant-001/550e8400-uuid/result.json
+workspaces/tenant-001/550e8400-uuid/analysis/report.xlsx
 ```
+
+**注意**: AIはワークスペース直下や任意のサブディレクトリにファイルを作成できます。`uploads/` はユーザーアップロード用の予約ディレクトリです。
 
 ---
 
@@ -356,7 +358,7 @@ workspaces/tenant-001/550e8400-uuid/outputs/result.json
 3. **S3→ローカル同期**: 実行前にS3から一時ローカルディレクトリにファイルを同期
 4. **エージェント実行**: ローカルディレクトリでファイル操作を実行
 5. **ローカル→S3同期**: 実行後にローカルからS3にファイルを同期
-6. **AIファイル登録**: `outputs/`以下のファイルをPresentedファイルとして自動登録
+6. **AIファイル登録**: AIが作成・変更したファイルをPresentedファイルとして自動登録
 7. **ローカルクリーンアップ**: 一時ローカルディレクトリを削除
 
 ---
