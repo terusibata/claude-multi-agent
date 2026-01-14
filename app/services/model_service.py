@@ -4,11 +4,23 @@
 """
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.conversation import Conversation
 from app.models.model import Model
+from app.models.tenant import Tenant
+from app.models.usage_log import UsageLog
 from app.schemas.model import ModelCreate, ModelUpdate
+
+
+class ModelInUseError(Exception):
+    """モデルが使用中のため削除できないエラー"""
+
+    def __init__(self, message: str, usage_details: dict):
+        self.message = message
+        self.usage_details = usage_details
+        super().__init__(self.message)
 
 
 class ModelService:
@@ -127,16 +139,57 @@ class ModelService:
 
         Returns:
             削除成功かどうか
+
+        Raises:
+            ModelInUseError: モデルが使用中の場合
         """
         model = await self.get_by_id(model_id)
         if not model:
             return False
 
-        # TODO: 紐づきチェック（tenants, conversations, usage_logs）
-        # 紐づきがある場合は削除不可
+        # 紐づきチェック
+        usage_details = await self._check_model_usage(model_id)
+        if any(usage_details.values()):
+            raise ModelInUseError(
+                f"モデル '{model_id}' は使用中のため削除できません",
+                usage_details,
+            )
 
         await self.db.delete(model)
         return True
+
+    async def _check_model_usage(self, model_id: str) -> dict:
+        """
+        モデルの使用状況をチェック
+
+        Args:
+            model_id: モデルID
+
+        Returns:
+            使用状況の詳細（各テーブルでの使用件数）
+        """
+        # テナントでの使用数
+        tenant_query = select(func.count()).where(Tenant.model_id == model_id)
+        tenant_result = await self.db.execute(tenant_query)
+        tenant_count = tenant_result.scalar() or 0
+
+        # 会話での使用数
+        conversation_query = select(func.count()).where(
+            Conversation.model_id == model_id
+        )
+        conversation_result = await self.db.execute(conversation_query)
+        conversation_count = conversation_result.scalar() or 0
+
+        # 使用量ログでの使用数
+        usage_log_query = select(func.count()).where(UsageLog.model_id == model_id)
+        usage_log_result = await self.db.execute(usage_log_query)
+        usage_log_count = usage_log_result.scalar() or 0
+
+        return {
+            "tenants": tenant_count,
+            "conversations": conversation_count,
+            "usage_logs": usage_log_count,
+        }
 
     async def get_active_models(self) -> list[Model]:
         """

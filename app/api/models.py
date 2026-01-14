@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.schemas.model import ModelCreate, ModelResponse, ModelUpdate
-from app.services.model_service import ModelService
+from app.services.model_service import ModelInUseError, ModelService
 
 router = APIRouter()
 
@@ -116,3 +116,39 @@ async def update_model_status(
             detail=f"モデル '{model_id}' が見つかりません",
         )
     return model
+
+
+@router.delete(
+    "/{model_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="モデル定義削除",
+)
+async def delete_model(
+    model_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    モデル定義を削除します。
+
+    **注意**: 以下の条件をすべて満たす場合のみ削除可能です：
+    - テナントのデフォルトモデルとして使用されていない
+    - 会話で使用されていない
+    - 使用量ログに記録がない
+    """
+    service = ModelService(db)
+
+    try:
+        deleted = await service.delete(model_id)
+        if not deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"モデル '{model_id}' が見つかりません",
+            )
+    except ModelInUseError as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": e.message,
+                "usage": e.usage_details,
+            },
+        )

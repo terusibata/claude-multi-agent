@@ -188,6 +188,30 @@ http://localhost:8000/api
 
 モデルのステータスを更新
 
+#### DELETE /api/models/{model_id}
+
+モデルを削除（紐づきがない場合のみ）
+
+**制約:**
+- テナントのデフォルトモデルとして使用されていないこと
+- 会話で使用されていないこと
+- 使用量ログに記録がないこと
+
+**エラーレスポンス（409 Conflict）:**
+
+```json
+{
+  "detail": {
+    "message": "モデル 'claude-sonnet-4' は使用中のため削除できません",
+    "usage": {
+      "tenants": 2,
+      "conversations": 15,
+      "usage_logs": 100
+    }
+  }
+}
+```
+
 ---
 
 ### Conversations
