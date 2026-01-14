@@ -2,10 +2,10 @@
 Pydanticスキーマ
 APIリクエスト/レスポンスのバリデーションとシリアライズ
 """
-from app.schemas.agent_config import (
-    AgentConfigCreate,
-    AgentConfigResponse,
-    AgentConfigUpdate,
+from app.schemas.conversation import (
+    ConversationCreateRequest,
+    ConversationResponse,
+    MessageLogResponse,
 )
 from app.schemas.execute import ExecuteRequest, ExecuteResponse, SSEEvent, StreamRequest
 from app.schemas.mcp_server import (
@@ -14,12 +14,8 @@ from app.schemas.mcp_server import (
     McpServerUpdate,
 )
 from app.schemas.model import ModelCreate, ModelResponse, ModelUpdate
-from app.schemas.conversation import (
-    ConversationCreateRequest,
-    ConversationResponse,
-    MessageLogResponse,
-)
 from app.schemas.skill import SkillCreate, SkillResponse, SkillUpdate
+from app.schemas.tenant import TenantCreateRequest, TenantResponse, TenantUpdateRequest
 from app.schemas.usage import CostReportResponse, UsageLogResponse, UsageSummary
 
 __all__ = [
@@ -27,10 +23,10 @@ __all__ = [
     "ModelCreate",
     "ModelUpdate",
     "ModelResponse",
-    # エージェント設定
-    "AgentConfigCreate",
-    "AgentConfigUpdate",
-    "AgentConfigResponse",
+    # テナント
+    "TenantCreateRequest",
+    "TenantUpdateRequest",
+    "TenantResponse",
     # スキル
     "SkillCreate",
     "SkillUpdate",

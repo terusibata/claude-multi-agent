@@ -16,7 +16,7 @@ Claude Multi-Agent のSSE（Server-Sent Events）ストリーミング仕様書�
 ### エンドポイント
 
 ```
-POST /api/tenants/{tenant_id}/execute
+POST /api/tenants/{tenant_id}/conversations/{conversation_id}/stream
 ```
 
 ### レスポンス形式
@@ -79,14 +79,10 @@ data: {"type": "result", "subtype": "success", ...}
     "conversation_id": "conversation-uuid",
     "tools": ["Read", "Write", "Bash", "Glob", "Grep"],
     "model": "Claude Sonnet 4",
-    "agent_config": {
-      "agent_config_id": "default-agent",
-      "name": "デフォルトエージェント",
-      "system_prompt": "...",
-      "allowed_tools": ["Read", "Write"],
-      "permission_mode": "default",
-      "mcp_servers": [],
-      "agent_skills": []
+    "tenant_config": {
+      "tenant_id": "tenant-001",
+      "system_prompt_length": 50,
+      "system_prompt_preview": "あなたは親切なアシスタントです。..."
     },
     "model_config": {
       "model_id": "claude-sonnet-4",
@@ -232,7 +228,7 @@ data: {"type": "result", "subtype": "success", ...}
 ```
 Client                          Server
   |                               |
-  |  POST /execute                |
+  |  POST /conversations/{id}/stream
   |------------------------------>|
   |                               |
   |  event: message               |
@@ -333,14 +329,10 @@ export interface UsageInfo {
 // 設定情報
 // ==========================================
 
-export interface AgentConfigInfo {
-  agent_config_id: string;
-  name: string;
-  system_prompt: string | null;
-  allowed_tools: string[];
-  permission_mode: string;
-  mcp_servers: string[];
-  agent_skills: string[];
+export interface TenantConfigInfo {
+  tenant_id: string;
+  system_prompt_length: number;
+  system_prompt_preview: string;
 }
 
 export interface ModelConfigInfo {
@@ -359,7 +351,7 @@ export interface SystemInitData {
   conversation_id?: string;
   tools: string[];
   model: string;
-  agent_config?: AgentConfigInfo;
+  tenant_config?: TenantConfigInfo;
   model_config?: ModelConfigInfo;
 }
 
@@ -443,33 +435,11 @@ export interface ExecutorInfo {
   employee_id?: string;
 }
 
-export interface ExecuteRequest {
-  agent_config_id: string;
-  model_id: string;
-  conversation_id?: string;
+export interface StreamRequest {
   user_input: string;
   executor: ExecutorInfo;
   tokens?: Record<string, string>;
-  resume_session_id?: string;
-  fork_session?: boolean;
-  enable_workspace?: boolean;
-}
-
-// ==========================================
-// ユーティリティ型
-// ==========================================
-
-export type MessageHandler<T extends StreamingMessage['type']> = (
-  message: Extract<StreamingMessage, { type: T }>
-) => void;
-
-export interface StreamingHandlers {
-  onSystem?: MessageHandler<'system'>;
-  onAssistant?: MessageHandler<'assistant'>;
-  onUserResult?: MessageHandler<'user_result'>;
-  onResult?: MessageHandler<'result'>;
-  onError?: (error: ErrorEvent['data']) => void;
-  onTitleGenerated?: (title: string) => void;
+  preferred_skills?: string[];
 }
 
 // ==========================================
@@ -518,12 +488,20 @@ export function isToolResultBlock(block: ContentBlock): block is ToolResultBlock
 
 import { useState, useCallback, useRef } from 'react';
 import type {
-  ExecuteRequest,
+  StreamRequest,
   StreamingMessage,
-  StreamingHandlers,
   ContentBlock,
   UsageInfo,
 } from '@/types/streaming';
+
+interface StreamingHandlers {
+  onSystem?: (message: StreamingMessage) => void;
+  onAssistant?: (message: StreamingMessage) => void;
+  onUserResult?: (message: StreamingMessage) => void;
+  onResult?: (message: StreamingMessage) => void;
+  onError?: (error: { message: string }) => void;
+  onTitleGenerated?: (title: string) => void;
+}
 
 interface StreamingState {
   isStreaming: boolean;
@@ -535,7 +513,7 @@ interface StreamingState {
   error: string | null;
 }
 
-export function useStreaming(tenantId: string) {
+export function useStreaming(tenantId: string, conversationId: string) {
   const [state, setState] = useState<StreamingState>({
     isStreaming: false,
     sessionId: null,
@@ -549,8 +527,7 @@ export function useStreaming(tenantId: string) {
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const execute = useCallback(
-    async (request: ExecuteRequest, handlers?: StreamingHandlers) => {
-      // 既存のリクエストをキャンセル
+    async (request: StreamRequest, handlers?: StreamingHandlers) => {
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
       }
@@ -565,14 +542,14 @@ export function useStreaming(tenantId: string) {
       }));
 
       try {
+        const formData = new FormData();
+        formData.append('request_data', JSON.stringify(request));
+
         const response = await fetch(
-          `/api/tenants/${tenantId}/execute`,
+          `/api/tenants/${tenantId}/conversations/${conversationId}/stream`,
           {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(request),
+            body: formData,
             signal: abortControllerRef.current.signal,
           }
         );
@@ -595,7 +572,6 @@ export function useStreaming(tenantId: string) {
 
           buffer += decoder.decode(value, { stream: true });
 
-          // SSEパースの処理
           const lines = buffer.split('\n');
           buffer = lines.pop() || '';
 
@@ -608,7 +584,6 @@ export function useStreaming(tenantId: string) {
             } else if (line.startsWith('data:')) {
               eventData = line.slice(5).trim();
             } else if (line === '' && eventType && eventData) {
-              // イベント処理
               processEvent(eventType, eventData, handlers, setState);
               eventType = '';
               eventData = '';
@@ -628,7 +603,7 @@ export function useStreaming(tenantId: string) {
         setState(prev => ({ ...prev, isStreaming: false }));
       }
     },
-    [tenantId]
+    [tenantId, conversationId]
   );
 
   const cancel = useCallback(() => {
@@ -674,7 +649,6 @@ function processEvent(
           break;
 
         case 'assistant':
-          // テキストを累積
           for (const block of message.content_blocks) {
             if (block.type === 'text') {
               setState(prev => ({
@@ -721,24 +695,21 @@ function processEvent(
 import { useStreaming } from '@/hooks/useStreaming';
 import { useState } from 'react';
 
-export function Chat() {
+export function Chat({ tenantId, conversationId }: { tenantId: string; conversationId: string }) {
   const [input, setInput] = useState('');
   const {
     isStreaming,
     currentText,
-    tools,
     usage,
     error,
     execute,
     cancel,
-  } = useStreaming('tenant-001');
+  } = useStreaming(tenantId, conversationId);
 
   const handleSubmit = async () => {
     if (!input.trim() || isStreaming) return;
 
     await execute({
-      agent_config_id: 'default-agent',
-      model_id: 'claude-sonnet-4',
       user_input: input,
       executor: {
         user_id: 'user-001',
@@ -764,7 +735,7 @@ export function Chat() {
 
       {usage && (
         <div className="usage">
-          Tokens: {usage.total_tokens} | Cost: ${usage.total_cost_usd?.toFixed(4)}
+          Tokens: {usage.total_tokens}
         </div>
       )}
 

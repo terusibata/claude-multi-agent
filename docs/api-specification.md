@@ -5,13 +5,11 @@ Claude Multi-Agent API のエンドポイント仕様書です。
 ## 目次
 
 - [概要](#概要)
-- [認証](#認証)
 - [共通仕様](#共通仕様)
 - [エンドポイント一覧](#エンドポイント一覧)
+  - [Tenants](#tenants)
   - [Models](#models)
-  - [Agent Configs](#agent-configs)
   - [Conversations](#conversations)
-  - [Execute](#execute)
   - [Workspace](#workspace)
   - [Skills](#skills)
   - [MCP Servers](#mcp-servers)
@@ -37,22 +35,6 @@ http://localhost:8000/api
 }
 ```
 
-または詳細なエラー形式：
-
-```json
-{
-  "detail": {
-    "message": "エラーメッセージ",
-    "error_code": "ERROR_CODE",
-    "details": {}
-  }
-}
-```
-
-## 認証
-
-現在、認証は実装されていません。テナントIDをパスパラメータとして使用します。
-
 ## 共通仕様
 
 ### テナントID
@@ -74,6 +56,81 @@ http://localhost:8000/api
 
 ## エンドポイント一覧
 
+### Tenants
+
+テナント管理API。テナントはマルチテナント環境における組織単位です。
+
+#### GET /api/tenants
+
+テナント一覧を取得
+
+**クエリパラメータ:**
+
+| パラメータ | 型 | 説明 |
+|-----------|-----|------|
+| `status` | string | フィルター（active/inactive） |
+| `limit` | int | 取得件数 |
+| `offset` | int | オフセット |
+
+**レスポンス:**
+
+```json
+[
+  {
+    "tenant_id": "tenant-001",
+    "system_prompt": "あなたは親切なアシスタントです。",
+    "model_id": "claude-sonnet-4",
+    "status": "active",
+    "created_at": "2024-01-01T00:00:00Z",
+    "updated_at": "2024-01-01T00:00:00Z"
+  }
+]
+```
+
+#### POST /api/tenants
+
+テナントを作成
+
+**リクエスト:**
+
+```json
+{
+  "tenant_id": "tenant-001",
+  "system_prompt": "あなたは親切なアシスタントです。",
+  "model_id": "claude-sonnet-4"
+}
+```
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| `tenant_id` | string | ○ | テナントID（一意） |
+| `system_prompt` | string | - | システムプロンプト |
+| `model_id` | string | - | デフォルトモデルID |
+
+#### GET /api/tenants/{tenant_id}
+
+テナントを取得
+
+#### PUT /api/tenants/{tenant_id}
+
+テナントを更新
+
+**リクエスト:**
+
+```json
+{
+  "system_prompt": "更新されたシステムプロンプト",
+  "model_id": "claude-opus-4",
+  "status": "active"
+}
+```
+
+#### DELETE /api/tenants/{tenant_id}
+
+テナントを削除
+
+---
+
 ### Models
 
 モデル定義の管理API。
@@ -91,10 +148,10 @@ http://localhost:8000/api
     "display_name": "Claude Sonnet 4",
     "bedrock_model_id": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
     "model_region": "us-west-2",
-    "input_price_per_1m": "3.00",
-    "output_price_per_1m": "15.00",
-    "cache_write_price_per_1m": "3.75",
-    "cache_read_price_per_1m": "0.30",
+    "input_token_price": "3.000000",
+    "output_token_price": "15.000000",
+    "cache_creation_price": "3.750000",
+    "cache_read_price": "0.300000",
     "status": "active",
     "created_at": "2024-01-01T00:00:00Z",
     "updated_at": "2024-01-01T00:00:00Z"
@@ -118,8 +175,8 @@ http://localhost:8000/api
   "display_name": "Claude Opus 4",
   "bedrock_model_id": "us.anthropic.claude-opus-4-20250514-v1:0",
   "model_region": "us-west-2",
-  "input_price_per_1m": "15.00",
-  "output_price_per_1m": "75.00"
+  "input_token_price": "15.00",
+  "output_token_price": "75.00"
 }
 ```
 
@@ -133,69 +190,9 @@ http://localhost:8000/api
 
 ---
 
-### Agent Configs
-
-エージェント実行設定の管理API。
-
-#### GET /api/tenants/{tenant_id}/agent-configs
-
-エージェント設定一覧を取得
-
-**レスポンス:**
-
-```json
-[
-  {
-    "agent_config_id": "default-agent",
-    "tenant_id": "tenant-001",
-    "name": "デフォルトエージェント",
-    "description": "基本的なエージェント設定",
-    "system_prompt": "あなたは親切なアシスタントです。",
-    "allowed_tools": ["Read", "Write", "Bash", "Glob", "Grep"],
-    "permission_mode": "default",
-    "mcp_servers": [],
-    "agent_skills": [],
-    "workspace_enabled": false,
-    "status": "active",
-    "created_at": "2024-01-01T00:00:00Z",
-    "updated_at": "2024-01-01T00:00:00Z"
-  }
-]
-```
-
-#### POST /api/tenants/{tenant_id}/agent-configs
-
-新しいエージェント設定を作成
-
-**リクエスト:**
-
-```json
-{
-  "agent_config_id": "coding-agent",
-  "name": "コーディングエージェント",
-  "description": "コーディング支援用のエージェント",
-  "system_prompt": "あなたは優秀なソフトウェアエンジニアです。",
-  "allowed_tools": ["Read", "Write", "Bash", "Glob", "Grep", "Edit"],
-  "permission_mode": "default",
-  "mcp_servers": [],
-  "agent_skills": [],
-  "workspace_enabled": true
-}
-```
-
-#### PUT /api/tenants/{tenant_id}/agent-configs/{agent_config_id}
-
-エージェント設定を更新
-
-#### DELETE /api/tenants/{tenant_id}/agent-configs/{agent_config_id}
-
-エージェント設定を削除（論理削除）
-
----
-
 ### Conversations
 
-会話（会話履歴）の管理API。
+会話の管理・実行API。
 
 #### GET /api/tenants/{tenant_id}/conversations
 
@@ -203,32 +200,72 @@ http://localhost:8000/api
 
 **クエリパラメータ:**
 
-- `status`: ステータスでフィルタ（active/archived）
-- `limit`: 取得件数
-- `offset`: オフセット
+| パラメータ | 型 | 説明 |
+|-----------|-----|------|
+| `status` | string | ステータスでフィルタ（active/archived） |
+| `user_id` | string | ユーザーIDでフィルタ |
+| `limit` | int | 取得件数 |
+| `offset` | int | オフセット |
 
 **レスポンス:**
 
 ```json
 [
   {
-    "conversation_id": "conversation-uuid-001",
+    "conversation_id": "550e8400-e29b-41d4-a716-446655440000",
     "tenant_id": "tenant-001",
     "user_id": "user-001",
-    "agent_config_id": "default-agent",
+    "model_id": "claude-sonnet-4",
     "session_id": "sdk-session-id",
     "title": "プログラミングについての質問",
     "status": "active",
-    "workspace_enabled": false,
+    "enable_workspace": false,
     "created_at": "2024-01-01T00:00:00Z",
     "updated_at": "2024-01-01T00:00:00Z"
   }
 ]
 ```
 
+#### POST /api/tenants/{tenant_id}/conversations
+
+新しい会話を作成
+
+**リクエスト:**
+
+```json
+{
+  "user_id": "user-001",
+  "model_id": "claude-sonnet-4",
+  "enable_workspace": false
+}
+```
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| `user_id` | string | ○ | ユーザーID |
+| `model_id` | string | - | モデルID（省略時はテナントのデフォルト） |
+| `enable_workspace` | boolean | - | ワークスペースを有効にするか（デフォルト: false） |
+
+**レスポンス:**
+
+```json
+{
+  "conversation_id": "550e8400-e29b-41d4-a716-446655440000",
+  "tenant_id": "tenant-001",
+  "user_id": "user-001",
+  "model_id": "claude-sonnet-4",
+  "session_id": null,
+  "title": null,
+  "status": "active",
+  "enable_workspace": false,
+  "created_at": "2024-01-01T00:00:00Z",
+  "updated_at": "2024-01-01T00:00:00Z"
+}
+```
+
 #### GET /api/tenants/{tenant_id}/conversations/{conversation_id}
 
-特定の会話を取得
+会話を取得
 
 #### GET /api/tenants/{tenant_id}/conversations/{conversation_id}/messages
 
@@ -238,7 +275,7 @@ http://localhost:8000/api
 
 ```json
 {
-  "conversation_id": "conversation-uuid-001",
+  "conversation_id": "550e8400-e29b-41d4-a716-446655440000",
   "messages": [
     {
       "message_seq": 1,
@@ -248,74 +285,25 @@ http://localhost:8000/api
         "type": "user",
         "text": "Pythonでソートアルゴリズムを教えてください"
       },
-      "created_at": "2024-01-01T00:00:00Z"
-    },
-    {
-      "message_seq": 2,
-      "message_type": "system",
-      "message_subtype": "init",
-      "content": {
-        "type": "system",
-        "subtype": "init",
-        "data": {
-          "session_id": "sdk-session-id",
-          "tools": ["Read", "Write"],
-          "model": "Claude Sonnet 4"
-        }
-      },
-      "created_at": "2024-01-01T00:00:00Z"
+      "timestamp": "2024-01-01T00:00:00Z"
     }
   ]
 }
 ```
 
-#### GET /api/tenants/{tenant_id}/conversations/{conversation_id}/display
-
-UI表示用のメッセージ履歴を取得（整形済み）
-
 #### PUT /api/tenants/{tenant_id}/conversations/{conversation_id}
 
-会話情報を更新
+会話を更新（タイトル変更など）
 
-#### POST /api/tenants/{tenant_id}/conversations
+#### DELETE /api/tenants/{tenant_id}/conversations/{conversation_id}
 
-新しい会話を作成
+会話を削除
 
-**リクエストボディ:**
+---
 
-```json
-{
-  "user_id": "user-001",
-  "agent_config_id": "default-agent"
-}
-```
+### POST /api/tenants/{tenant_id}/conversations/{conversation_id}/stream
 
-| フィールド | 型 | 必須 | 説明 |
-|-----------|-----|------|------|
-| `user_id` | string | ○ | ユーザーID |
-| `agent_config_id` | string | ○ | エージェント設定ID |
-
-タイトルはストリーミング実行時にAIが自動生成します。
-
-**レスポンス:**
-
-```json
-{
-  "conversation_id": "conversation-uuid-001",
-  "tenant_id": "tenant-001",
-  "user_id": "user-001",
-  "agent_config_id": "default-agent",
-  "session_id": null,
-  "title": null,
-  "status": "active",
-  "created_at": "2024-01-01T00:00:00Z",
-  "updated_at": "2024-01-01T00:00:00Z"
-}
-```
-
-#### POST /api/tenants/{tenant_id}/conversations/{conversation_id}/stream
-
-既存の会話でエージェント実行（SSEストリーミング、ファイル添付対応）
+会話でエージェント実行（SSEストリーミング、ファイル添付対応）
 
 **Content-Type:** `multipart/form-data`
 
@@ -330,8 +318,6 @@ UI表示用のメッセージ履歴を取得（整形済み）
 
 ```json
 {
-  "agent_config_id": "default-agent",
-  "model_id": "claude-sonnet-4",
   "user_input": "質問内容",
   "executor": {
     "user_id": "user-001",
@@ -339,62 +325,22 @@ UI表示用のメッセージ履歴を取得（整形済み）
     "email": "tanaka@example.com"
   },
   "tokens": {},
-  "resume_session_id": null,
-  "fork_session": false,
-  "enable_workspace": false
+  "preferred_skills": ["skill-name"]
 }
 ```
 
-**レスポンス:** Server-Sent Events (SSE)
-
-詳細は [streaming-specification.md](./streaming-specification.md) を参照してください。
-
----
-
-### Execute
-
-エージェント実行API（SSEストリーミング）。
-
-#### POST /api/tenants/{tenant_id}/execute
-
-エージェントを実行（SSEストリーミング、ファイル添付対応）
-
-**Content-Type:** `multipart/form-data`
-
-**リクエストパラメータ:**
-
-| パラメータ | 型 | 必須 | 説明 |
+| フィールド | 型 | 必須 | 説明 |
 |-----------|-----|------|------|
-| `request_data` | string | ○ | ExecuteRequestのJSON文字列 |
-| `files` | File[] | - | 添付ファイル（複数可、オプション） |
+| `user_input` | string | ○ | ユーザー入力 |
+| `executor` | object | ○ | 実行者情報 |
+| `tokens` | object | - | MCPサーバー用認証トークン |
+| `preferred_skills` | string[] | - | 優先的に使用するスキル名 |
 
-**ExecuteRequest JSON フィールド:**
-
-```json
-{
-  "agent_config_id": "default-agent",
-  "model_id": "claude-sonnet-4",
-  "conversation_id": "conversation-uuid-001",
-  "user_input": "Pythonでソートアルゴリズムを教えてください",
-  "executor": {
-    "user_id": "user-001",
-    "name": "田中太郎",
-    "email": "tanaka@example.com"
-  },
-  "tokens": {},
-  "resume_session_id": null,
-  "fork_session": false,
-  "enable_workspace": false
-}
-```
-
-**cURLの例（ファイル添付あり）:**
+**cURLの例:**
 
 ```bash
-curl -X POST "http://localhost:8000/api/tenants/tenant-001/execute" \
+curl -X POST "http://localhost:8000/api/tenants/tenant-001/conversations/550e8400-uuid/stream" \
   -F 'request_data={
-    "agent_config_id": "default-agent",
-    "model_id": "claude-sonnet-4",
     "user_input": "このファイルを分析してください",
     "executor": {
       "user_id": "user-001",
@@ -415,8 +361,6 @@ curl -X POST "http://localhost:8000/api/tenants/tenant-001/execute" \
 
 会話専用ワークスペースの管理API（S3ベース）。
 
-ファイルはAmazon S3に保存され、APIサーバー経由でのみアクセス可能です。
-
 #### GET /api/tenants/{tenant_id}/conversations/{conversation_id}/files
 
 ファイル一覧を取得
@@ -425,7 +369,7 @@ curl -X POST "http://localhost:8000/api/tenants/tenant-001/execute" \
 
 ```json
 {
-  "conversation_id": "conversation-uuid-001",
+  "conversation_id": "550e8400-e29b-41d4-a716-446655440000",
   "files": [
     {
       "file_id": "file-uuid-001",
@@ -463,24 +407,6 @@ curl -X POST "http://localhost:8000/api/tenants/tenant-001/execute" \
 
 AIが提示したファイル一覧を取得
 
-**レスポンス:**
-
-```json
-{
-  "conversation_id": "conversation-uuid-001",
-  "files": [
-    {
-      "file_id": "file-uuid-002",
-      "file_path": "outputs/result.json",
-      "original_name": "result.json",
-      "file_size": 512,
-      "source": "ai_created",
-      "is_presented": true
-    }
-  ]
-}
-```
-
 ---
 
 ### Skills
@@ -491,20 +417,30 @@ AIが提示したファイル一覧を取得
 
 スキル一覧を取得
 
+**レスポンス:**
+
+```json
+[
+  {
+    "skill_id": "550e8400-e29b-41d4-a716-446655440000",
+    "tenant_id": "tenant-001",
+    "name": "git-commit",
+    "display_title": "Git Commit",
+    "description": "コードの変更をコミット",
+    "version": 1,
+    "file_path": "/skills/tenant-001/git-commit",
+    "slash_command": "/commit",
+    "slash_command_description": "変更をコミットします",
+    "is_user_selectable": true,
+    "status": "active",
+    "created_at": "2024-01-01T00:00:00Z"
+  }
+]
+```
+
 #### POST /api/tenants/{tenant_id}/skills
 
 新しいスキルを登録
-
-**リクエスト:**
-
-```json
-{
-  "skill_id": "git-commit",
-  "name": "Git Commit",
-  "description": "コードの変更をコミット",
-  "skill_path": "skills/git-commit"
-}
-```
 
 #### PUT /api/tenants/{tenant_id}/skills/{skill_id}
 
@@ -512,7 +448,7 @@ AIが提示したファイル一覧を取得
 
 #### DELETE /api/tenants/{tenant_id}/skills/{skill_id}
 
-スキルを削除
+スキルを削除（論理削除）
 
 ---
 
@@ -524,6 +460,25 @@ MCPサーバーの管理API。
 
 MCPサーバー一覧を取得
 
+**レスポンス:**
+
+```json
+[
+  {
+    "mcp_server_id": "550e8400-e29b-41d4-a716-446655440000",
+    "tenant_id": "tenant-001",
+    "name": "postgres-mcp",
+    "display_name": "PostgreSQL MCP",
+    "type": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-postgres"],
+    "description": "PostgreSQLデータベース接続",
+    "status": "active",
+    "created_at": "2024-01-01T00:00:00Z"
+  }
+]
+```
+
 #### POST /api/tenants/{tenant_id}/mcp-servers
 
 新しいMCPサーバーを登録
@@ -532,9 +487,9 @@ MCPサーバー一覧を取得
 
 ```json
 {
-  "server_id": "postgres-mcp",
-  "name": "PostgreSQL MCP",
-  "description": "PostgreSQLデータベース接続",
+  "name": "postgres-mcp",
+  "display_name": "PostgreSQL MCP",
+  "type": "stdio",
   "command": "npx",
   "args": ["-y", "@modelcontextprotocol/server-postgres"],
   "env": {
@@ -544,13 +499,13 @@ MCPサーバー一覧を取得
 }
 ```
 
-#### PUT /api/tenants/{tenant_id}/mcp-servers/{server_id}
+#### PUT /api/tenants/{tenant_id}/mcp-servers/{mcp_server_id}
 
 MCPサーバーを更新
 
-#### DELETE /api/tenants/{tenant_id}/mcp-servers/{server_id}
+#### DELETE /api/tenants/{tenant_id}/mcp-servers/{mcp_server_id}
 
-MCPサーバーを削除
+MCPサーバーを削除（論理削除）
 
 ---
 
@@ -564,48 +519,41 @@ MCPサーバーを削除
 
 **クエリパラメータ:**
 
-- `start_date`: 開始日（YYYY-MM-DD）
-- `end_date`: 終了日（YYYY-MM-DD）
-- `group_by`: グループ化（day/week/month）
+| パラメータ | 型 | 説明 |
+|-----------|-----|------|
+| `from_date` | string | 開始日（YYYY-MM-DD） |
+| `to_date` | string | 終了日（YYYY-MM-DD） |
+| `group_by` | string | グループ化（day/week/month） |
 
 **レスポンス:**
 
 ```json
-{
-  "tenant_id": "tenant-001",
-  "period": {
-    "start_date": "2024-01-01",
-    "end_date": "2024-01-31"
-  },
-  "summary": {
-    "total_input_tokens": 1000000,
-    "total_output_tokens": 500000,
-    "total_cache_creation_tokens": 100000,
-    "total_cache_read_tokens": 200000,
-    "total_cost_usd": 25.50
-  },
-  "by_model": [
-    {
-      "model_id": "claude-sonnet-4",
-      "input_tokens": 800000,
-      "output_tokens": 400000,
-      "cost_usd": 18.00
-    }
-  ],
-  "by_user": [
-    {
-      "user_id": "user-001",
-      "input_tokens": 500000,
-      "output_tokens": 250000,
-      "cost_usd": 12.75
-    }
-  ]
-}
+[
+  {
+    "period": "2024-01-01T00:00:00",
+    "total_tokens": 100000,
+    "input_tokens": 60000,
+    "output_tokens": 40000,
+    "cache_creation_tokens": 5000,
+    "cache_read_tokens": 10000,
+    "total_cost_usd": 2.50,
+    "execution_count": 50
+  }
+]
 ```
 
-#### GET /api/tenants/{tenant_id}/usage/logs
+#### GET /api/tenants/{tenant_id}/cost-report
 
-使用量ログ詳細を取得
+コストレポートを取得
+
+**クエリパラメータ:**
+
+| パラメータ | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| `from_date` | string | ○ | 開始日 |
+| `to_date` | string | ○ | 終了日 |
+| `model_id` | string | - | モデルIDでフィルタ |
+| `user_id` | string | - | ユーザーIDでフィルタ |
 
 ---
 
@@ -615,23 +563,23 @@ MCPサーバーを削除
 |--------|------|
 | 200 | 成功 |
 | 201 | 作成成功 |
+| 204 | 削除成功 |
 | 400 | リクエストエラー |
-| 403 | アクセス拒否 |
 | 404 | リソースが見つからない |
-| 413 | ファイルサイズ超過 |
+| 409 | 競合（既に存在するなど） |
 | 500 | サーバーエラー |
 
 ---
 
 ## 制限事項
 
+### ストリーミング実行
+
+- リクエストタイムアウト: 300秒
+- クライアント切断後も処理は継続
+
 ### ワークスペース（S3）
 
-ファイルはAmazon S3に保存されます。S3ライフサイクルポリシーでの自動削除・移行を推奨します。
-
-会話ごとに独立したワークスペースが作成され、テナント・会話間で完全に分離されます。
-
-### リクエスト
-
-- リクエストタイムアウト: 300秒（実行エンドポイント）
-- その他のエンドポイント: 30秒
+- ファイルはAmazon S3に保存
+- 会話ごとに独立したワークスペース
+- テナント・会話間で完全に分離

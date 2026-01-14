@@ -10,8 +10,8 @@
 ┌─────────────────────────────────────────────────────────────────┐
 │  フロントエンド                                                  │
 │                                                                 │
-│  ファイル送信: POST /execute (multipart/form-data)              │
-│  ファイル取得: GET /files/download?path=xxx                     │
+│  ファイル送信: POST /conversations/{id}/stream (multipart)      │
+│  ファイル取得: GET /conversations/{id}/files/download?path=xxx  │
 │               → バイナリデータが返る                             │
 └─────────────────────────────────────────────────────────────────┘
                               │
@@ -112,34 +112,43 @@ S3_WORKSPACE_PREFIX=workspaces/
 
 ## 設定方法
 
-### 1. エージェント設定での有効化
+### 会話作成時に有効化
 
-エージェント設定（AgentConfig）でワークスペースを有効化できます：
+会話を作成する際に `enable_workspace: true` を指定してワークスペースを有効化します：
 
+```bash
+curl -X POST http://localhost:8000/api/tenants/tenant-001/conversations \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "user-001",
+    "model_id": "claude-sonnet-4",
+    "enable_workspace": true
+  }'
+```
+
+レスポンス：
 ```json
-PUT /api/tenants/{tenant_id}/agent-configs/{config_id}
 {
-  "name": "ドキュメント分析エージェント",
-  "system_prompt": "...",
-  "allowed_tools": ["Read", "Write", "Bash", "Glob"],
-  "workspace_enabled": true
+  "conversation_id": "550e8400-e29b-41d4-a716-446655440000",
+  "tenant_id": "tenant-001",
+  "user_id": "user-001",
+  "model_id": "claude-sonnet-4",
+  "status": "active",
+  "enable_workspace": true,
+  "created_at": "2024-01-01T00:00:00Z"
 }
 ```
 
-### 2. 実行時の有効化
-
-エージェント設定で無効でも、実行時に有効化できます。
-
 ---
 
-## ファイルアップロード（/execute API）
+## ファイルアップロード（ストリーミングAPI）
 
-ファイルのアップロードは `/execute` APIで行います。
+ファイルのアップロードはストリーミングAPIで行います。
 
 ### エンドポイント
 
 ```
-POST /api/tenants/{tenant_id}/execute
+POST /api/tenants/{tenant_id}/conversations/{conversation_id}/stream
 Content-Type: multipart/form-data
 ```
 
@@ -147,17 +156,16 @@ Content-Type: multipart/form-data
 
 | パラメータ | 型 | 必須 | 説明 |
 |-----------|-----|------|------|
-| `request_data` | string | ○ | ExecuteRequestのJSON文字列 |
+| `request_data` | string | ○ | StreamRequestのJSON文字列 |
 | `files` | File[] | - | アップロードするファイル（複数可） |
 
 ### cURLの例
 
 ```bash
 # ファイル添付付きで実行
-curl -X POST "http://localhost:8000/api/tenants/tenant-001/execute" \
+curl -X POST "http://localhost:8000/api/tenants/tenant-001/conversations/550e8400-uuid/stream" \
+  -H "Accept: text/event-stream" \
   -F 'request_data={
-    "agent_config_id": "default-agent",
-    "model_id": "claude-sonnet-4",
     "user_input": "このファイルを分析してください",
     "executor": {
       "user_id": "user-001",
@@ -174,10 +182,8 @@ curl -X POST "http://localhost:8000/api/tenants/tenant-001/execute" \
 ```javascript
 const formData = new FormData();
 
-// ExecuteRequestをJSON文字列として追加
+// StreamRequestをJSON文字列として追加
 const requestData = {
-  agent_config_id: "default-agent",
-  model_id: "claude-sonnet-4",
   user_input: "このファイルを分析してください",
   executor: {
     user_id: "user-001",
@@ -192,15 +198,20 @@ formData.append('files', file1);
 formData.append('files', file2);
 
 const response = await fetch(
-  `/api/tenants/${tenantId}/execute`,
+  `/api/tenants/${tenantId}/conversations/${conversationId}/stream`,
   {
     method: 'POST',
     body: formData,
+    headers: {
+      'Accept': 'text/event-stream'
+    }
   }
 );
 ```
 
-ファイルがアップロードされると、自動的にワークスペースが有効化され、S3に保存されます。
+ファイルがアップロードされると、自動的にS3に保存されます。
+
+**注意**: ファイルをアップロードする場合、会話作成時に `enable_workspace: true` を指定しておく必要があります。
 
 ---
 
@@ -216,13 +227,14 @@ GET /api/tenants/{tenant_id}/conversations/{conversation_id}/files
 
 ```json
 {
-  "conversation_id": "conversation-123",
+  "conversation_id": "550e8400-e29b-41d4-a716-446655440000",
   "files": [
     {
       "file_id": "a1b2c3d4-...",
       "file_path": "uploads/data.csv",
       "original_name": "data.csv",
       "file_size": 2048,
+      "mime_type": "text/csv",
       "version": 1,
       "source": "user_upload",
       "is_presented": false,
@@ -234,6 +246,7 @@ GET /api/tenants/{tenant_id}/conversations/{conversation_id}/files
       "file_path": "outputs/analysis_result.json",
       "original_name": "analysis_result.json",
       "file_size": 512,
+      "mime_type": "application/json",
       "version": 1,
       "source": "ai_created",
       "is_presented": true,
@@ -266,10 +279,10 @@ GET /api/tenants/{tenant_id}/conversations/{conversation_id}/files/download?path
 
 ```bash
 # アップロードファイルをダウンロード
-curl -O "http://localhost:8000/api/tenants/tenant-001/conversations/conversation-123/files/download?path=uploads/data.csv"
+curl -O "http://localhost:8000/api/tenants/tenant-001/conversations/550e8400-uuid/files/download?path=uploads/data.csv"
 
 # AI生成ファイルをダウンロード
-curl -O "http://localhost:8000/api/tenants/tenant-001/conversations/conversation-123/files/download?path=outputs/result.json"
+curl -O "http://localhost:8000/api/tenants/tenant-001/conversations/550e8400-uuid/files/download?path=outputs/result.json"
 ```
 
 ### レスポンス
@@ -294,13 +307,14 @@ GET /api/tenants/{tenant_id}/conversations/{conversation_id}/files/presented
 
 ```json
 {
-  "conversation_id": "conversation-123",
+  "conversation_id": "550e8400-e29b-41d4-a716-446655440000",
   "files": [
     {
       "file_id": "e5f6g7h8-...",
       "file_path": "outputs/analysis_result.xlsx",
       "original_name": "analysis_result.xlsx",
       "file_size": 1024,
+      "mime_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       "version": 1,
       "source": "ai_created",
       "is_presented": true,
@@ -329,20 +343,21 @@ GET /api/tenants/{tenant_id}/conversations/{conversation_id}/files/presented
 
 例：
 ```
-workspaces/tenant-001/conversation-abc123/uploads/data.csv
-workspaces/tenant-001/conversation-abc123/outputs/result.json
+workspaces/tenant-001/550e8400-uuid/uploads/data.csv
+workspaces/tenant-001/550e8400-uuid/outputs/result.json
 ```
 
 ---
 
 ## エージェント実行フロー
 
-1. **ファイルアップロード**: `/execute` APIでファイルをS3にアップロード
-2. **S3→ローカル同期**: 実行前にS3から一時ローカルディレクトリにファイルを同期
-3. **エージェント実行**: ローカルディレクトリでファイル操作を実行
-4. **ローカル→S3同期**: 実行後にローカルからS3にファイルを同期
-5. **AIファイル登録**: `outputs/`以下のファイルをPresentedファイルとして自動登録
-6. **ローカルクリーンアップ**: 一時ローカルディレクトリを削除
+1. **会話作成**: `enable_workspace: true` で会話を作成
+2. **ファイルアップロード**: `/stream` APIでファイルをS3にアップロード
+3. **S3→ローカル同期**: 実行前にS3から一時ローカルディレクトリにファイルを同期
+4. **エージェント実行**: ローカルディレクトリでファイル操作を実行
+5. **ローカル→S3同期**: 実行後にローカルからS3にファイルを同期
+6. **AIファイル登録**: `outputs/`以下のファイルをPresentedファイルとして自動登録
+7. **ローカルクリーンアップ**: 一時ローカルディレクトリを削除
 
 ---
 
@@ -380,7 +395,8 @@ AIはファイルの内容を読まなくても、どのファイルが利用可
 
 | メソッド | パス | 説明 |
 |---------|------|------|
-| POST | /tenants/{tenant_id}/execute | エージェント実行（ファイル添付可） |
+| POST | /tenants/{tenant_id}/conversations | 会話作成（`enable_workspace: true`で有効化） |
+| POST | /tenants/{tenant_id}/conversations/{conversation_id}/stream | ストリーミング実行（ファイル添付可） |
 | GET | /tenants/{tenant_id}/conversations/{conversation_id}/files | ファイル一覧 |
 | GET | /tenants/{tenant_id}/conversations/{conversation_id}/files/download?path=xxx | ファイルダウンロード |
 | GET | /tenants/{tenant_id}/conversations/{conversation_id}/files/presented | AIが作成したファイル一覧 |
@@ -391,6 +407,7 @@ AIはファイルの内容を読まなくても、どのファイルが利用可
 
 | HTTPステータス | 説明 |
 |---------------|------|
+| 400 Bad Request | ワークスペースが無効な会話でファイル操作を試行 |
 | 403 Forbidden | アクセス権限なし |
 | 404 Not Found | ファイルが見つからない |
 | 500 Internal Server Error | サーバーエラー（S3接続エラーなど） |

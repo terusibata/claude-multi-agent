@@ -13,13 +13,13 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 # アプリケーションのモデルをインポート
 from app.database import Base
 from app.models import (
-    AgentConfig,
     AgentSkill,
-    ChatSession,
+    Conversation,
+    ConversationFile,
     McpServer,
     MessageLog,
     Model,
-    SessionFile,
+    Tenant,
     ToolExecutionLog,
     UsageLog,
 )

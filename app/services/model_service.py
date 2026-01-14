@@ -132,7 +132,7 @@ class ModelService:
         if not model:
             return False
 
-        # TODO: 紐づきチェック（agent_configs, usage_logs）
+        # TODO: 紐づきチェック（tenants, conversations, usage_logs）
         # 紐づきがある場合は削除不可
 
         await self.db.delete(model)
