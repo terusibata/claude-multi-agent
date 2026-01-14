@@ -28,8 +28,8 @@ class ToolExecutionLog(Base):
     # SDKセッションID
     session_id: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
 
-    # チャットセッションID
-    chat_session_id: Mapped[Optional[str]] = mapped_column(
+    # 会話ID
+    conversation_id: Mapped[Optional[str]] = mapped_column(
         UUID(as_uuid=False), nullable=True, index=True
     )
 

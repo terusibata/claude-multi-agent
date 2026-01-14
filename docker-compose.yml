@@ -7,7 +7,7 @@ services:
     environment:
       POSTGRES_USER: ${DB_USER:-aiagent}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-aiagent_password}
-      POSTGRES_DB: ${DB_NAME:-aiagent_db}
+      POSTGRES_DB: ${DB_NAME:-aiagent}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./init-db:/docker-entrypoint-initdb.d
@@ -30,7 +30,7 @@ services:
       - .env
     environment:
       # データベース設定
-      DATABASE_URL: postgresql+asyncpg://${DB_USER:-aiagent}:${DB_PASSWORD:-aiagent_password}@db:5432/${DB_NAME:-aiagent_db}
+      DATABASE_URL: postgresql+asyncpg://${DB_USER:-aiagent}:${DB_PASSWORD:-aiagent_password}@db:5432/${DB_NAME:-aiagent}
 
       # アプリケーション設定
       APP_ENV: ${APP_ENV:-development}
@@ -60,7 +60,7 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://${DB_USER:-aiagent}:${DB_PASSWORD:-aiagent_password}@db:5432/${DB_NAME:-aiagent_db}
+      DATABASE_URL: postgresql+asyncpg://${DB_USER:-aiagent}:${DB_PASSWORD:-aiagent_password}@db:5432/${DB_NAME:-aiagent}
       APP_ENV: production
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       SKILLS_BASE_PATH: /skills

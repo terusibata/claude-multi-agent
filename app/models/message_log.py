@@ -26,10 +26,10 @@ class MessageLog(Base):
         UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4())
     )
 
-    # チャットセッションID
-    chat_session_id: Mapped[str] = mapped_column(
+    # 会話ID
+    conversation_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
-        ForeignKey("chat_sessions.chat_session_id"),
+        ForeignKey("conversations.conversation_id"),
         nullable=False,
         index=True,
     )

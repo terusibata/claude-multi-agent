@@ -23,6 +23,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # アプリケーションコードのコピー
 COPY . .
 
+# エントリーポイントスクリプトに実行権限を付与
+RUN chmod +x /app/entrypoint.sh
+
 # Skills ディレクトリの作成
 RUN mkdir -p /skills
 
@@ -44,6 +47,9 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 
 # ポート公開
 EXPOSE 8000
+
+# エントリーポイント（マイグレーション自動実行）
+ENTRYPOINT ["/app/entrypoint.sh"]
 
 # アプリケーション起動
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

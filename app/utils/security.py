@@ -198,27 +198,27 @@ def validate_tenant_id(tenant_id: str) -> None:
     validate_path_traversal(tenant_id)
 
 
-def validate_session_id(session_id: str) -> None:
+def validate_conversation_id(conversation_id: str) -> None:
     """
-    セッションIDを検証する
+    会話IDを検証する
 
     Args:
-        session_id: セッションID
+        conversation_id: 会話ID
 
     Raises:
-        ValidationError: セッションIDが無効な場合
+        ValidationError: 会話IDが無効な場合
     """
-    if not session_id:
-        raise ValidationError("session_id", "セッションIDが空です")
+    if not conversation_id:
+        raise ValidationError("conversation_id", "会話IDが空です")
 
-    if len(session_id) > 200:
-        raise ValidationError("session_id", "セッションIDは200文字以内にしてください")
+    if len(conversation_id) > 200:
+        raise ValidationError("conversation_id", "会話IDは200文字以内にしてください")
 
     # 英数字、ハイフン、アンダースコアのみ許可（UUIDを想定）
-    if not re.match(r"^[a-zA-Z0-9_\-]+$", session_id):
+    if not re.match(r"^[a-zA-Z0-9_\-]+$", conversation_id):
         raise ValidationError(
-            "session_id",
-            "セッションIDには英数字、ハイフン、アンダースコアのみ使用できます"
+            "conversation_id",
+            "会話IDには英数字、ハイフン、アンダースコアのみ使用できます"
         )
 
 

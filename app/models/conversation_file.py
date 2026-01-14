@@ -1,6 +1,6 @@
 """
-セッションファイルテーブル
-セッション内のファイル（ユーザーアップロード、AI作成）を管理
+会話ファイルテーブル
+会話内のファイル（ユーザーアップロード、AI作成）を管理
 バージョン管理対応
 """
 from datetime import datetime
@@ -14,22 +14,22 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
 
-class SessionFile(Base):
+class ConversationFile(Base):
     """
-    セッションファイルテーブル
-    セッション専用ワークスペース内のファイル管理
+    会話ファイルテーブル
+    会話専用ワークスペース内のファイル管理
     """
-    __tablename__ = "session_files"
+    __tablename__ = "conversation_files"
 
     # ファイルID
     file_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4())
     )
 
-    # チャットセッションID
-    chat_session_id: Mapped[str] = mapped_column(
+    # 会話ID
+    conversation_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
-        ForeignKey("chat_sessions.chat_session_id", ondelete="CASCADE"),
+        ForeignKey("conversations.conversation_id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -73,7 +73,7 @@ class SessionFile(Base):
     )
 
     # リレーションシップ
-    chat_session = relationship("ChatSession", back_populates="files", lazy="selectin")
+    conversation = relationship("Conversation", back_populates="files", lazy="selectin")
 
     def __repr__(self) -> str:
-        return f"<SessionFile(file_id={self.file_id}, path={self.file_path}, v{self.version})>"
+        return f"<ConversationFile(file_id={self.file_id}, path={self.file_path}, v{self.version})>"

@@ -6,8 +6,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Optional
 
-from app.models.agent_config import AgentConfig
 from app.models.model import Model
+from app.models.tenant import Tenant
 from app.schemas.execute import ExecuteRequest
 
 
@@ -21,20 +21,17 @@ class ExecutionContext:
 
     # リクエスト情報
     request: ExecuteRequest
-    agent_config: AgentConfig
+    tenant: Tenant
     model: Model
-    tenant_id: str
 
-    # セッション関連
-    chat_session_id: str = ""
-    session_id: Optional[str] = None
+    # 会話関連
+    conversation_id: str = ""
+    session_id: Optional[str] = None  # Claude SDK用セッションID
     turn_number: int = 1
     message_seq: int = 0
 
     # SDK設定
-    resume_session_id: Optional[str] = None
-    fork_session: bool = False
-    enable_workspace: bool = False
+    workspace_enabled: bool = False
     preferred_skills: list[str] = field(default_factory=list)
 
     # 実行時情報
@@ -47,13 +44,19 @@ class ExecutionContext:
 
     def __post_init__(self):
         """初期化後の処理"""
-        self.chat_session_id = self.request.chat_session_id or ""
-        self.resume_session_id = self.request.resume_session_id
-        self.fork_session = self.request.fork_session
-        self.enable_workspace = (
-            self.request.enable_workspace or self.agent_config.workspace_enabled
-        )
+        self.conversation_id = self.request.conversation_id
+        self.workspace_enabled = self.request.workspace_enabled
         self.preferred_skills = self.request.preferred_skills or []
+
+    @property
+    def tenant_id(self) -> str:
+        """テナントID"""
+        return self.request.tenant_id
+
+    @property
+    def system_prompt(self) -> Optional[str]:
+        """システムプロンプト"""
+        return self.tenant.system_prompt
 
 
 @dataclass
@@ -184,13 +187,12 @@ class SDKOptions:
     system_prompt: Optional[str] = None
     model: str = ""
     allowed_tools: list[str] = field(default_factory=list)
-    permission_mode: str = "default"
     mcp_servers: Optional[dict] = None
     cwd: str = ""
     env: dict[str, str] = field(default_factory=dict)
     setting_sources: Optional[list[str]] = None
     resume: Optional[str] = None
-    fork_session: bool = False
+    permission_mode: str = "bypassPermissions"  # ファイル操作の権限をバイパス
 
     def to_dict(self) -> dict[str, Any]:
         """SDK用の辞書に変換"""
@@ -198,10 +200,10 @@ class SDKOptions:
             "system_prompt": self.system_prompt,
             "model": self.model,
             "allowed_tools": self.allowed_tools,
-            "permission_mode": self.permission_mode,
             "mcp_servers": self.mcp_servers,
             "cwd": self.cwd,
             "env": self.env,
+            "permission_mode": self.permission_mode,
         }
 
         if self.setting_sources:
@@ -209,9 +211,6 @@ class SDKOptions:
 
         if self.resume:
             options["resume"] = self.resume
-
-        if self.fork_session:
-            options["fork_session"] = True
 
         # Noneの値を削除
         return {k: v for k, v in options.items() if v is not None}

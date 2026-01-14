@@ -7,7 +7,7 @@ Claude Multi-Agent API の使い方ガイドです。
 - [はじめに](#はじめに)
 - [セットアップ](#セットアップ)
 - [基本的な使い方](#基本的な使い方)
-- [エージェント設定](#エージェント設定)
+- [テナント管理](#テナント管理)
 - [ワークスペース機能](#ワークスペース機能)
 - [MCPサーバー](#mcpサーバー)
 - [スキル機能](#スキル機能)
@@ -20,11 +20,13 @@ Claude Multi-Agent は、Claude Agent SDK を使用したマルチテナント�
 
 ### 主な機能
 
-- **マルチテナント**: テナントごとに設定・使用量を分離
-- **ストリーミング応答**: SSE形式でリアルタイム応答
-- **ワークスペース**: セッションごとの独立したファイル空間
-- **MCP連携**: Model Context Protocolサーバーとの連携
-- **スキル機能**: カスタム機能の追加
+| 機能 | 説明 |
+|------|------|
+| **マルチテナント** | テナントごとに設定・使用量を分離 |
+| **ストリーミング応答** | SSE形式でリアルタイム応答 |
+| **ワークスペース** | 会話ごとの独立したファイル空間 |
+| **MCP連携** | Model Context Protocolサーバーとの連携 |
+| **スキル機能** | カスタム機能の追加 |
 
 ## セットアップ
 
@@ -111,39 +113,60 @@ curl -X POST http://localhost:8000/api/models \
     "display_name": "Claude Sonnet 4",
     "bedrock_model_id": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
     "model_region": "us-west-2",
-    "input_price_per_1m": "3.00",
-    "output_price_per_1m": "15.00"
+    "input_token_price": "3.00",
+    "output_token_price": "15.00"
   }'
 ```
 
-### 2. エージェント設定の作成
+### 2. テナントの作成
 
-次に、エージェント設定を作成します。
+次に、テナントを作成します。
 
 ```bash
-curl -X POST http://localhost:8000/api/tenants/tenant-001/agent-configs \
+curl -X POST http://localhost:8000/api/tenants \
   -H "Content-Type: application/json" \
   -d '{
-    "agent_config_id": "default-agent",
-    "name": "デフォルトエージェント",
-    "description": "基本的なエージェント設定",
+    "tenant_id": "tenant-001",
     "system_prompt": "あなたは親切なアシスタントです。",
-    "allowed_tools": ["Read", "Write", "Bash", "Glob", "Grep"],
-    "permission_mode": "default"
+    "model_id": "claude-sonnet-4"
   }'
 ```
 
-### 3. エージェントの実行
+### 3. 会話の作成
 
-エージェントを実行します（SSEストリーミング）。
+会話を作成します。
 
 ```bash
-curl -X POST http://localhost:8000/api/tenants/tenant-001/execute \
+curl -X POST http://localhost:8000/api/tenants/tenant-001/conversations \
   -H "Content-Type: application/json" \
-  -H "Accept: text/event-stream" \
   -d '{
-    "agent_config_id": "default-agent",
+    "user_id": "user-001",
     "model_id": "claude-sonnet-4",
+    "enable_workspace": false
+  }'
+```
+
+レスポンス：
+```json
+{
+  "conversation_id": "550e8400-e29b-41d4-a716-446655440000",
+  "tenant_id": "tenant-001",
+  "user_id": "user-001",
+  "model_id": "claude-sonnet-4",
+  "status": "active",
+  "enable_workspace": false,
+  "created_at": "2024-01-01T00:00:00Z"
+}
+```
+
+### 4. エージェントの実行
+
+作成した会話でストリーミング実行します。
+
+```bash
+curl -X POST "http://localhost:8000/api/tenants/tenant-001/conversations/550e8400-uuid/stream" \
+  -H "Accept: text/event-stream" \
+  -F 'request_data={
     "user_input": "Pythonでソートアルゴリズムを実装してください",
     "executor": {
       "user_id": "user-001",
@@ -153,18 +176,13 @@ curl -X POST http://localhost:8000/api/tenants/tenant-001/execute \
   }'
 ```
 
-### 4. 会話の継続
+### 5. 会話の継続
 
-同じセッションで会話を続ける場合は、`chat_session_id`を指定します。
+同じ会話で続ける場合は、同じエンドポイントを使用します。
 
 ```bash
-curl -X POST http://localhost:8000/api/tenants/tenant-001/execute \
-  -H "Content-Type: application/json" \
-  -H "Accept: text/event-stream" \
-  -d '{
-    "agent_config_id": "default-agent",
-    "model_id": "claude-sonnet-4",
-    "chat_session_id": "session-uuid-from-previous-response",
+curl -X POST "http://localhost:8000/api/tenants/tenant-001/conversations/550e8400-uuid/stream" \
+  -F 'request_data={
     "user_input": "バブルソートも追加してください",
     "executor": {
       "user_id": "user-001",
@@ -174,44 +192,34 @@ curl -X POST http://localhost:8000/api/tenants/tenant-001/execute \
   }'
 ```
 
-## エージェント設定
+## テナント管理
 
-### 利用可能なツール
+### テナントの役割
 
-```json
-{
-  "allowed_tools": [
-    "Read",      // ファイル読み取り
-    "Write",     // ファイル書き込み
-    "Edit",      // ファイル編集
-    "Bash",      // シェルコマンド実行
-    "Glob",      // ファイル検索（パターン）
-    "Grep",      // ファイル内検索
-    "Skill"      // スキル実行
-  ]
-}
+テナントはマルチテナント環境における組織単位です。テナントごとに以下を設定できます：
+
+- **システムプロンプト**: AIの基本的な振る舞いを定義
+- **デフォルトモデル**: 会話作成時のデフォルトモデル
+
+### テナントの設定例
+
+```bash
+# テナントの更新
+curl -X PUT http://localhost:8000/api/tenants/tenant-001 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "system_prompt": "あなたは優秀なソフトウェアエンジニアです。",
+    "model_id": "claude-opus-4"
+  }'
 ```
 
-### パーミッションモード
+### スキルとMCPサーバー
 
-| モード | 説明 |
-|--------|------|
-| `default` | 通常のパーミッション |
-| `bypassPermissions` | パーミッションをバイパス（危険な操作も許可） |
-
-### システムプロンプト
-
-エージェントの振る舞いをカスタマイズするシステムプロンプトを設定できます。
-
-```json
-{
-  "system_prompt": "あなたはソフトウェアエンジニアです。コードレビューを行い、改善点を提案してください。"
-}
-```
+スキルとMCPサーバーはテナントに紐づき、`status`が`active`のものが自動的にエージェント実行時に使用されます。
 
 ## ワークスペース機能（S3）
 
-ワークスペースは、セッションごとに独立したファイル空間を提供します。ファイルはAmazon S3に保存されます。
+ワークスペースは、会話ごとに独立したファイル空間を提供します。ファイルはAmazon S3に保存されます。
 
 ### 事前準備
 
@@ -226,23 +234,24 @@ S3_WORKSPACE_PREFIX=workspaces/
 
 ### ワークスペースの有効化
 
-エージェント設定で有効化：
+会話作成時に `enable_workspace: true` を指定：
 
-```json
-{
-  "workspace_enabled": true
-}
+```bash
+curl -X POST http://localhost:8000/api/tenants/tenant-001/conversations \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "user-001",
+    "enable_workspace": true
+  }'
 ```
 
 ### ファイルアップロード付きエージェント実行
 
-`/execute` APIでファイルを添付できます（multipart/form-data）：
+ストリーミングAPIでファイルを添付できます（multipart/form-data）：
 
 ```bash
-curl -X POST "http://localhost:8000/api/tenants/tenant-001/execute" \
+curl -X POST "http://localhost:8000/api/tenants/tenant-001/conversations/uuid/stream" \
   -F 'request_data={
-    "agent_config_id": "default-agent",
-    "model_id": "claude-sonnet-4",
     "user_input": "このファイルを分析してください",
     "executor": {
       "user_id": "user-001",
@@ -256,28 +265,14 @@ curl -X POST "http://localhost:8000/api/tenants/tenant-001/execute" \
 ### ファイル一覧の取得
 
 ```bash
-curl "http://localhost:8000/api/tenants/tenant-001/sessions/session-001/files"
+curl "http://localhost:8000/api/tenants/tenant-001/conversations/uuid/files"
 ```
 
 ### ファイルのダウンロード
 
 ```bash
-curl -O "http://localhost:8000/api/tenants/tenant-001/sessions/session-001/files/download?path=outputs/result.json"
+curl -O "http://localhost:8000/api/tenants/tenant-001/conversations/uuid/files/download?path=outputs/result.json"
 ```
-
-### Presentedファイル
-
-AIが生成してユーザーに提示したいファイルは自動的に「Presented」としてマークされます（`outputs/`ディレクトリ以下）。
-
-```bash
-# Presentedファイル一覧の取得
-curl "http://localhost:8000/api/tenants/tenant-001/sessions/session-001/files/presented"
-```
-
-### セキュリティ
-
-- **S3アクセス制御**: バケットは完全プライベート、APIサーバー経由でのみアクセス
-- **テナント・セッション分離**: 異なるテナント・セッション間でのアクセスを禁止
 
 詳細は [workspace.md](./workspace.md) を参照してください。
 
@@ -291,9 +286,9 @@ Model Context Protocol (MCP) サーバーを使用して、外部サービスと
 curl -X POST http://localhost:8000/api/tenants/tenant-001/mcp-servers \
   -H "Content-Type: application/json" \
   -d '{
-    "server_id": "postgres-mcp",
-    "name": "PostgreSQL MCP",
-    "description": "PostgreSQLデータベース接続",
+    "name": "postgres-mcp",
+    "display_name": "PostgreSQL MCP",
+    "type": "stdio",
     "command": "npx",
     "args": ["-y", "@modelcontextprotocol/server-postgres"],
     "env": {
@@ -303,20 +298,14 @@ curl -X POST http://localhost:8000/api/tenants/tenant-001/mcp-servers \
   }'
 ```
 
-### エージェント設定へのMCPサーバー追加
-
-```json
-{
-  "mcp_servers": ["postgres-mcp", "github-mcp"]
-}
-```
-
 ### トークンの動的渡し
 
 MCPサーバーが認証トークンを必要とする場合、実行時に渡すことができます。
 
 ```json
 {
+  "user_input": "...",
+  "executor": {...},
   "tokens": {
     "servicenowToken": "dynamic-token-value"
   }
@@ -333,10 +322,10 @@ MCPサーバーが認証トークンを必要とする場合、実行時に渡�
 curl -X POST http://localhost:8000/api/tenants/tenant-001/skills \
   -H "Content-Type: application/json" \
   -d '{
-    "skill_id": "git-commit",
-    "name": "Git Commit",
+    "name": "git-commit",
+    "display_title": "Git Commit",
     "description": "変更をコミットする",
-    "skill_path": "skills/git-commit"
+    "file_path": "/skills/tenant-001/git-commit"
   }'
 ```
 
@@ -345,16 +334,20 @@ curl -X POST http://localhost:8000/api/tenants/tenant-001/skills \
 スキルファイルは以下の場所に配置します：
 
 ```
-/skills/tenant_{tenant_id}/skills/{skill_id}/
+/skills/tenant_{tenant_id}/skills/{skill_name}/
 ├── CLAUDE.md      # スキルの説明
 └── ...            # その他のファイル
 ```
 
-### エージェント設定へのスキル追加
+### 優先スキルの指定
+
+実行時に優先的に使用するスキルを指定できます：
 
 ```json
 {
-  "agent_skills": ["git-commit", "code-review"]
+  "user_input": "変更をコミットしてください",
+  "executor": {...},
+  "preferred_skills": ["git-commit"]
 }
 ```
 
@@ -363,52 +356,38 @@ curl -X POST http://localhost:8000/api/tenants/tenant-001/skills \
 ### 使用量サマリーの取得
 
 ```bash
-curl "http://localhost:8000/api/tenants/tenant-001/usage?start_date=2024-01-01&end_date=2024-01-31"
+curl "http://localhost:8000/api/tenants/tenant-001/usage?from_date=2024-01-01&to_date=2024-01-31&group_by=day"
 ```
 
 ### レスポンス例
 
 ```json
-{
-  "tenant_id": "tenant-001",
-  "period": {
-    "start_date": "2024-01-01",
-    "end_date": "2024-01-31"
-  },
-  "summary": {
-    "total_input_tokens": 1000000,
-    "total_output_tokens": 500000,
-    "total_cost_usd": 25.50
-  },
-  "by_model": [
-    {
-      "model_id": "claude-sonnet-4",
-      "input_tokens": 800000,
-      "cost_usd": 18.00
-    }
-  ],
-  "by_user": [
-    {
-      "user_id": "user-001",
-      "input_tokens": 500000,
-      "cost_usd": 12.75
-    }
-  ]
-}
+[
+  {
+    "period": "2024-01-01T00:00:00",
+    "total_tokens": 100000,
+    "input_tokens": 60000,
+    "output_tokens": 40000,
+    "cache_creation_tokens": 5000,
+    "cache_read_tokens": 10000,
+    "total_cost_usd": 2.50,
+    "execution_count": 50
+  }
+]
 ```
 
 ## ベストプラクティス
 
-### 1. セッション管理
+### 1. 会話管理
 
-- **新しいタスクには新しいセッション**: 関連のないタスクには新しいセッションを使用
-- **会話の継続**: 関連する質問は同じセッションで継続
-- **セッションのアーカイブ**: 不要になったセッションはアーカイブ
+- **新しいタスクには新しい会話**: 関連のないタスクには新しい会話を使用
+- **会話の継続**: 関連する質問は同じ会話で継続
+- **会話のアーカイブ**: 不要になった会話はアーカイブ
 
-### 2. エージェント設定
+### 2. テナント設定
 
-- **最小権限の原則**: 必要なツールのみを許可
 - **適切なシステムプロンプト**: タスクに応じた明確な指示
+- **デフォルトモデルの設定**: よく使用するモデルをデフォルトに
 - **ワークスペースの活用**: ファイル操作が必要な場合はワークスペースを有効化
 
 ### 3. コスト管理
@@ -441,15 +420,15 @@ curl "http://localhost:8000/api/tenants/tenant-001/usage?start_date=2024-01-01&e
 
 #### ツールが実行されない
 
-**原因**: `allowed_tools` に含まれていない
+**原因**: スキルやMCPサーバーのステータスが`inactive`
 
-**解決策**: エージェント設定で必要なツールを許可
+**解決策**: ステータスを`active`に更新
 
 #### ワークスペースにアクセスできない
 
-**原因**: セッションIDまたはテナントIDが不正
+**原因**: 会話IDまたはテナントIDが不正、またはS3権限が不足
 
-**解決策**: 正しいIDを使用しているか確認
+**解決策**: IDを確認し、IAMポリシーを確認
 
 ### ログの確認
 

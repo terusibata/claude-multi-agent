@@ -1,11 +1,11 @@
 """
 ワークスペースAPI（S3版）
-セッション専用ワークスペースのファイル管理
+会話専用ワークスペースのファイル管理
 
 新しいAPI設計:
-- GET /sessions/{session_id}/files: ファイル一覧
-- GET /sessions/{session_id}/files/download: ファイルダウンロード
-- GET /sessions/{session_id}/files/presented: AIが作成したファイル一覧
+- GET /conversations/{conversation_id}/files: ファイル一覧
+- GET /conversations/{conversation_id}/files/download: ファイルダウンロード
+- GET /conversations/{conversation_id}/files/presented: AIが作成したファイル一覧
 """
 import logging
 
@@ -25,24 +25,24 @@ logger = logging.getLogger(__name__)
 
 
 @router.get(
-    "/sessions/{session_id}/files",
+    "/conversations/{conversation_id}/files",
     response_model=WorkspaceFileList,
     summary="ファイル一覧取得",
 )
 async def list_files(
     tenant_id: str,
-    session_id: str,
+    conversation_id: str,
     db: AsyncSession = Depends(get_db),
 ):
     """
-    セッションのファイル一覧を取得します。
+    会話のファイル一覧を取得します。
 
     S3にアップロードされたファイルの一覧をDBから取得して返します。
     """
     workspace_service = WorkspaceService(db)
 
     try:
-        return await workspace_service.list_files(tenant_id, session_id)
+        return await workspace_service.list_files(tenant_id, conversation_id)
     except WorkspaceSecurityError as e:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -57,12 +57,12 @@ async def list_files(
 
 
 @router.get(
-    "/sessions/{session_id}/files/download",
+    "/conversations/{conversation_id}/files/download",
     summary="ファイルダウンロード",
 )
 async def download_file(
     tenant_id: str,
-    session_id: str,
+    conversation_id: str,
     path: str = Query(..., description="ファイルパス"),
     db: AsyncSession = Depends(get_db),
 ):
@@ -78,7 +78,7 @@ async def download_file(
 
     try:
         content, filename, content_type = await workspace_service.download_file(
-            tenant_id, session_id, path
+            tenant_id, conversation_id, path
         )
     except FileNotFoundError:
         raise HTTPException(
@@ -107,13 +107,13 @@ async def download_file(
 
 
 @router.get(
-    "/sessions/{session_id}/files/presented",
+    "/conversations/{conversation_id}/files/presented",
     response_model=PresentedFileList,
     summary="AIが作成したファイル一覧取得",
 )
 async def get_presented_files(
     tenant_id: str,
-    session_id: str,
+    conversation_id: str,
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -124,9 +124,9 @@ async def get_presented_files(
     workspace_service = WorkspaceService(db)
 
     try:
-        files = await workspace_service.get_presented_files(tenant_id, session_id)
+        files = await workspace_service.get_presented_files(tenant_id, conversation_id)
         return PresentedFileList(
-            chat_session_id=session_id,
+            conversation_id=conversation_id,
             files=files,
         )
     except WorkspaceSecurityError as e:

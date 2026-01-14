@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     # ============================================
     # データベース設定
     # ============================================
-    database_url: str = "postgresql+asyncpg://aiagent:aiagent_password@localhost:5432/aiagent_db"
+    database_url: str = "postgresql+asyncpg://aiagent:aiagent_password@localhost:5432/aiagent"
 
     # ============================================
     # AWS Bedrock設定

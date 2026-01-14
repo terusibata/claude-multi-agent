@@ -27,17 +27,15 @@ class UsageLog(Base):
     )
 
     # テナントID
-    tenant_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(100),
+        ForeignKey("tenants.tenant_id"),
+        nullable=False,
+        index=True,
+    )
 
     # ユーザーID
     user_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
-
-    # 使用したエージェント設定ID
-    agent_config_id: Mapped[Optional[str]] = mapped_column(
-        UUID(as_uuid=False),
-        ForeignKey("agent_configs.agent_config_id"),
-        nullable=True,
-    )
 
     # 使用したモデルID
     model_id: Mapped[str] = mapped_column(
@@ -49,10 +47,10 @@ class UsageLog(Base):
     # SDKセッションID
     session_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
 
-    # チャットセッションID
-    chat_session_id: Mapped[Optional[str]] = mapped_column(
+    # 会話ID
+    conversation_id: Mapped[Optional[str]] = mapped_column(
         UUID(as_uuid=False),
-        ForeignKey("chat_sessions.chat_session_id"),
+        ForeignKey("conversations.conversation_id"),
         nullable=True,
     )
 

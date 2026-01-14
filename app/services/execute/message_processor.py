@@ -73,18 +73,13 @@ class MessageProcessor:
             if session_id:
                 self.context.session_id = session_id
 
-            # エージェント設定情報をログエントリに追加
+            # テナント設定情報をログエントリに追加
             # システムプロンプトは機密情報を含む可能性があるため省略
-            system_prompt = self.context.agent_config.system_prompt or ""
-            log_entry.data["agent_config"] = {
-                "agent_config_id": self.context.agent_config.agent_config_id,
-                "name": self.context.agent_config.name,
+            system_prompt = self.context.system_prompt or ""
+            log_entry.data["tenant_config"] = {
+                "tenant_id": self.context.tenant_id,
                 "system_prompt_length": len(system_prompt),
                 "system_prompt_preview": system_prompt[:50] + "..." if len(system_prompt) > 50 else system_prompt,
-                "allowed_tools": self.context.agent_config.allowed_tools,
-                "permission_mode": self.context.agent_config.permission_mode,
-                "mcp_servers": self.context.agent_config.mcp_servers,
-                "agent_skills": self.context.agent_config.agent_skills,
             }
             log_entry.data["model_config"] = {
                 "model_id": self.context.model.model_id,
