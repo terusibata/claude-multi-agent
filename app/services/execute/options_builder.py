@@ -73,7 +73,7 @@ class OptionsBuilder:
         allowed_tools = ["*"]
 
         # テナントのアクティブなスキルを取得
-        skills = await self.skill_service.get_by_tenant(context.tenant_id)
+        skills = await self.skill_service.get_all_by_tenant(context.tenant_id)
         active_skills = [s for s in skills if s.status == "active"]
 
         # スキルがある場合はSkillツールを追加
