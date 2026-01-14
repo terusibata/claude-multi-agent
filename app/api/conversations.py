@@ -133,7 +133,7 @@ async def create_conversation(
 
     - **user_id**: ユーザーID（必須）
     - **model_id**: モデルID（オプション、省略時はテナントのデフォルト）
-    - **enable_workspace**: ワークスペースを有効にするか（オプション、デフォルトfalse）
+    - **workspace_enabled**: ワークスペースを有効にするか（オプション、デフォルトfalse）
 
     タイトルはストリーミング実行時にAIが自動生成します。
     """
@@ -177,7 +177,7 @@ async def create_conversation(
         tenant_id=tenant_id,
         user_id=request.user_id,
         model_id=model_id,
-        enable_workspace=request.enable_workspace,
+        workspace_enabled=request.workspace_enabled,
     )
 
     await db.commit()
@@ -535,7 +535,7 @@ async def stream_conversation(
         )
 
     # ファイルがある場合はワークスペースにアップロード
-    if files and conversation.enable_workspace:
+    if files and conversation.workspace_enabled:
         workspace_service = WorkspaceService(db)
         try:
             for file in files:
@@ -574,7 +574,7 @@ async def stream_conversation(
         conversation_id=conversation_id,
         tenant_id=tenant_id,
         model_id=conversation.model_id,
-        enable_workspace=conversation.enable_workspace,
+        workspace_enabled=conversation.workspace_enabled,
         user_input=stream_request.user_input,
         executor=stream_request.executor,
         tokens=stream_request.tokens,

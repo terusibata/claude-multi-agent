@@ -23,7 +23,7 @@ class StreamRequest(BaseModel):
 
     /conversations/{conversation_id}/stream エンドポイント用。
     conversation_idはURLパスから取得するため、このスキーマには含まれない。
-    model_id, enable_workspaceは会話レコードから取得する。
+    model_id, workspace_enabledは会話レコードから取得する。
     """
 
     # 必須パラメータ
@@ -55,7 +55,7 @@ class ExecuteRequest(BaseModel):
     conversation_id: str = Field(..., description="会話ID")
     tenant_id: str = Field(..., description="テナントID")
     model_id: str = Field(..., description="モデルID")
-    enable_workspace: bool = Field(default=False, description="ワークスペース有効フラグ")
+    workspace_enabled: bool = Field(default=False, description="ワークスペース有効フラグ")
 
     # リクエスト情報
     user_input: str = Field(..., description="ユーザー入力")

@@ -100,7 +100,7 @@ class ConversationService:
         user_id: str,
         model_id: str,
         title: Optional[str] = None,
-        enable_workspace: bool = False,
+        workspace_enabled: bool = False,
     ) -> Conversation:
         """
         会話を作成
@@ -111,7 +111,7 @@ class ConversationService:
             user_id: ユーザーID
             model_id: モデルID
             title: 会話タイトル
-            enable_workspace: ワークスペース有効フラグ
+            workspace_enabled: ワークスペース有効フラグ
 
         Returns:
             作成された会話
@@ -123,7 +123,7 @@ class ConversationService:
             model_id=model_id,
             title=title,
             status="active",
-            enable_workspace=enable_workspace,
+            workspace_enabled=workspace_enabled,
         )
         self.db.add(conversation)
         await self.db.flush()
@@ -137,7 +137,7 @@ class ConversationService:
         session_id: Optional[str] = None,
         title: Optional[str] = None,
         status: Optional[str] = None,
-        enable_workspace: Optional[bool] = None,
+        workspace_enabled: Optional[bool] = None,
     ) -> Optional[Conversation]:
         """
         会話を更新
@@ -148,7 +148,7 @@ class ConversationService:
             session_id: SDKセッションID
             title: タイトル
             status: ステータス
-            enable_workspace: ワークスペース有効フラグ
+            workspace_enabled: ワークスペース有効フラグ
 
         Returns:
             更新された会話（存在しない場合はNone）
@@ -163,8 +163,8 @@ class ConversationService:
             conversation.title = title
         if status is not None:
             conversation.status = status
-        if enable_workspace is not None:
-            conversation.enable_workspace = enable_workspace
+        if workspace_enabled is not None:
+            conversation.workspace_enabled = workspace_enabled
 
         await self.db.flush()
         await self.db.refresh(conversation)

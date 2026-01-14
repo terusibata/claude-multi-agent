@@ -283,7 +283,7 @@ class ExecuteService:
 
                 elif isinstance(message, ResultMessage):
                     # 実行完了後のワークスペース同期処理
-                    if context.enable_workspace:
+                    if context.workspace_enabled:
                         await self._sync_workspace_after_execution(context)
 
                     result_events = await self._handle_result_message(

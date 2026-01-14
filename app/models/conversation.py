@@ -61,7 +61,7 @@ class Conversation(Base):
     )
 
     # ワークスペース有効フラグ
-    enable_workspace: Mapped[bool] = mapped_column(
+    workspace_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )
 

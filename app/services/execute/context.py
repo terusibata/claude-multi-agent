@@ -31,7 +31,7 @@ class ExecutionContext:
     message_seq: int = 0
 
     # SDK設定
-    enable_workspace: bool = False
+    workspace_enabled: bool = False
     preferred_skills: list[str] = field(default_factory=list)
 
     # 実行時情報
@@ -45,7 +45,7 @@ class ExecutionContext:
     def __post_init__(self):
         """初期化後の処理"""
         self.conversation_id = self.request.conversation_id
-        self.enable_workspace = self.request.enable_workspace
+        self.workspace_enabled = self.request.workspace_enabled
         self.preferred_skills = self.request.preferred_skills or []
 
     @property

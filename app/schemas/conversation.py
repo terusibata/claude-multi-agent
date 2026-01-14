@@ -17,7 +17,7 @@ class ConversationResponse(BaseModel):
     model_id: str
     title: Optional[str] = None
     status: str
-    enable_workspace: bool = False
+    workspace_enabled: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -69,4 +69,4 @@ class ConversationCreateRequest(BaseModel):
 
     user_id: str = Field(..., description="ユーザーID")
     model_id: Optional[str] = Field(None, description="モデルID（省略時はテナントのデフォルト）")
-    enable_workspace: bool = Field(default=False, description="ワークスペースを有効にするか")
+    workspace_enabled: bool = Field(default=False, description="ワークスペースを有効にするか")

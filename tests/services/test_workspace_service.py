@@ -91,7 +91,7 @@ class TestWorkspaceFileOperations:
             tenant_id="workspace-test-tenant",
             user_id="workspace-test-user",
             model_id="workspace-test-model",
-            enable_workspace=True,
+            workspace_enabled=True,
         )
         db_session.add(conversation)
         await db_session.flush()

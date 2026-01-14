@@ -136,7 +136,7 @@ async def sample_conversation(
     conversation_data = {
         "user_id": "test-user-001",
         "model_id": sample_model["model_id"],
-        "enable_workspace": False,
+        "workspace_enabled": False,
     }
     response = await client.post(
         f"/api/tenants/{sample_tenant['tenant_id']}/conversations",

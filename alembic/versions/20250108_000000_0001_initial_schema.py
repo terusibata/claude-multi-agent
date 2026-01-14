@@ -107,7 +107,7 @@ def upgrade() -> None:
         sa.Column('model_id', sa.String(100), sa.ForeignKey('models.model_id'), nullable=False),
         sa.Column('title', sa.String(500), nullable=True),
         sa.Column('status', sa.String(20), nullable=False, server_default='active'),
-        sa.Column('enable_workspace', sa.Boolean, nullable=False, server_default='false'),
+        sa.Column('workspace_enabled', sa.Boolean, nullable=False, server_default='false'),
         sa.Column('workspace_path', sa.String(500), nullable=True),
         sa.Column('workspace_created_at', sa.DateTime(timezone=True), nullable=True),
         sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now()),

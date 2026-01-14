@@ -16,7 +16,7 @@ class TestConversationsCRUD:
         conversation_data = {
             "user_id": "user-001",
             "model_id": sample_model["model_id"],
-            "enable_workspace": False,
+            "workspace_enabled": False,
         }
 
         response = await client.post(
@@ -30,7 +30,7 @@ class TestConversationsCRUD:
         assert data["user_id"] == "user-001"
         assert data["model_id"] == sample_model["model_id"]
         assert data["status"] == "active"
-        assert data["enable_workspace"] is False
+        assert data["workspace_enabled"] is False
         assert "conversation_id" in data
 
     @pytest.mark.integration
@@ -41,7 +41,7 @@ class TestConversationsCRUD:
         conversation_data = {
             "user_id": "user-002",
             "model_id": sample_model["model_id"],
-            "enable_workspace": True,
+            "workspace_enabled": True,
         }
 
         response = await client.post(
@@ -51,7 +51,7 @@ class TestConversationsCRUD:
         assert response.status_code == 201
 
         data = response.json()
-        assert data["enable_workspace"] is True
+        assert data["workspace_enabled"] is True
 
     @pytest.mark.integration
     async def test_create_conversation_uses_tenant_default_model(

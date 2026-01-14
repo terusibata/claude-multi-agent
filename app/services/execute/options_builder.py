@@ -66,7 +66,7 @@ class OptionsBuilder:
         """
         logger.info(
             "SDK オプション構築中...",
-            workspace_enabled=context.enable_workspace,
+            workspace_enabled=context.workspace_enabled,
         )
 
         # 許可するツールリストの構築（全ツール許可）
@@ -182,7 +182,7 @@ class OptionsBuilder:
         # デフォルトはテナント専用のcwd
         cwd = self.skill_service.get_tenant_cwd(context.tenant_id)
 
-        if context.enable_workspace:
+        if context.workspace_enabled:
             # ワークスペース情報を取得
             workspace_info = await self.workspace_service.get_workspace_info(
                 context.tenant_id, context.conversation_id
@@ -197,7 +197,7 @@ class OptionsBuilder:
                     context.tenant_id, context.conversation_id
                 )
 
-            if workspace_info and workspace_info.enable_workspace:
+            if workspace_info and workspace_info.workspace_enabled:
                 # S3からローカルに同期
                 cwd = await self.workspace_service.sync_to_local(
                     context.tenant_id, context.conversation_id
@@ -217,14 +217,14 @@ class OptionsBuilder:
         system_prompt: str,
     ) -> str:
         """ワークスペースコンテキストをシステムプロンプトに追加"""
-        if not context.enable_workspace:
+        if not context.workspace_enabled:
             return system_prompt
 
         workspace_info = await self.workspace_service.get_workspace_info(
             context.tenant_id, context.conversation_id
         )
 
-        if workspace_info and workspace_info.enable_workspace:
+        if workspace_info and workspace_info.workspace_enabled:
             workspace_context = await self.workspace_service.get_context_for_ai(
                 context.tenant_id, context.conversation_id
             )
