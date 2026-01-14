@@ -4,6 +4,7 @@
 """
 import os
 import mimetypes
+import shutil
 from pathlib import Path
 from typing import Any, Callable
 
@@ -52,14 +53,24 @@ def create_present_files_handler(workspace_cwd: str = ""):
 
         Args:
             args: ツール引数
-                - file_paths: ファイルパスのリスト
+                - file_paths: ファイルパスのリスト（または単一の文字列パス）
                 - description: ファイルの説明
 
         Returns:
             ツール実行結果
         """
-        file_paths = args.get("file_paths", [])
+        file_paths_input = args.get("file_paths", [])
         description = args.get("description", "")
+
+        # file_pathsが文字列の場合はリストに変換
+        if isinstance(file_paths_input, str):
+            file_paths = [file_paths_input]
+            logger.info(
+                "ファイル提示: file_pathsを文字列からリストに変換",
+                original=file_paths_input
+            )
+        else:
+            file_paths = file_paths_input
 
         files_info = []
         for file_path in file_paths:
@@ -70,13 +81,56 @@ def create_present_files_handler(workspace_cwd: str = ""):
                 full_path = file_path
 
             path = Path(full_path)
-            if path.exists():
+            if path.exists() and path.is_file():
                 # MIMEタイプを推測
                 mime_type, _ = mimetypes.guess_type(str(path))
 
+                # ファイルがワークスペース外にある場合、ワークスペース内にコピー
+                relative_path = file_path
+                if workspace_cwd and not str(path.absolute()).startswith(str(Path(workspace_cwd).absolute())):
+                    # ワークスペース外のファイル → ワークスペース内にコピー
+                    dest_path = Path(workspace_cwd) / path.name
+
+                    # 同名ファイルが存在する場合はユニークな名前を生成
+                    counter = 1
+                    original_name = dest_path.stem
+                    suffix = dest_path.suffix
+                    while dest_path.exists():
+                        dest_path = Path(workspace_cwd) / f"{original_name}_{counter}{suffix}"
+                        counter += 1
+
+                    try:
+                        shutil.copy2(str(path), str(dest_path))
+                        relative_path = dest_path.name
+                        logger.info(
+                            "ファイル提示: ワークスペース外ファイルをコピー",
+                            source=str(path),
+                            destination=str(dest_path)
+                        )
+                    except Exception as copy_error:
+                        logger.error(
+                            "ファイル提示: ファイルコピー失敗",
+                            source=str(path),
+                            error=str(copy_error)
+                        )
+                        files_info.append({
+                            "path": full_path,
+                            "relative_path": file_path,
+                            "name": path.name,
+                            "exists": False,
+                            "error": f"コピー失敗: {str(copy_error)}"
+                        })
+                        continue
+                elif workspace_cwd:
+                    # ワークスペース内のファイル → 相対パスを計算
+                    try:
+                        relative_path = str(path.absolute().relative_to(Path(workspace_cwd).absolute()))
+                    except ValueError:
+                        relative_path = path.name
+
                 files_info.append({
                     "path": str(path.absolute()),
-                    "relative_path": file_path,
+                    "relative_path": relative_path,
                     "name": path.name,
                     "size": path.stat().st_size,
                     "mime_type": mime_type or "application/octet-stream",
@@ -86,6 +140,7 @@ def create_present_files_handler(workspace_cwd: str = ""):
                     "ファイル提示: ファイル検出",
                     file_path=file_path,
                     full_path=str(path.absolute()),
+                    relative_path=relative_path,
                     size=path.stat().st_size
                 )
             else:
@@ -106,18 +161,22 @@ def create_present_files_handler(workspace_cwd: str = ""):
         missing_files = [f for f in files_info if not f.get("exists")]
 
         # 結果メッセージを構築
-        result_text = f"ファイルを提示しました: {description}\n\n"
-
         if existing_files:
+            result_text = f"ファイルを提示しました: {description}\n\n"
             result_text += "【提示されたファイル】\n"
             for f in existing_files:
                 result_text += f"• {f['name']} ({f['size']} bytes)\n"
-                result_text += f"  パス: {f['relative_path']}\n"
+                result_text += f"  ダウンロードパス: {f['relative_path']}\n"
+        else:
+            result_text = f"提示するファイルが見つかりませんでした: {description}\n\n"
 
         if missing_files:
             result_text += "\n【見つからなかったファイル】\n"
             for f in missing_files:
-                result_text += f"• {f['relative_path']}\n"
+                result_text += f"• {f['relative_path']}"
+                if f.get("error"):
+                    result_text += f" ({f['error']})"
+                result_text += "\n"
 
         return {
             "content": [{
@@ -202,16 +261,21 @@ def create_file_presentation_mcp_server(workspace_cwd: str = ""):
 
 # ファイル提示ツールに関するシステムプロンプト
 FILE_PRESENTATION_PROMPT = """
-## ファイル提示について
+## ファイル作成と提示について
 
+### 重要: ファイルパスの指定方法
+- ファイルを作成する際は、**必ず相対パス**（例: `hello.py`、`output/result.txt`）を使用してください
+- **絶対パス（/tmp/hello.py など）は使用しないでください**
+- カレントディレクトリ（作業ディレクトリ）に直接ファイルを作成してください
+
+### ファイル提示の手順
 Write、Edit、NotebookEditツールでファイルを作成または編集した場合は、作業完了後に必ず`mcp__file-presentation__present_files`ツールを使用してユーザーにファイルを提示してください。
 
 ### present_filesツールの使用方法
-- file_paths: 作成・編集したファイルのパスをリストで指定
+- file_paths: 作成・編集したファイルのパスを**配列で**指定（例: `["hello.py"]`）
 - description: ファイルの内容や目的を簡潔に説明
 
-### 例
-ファイルを作成した後:
+### 正しい例
 ```
 mcp__file-presentation__present_files({
   "file_paths": ["hello.py"],
@@ -219,7 +283,16 @@ mcp__file-presentation__present_files({
 })
 ```
 
-複数ファイルを作成した場合:
+### 間違った例（絶対パスは使わない）
+```
+// NG: 絶対パスは使わないでください
+mcp__file-presentation__present_files({
+  "file_paths": ["/tmp/hello.py"],
+  "description": "..."
+})
+```
+
+### 複数ファイルの場合
 ```
 mcp__file-presentation__present_files({
   "file_paths": ["src/main.py", "src/utils.py", "README.md"],
