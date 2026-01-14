@@ -12,12 +12,12 @@ class ConversationResponse(BaseModel):
 
     conversation_id: str
     session_id: Optional[str] = None
-    parent_session_id: Optional[str] = None
     tenant_id: str
     user_id: str
-    agent_config_id: Optional[str] = None
+    model_id: str
     title: Optional[str] = None
     status: str
+    enable_workspace: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -68,4 +68,5 @@ class ConversationCreateRequest(BaseModel):
     """会話作成リクエスト"""
 
     user_id: str = Field(..., description="ユーザーID")
-    agent_config_id: str = Field(..., description="エージェント設定ID")
+    model_id: Optional[str] = Field(None, description="モデルID（省略時はテナントのデフォルト）")
+    enable_workspace: bool = Field(default=False, description="ワークスペースを有効にするか")

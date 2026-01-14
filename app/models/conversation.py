@@ -14,6 +14,8 @@ from app.database import Base
 
 if TYPE_CHECKING:
     from app.models.conversation_file import ConversationFile
+    from app.models.model import Model
+    from app.models.tenant import Tenant
 
 
 class Conversation(Base):
@@ -32,20 +34,22 @@ class Conversation(Base):
     # SDKセッションID（resume用）
     session_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
 
-    # 親セッションID（fork時）
-    parent_session_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
-
     # テナントID
-    tenant_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(100),
+        ForeignKey("tenants.tenant_id"),
+        nullable=False,
+        index=True,
+    )
 
     # ユーザーID
     user_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
 
-    # 使用したエージェント設定ID
-    agent_config_id: Mapped[Optional[str]] = mapped_column(
-        UUID(as_uuid=False),
-        ForeignKey("agent_configs.agent_config_id"),
-        nullable=True,
+    # 使用するモデルID
+    model_id: Mapped[str] = mapped_column(
+        String(100),
+        ForeignKey("models.model_id"),
+        nullable=False,
     )
 
     # 会話タイトル
@@ -57,7 +61,7 @@ class Conversation(Base):
     )
 
     # ワークスペース有効フラグ
-    workspace_enabled: Mapped[bool] = mapped_column(
+    enable_workspace: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )
 
@@ -78,7 +82,8 @@ class Conversation(Base):
     )
 
     # リレーションシップ
-    agent_config = relationship("AgentConfig", lazy="selectin")
+    tenant: Mapped["Tenant"] = relationship("Tenant", lazy="selectin")
+    model: Mapped["Model"] = relationship("Model", lazy="selectin")
     files: Mapped[list["ConversationFile"]] = relationship(
         "ConversationFile",
         back_populates="conversation",

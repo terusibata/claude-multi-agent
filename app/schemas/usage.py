@@ -14,7 +14,6 @@ class UsageLogResponse(BaseModel):
     usage_log_id: str
     tenant_id: str
     user_id: str
-    agent_config_id: Optional[str] = None
     model_id: str
     session_id: Optional[str] = None
     conversation_id: Optional[str] = None

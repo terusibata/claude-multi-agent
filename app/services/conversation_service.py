@@ -98,8 +98,9 @@ class ConversationService:
         conversation_id: str,
         tenant_id: str,
         user_id: str,
-        agent_config_id: Optional[str] = None,
+        model_id: str,
         title: Optional[str] = None,
+        enable_workspace: bool = False,
     ) -> Conversation:
         """
         会話を作成
@@ -108,8 +109,9 @@ class ConversationService:
             conversation_id: 会話ID
             tenant_id: テナントID
             user_id: ユーザーID
-            agent_config_id: エージェント設定ID
+            model_id: モデルID
             title: 会話タイトル
+            enable_workspace: ワークスペース有効フラグ
 
         Returns:
             作成された会話
@@ -118,9 +120,10 @@ class ConversationService:
             conversation_id=conversation_id,
             tenant_id=tenant_id,
             user_id=user_id,
-            agent_config_id=agent_config_id,
+            model_id=model_id,
             title=title,
             status="active",
+            enable_workspace=enable_workspace,
         )
         self.db.add(conversation)
         await self.db.flush()
@@ -132,9 +135,9 @@ class ConversationService:
         conversation_id: str,
         tenant_id: str,
         session_id: Optional[str] = None,
-        parent_session_id: Optional[str] = None,
         title: Optional[str] = None,
         status: Optional[str] = None,
+        enable_workspace: Optional[bool] = None,
     ) -> Optional[Conversation]:
         """
         会話を更新
@@ -143,9 +146,9 @@ class ConversationService:
             conversation_id: 会話ID
             tenant_id: テナントID
             session_id: SDKセッションID
-            parent_session_id: 親セッションID
             title: タイトル
             status: ステータス
+            enable_workspace: ワークスペース有効フラグ
 
         Returns:
             更新された会話（存在しない場合はNone）
@@ -156,12 +159,12 @@ class ConversationService:
 
         if session_id is not None:
             conversation.session_id = session_id
-        if parent_session_id is not None:
-            conversation.parent_session_id = parent_session_id
         if title is not None:
             conversation.title = title
         if status is not None:
             conversation.status = status
+        if enable_workspace is not None:
+            conversation.enable_workspace = enable_workspace
 
         await self.db.flush()
         await self.db.refresh(conversation)

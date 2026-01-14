@@ -4,9 +4,8 @@
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, Optional
-from uuid import uuid4
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
 
 class ExecutorInfo(BaseModel):
@@ -24,11 +23,10 @@ class StreamRequest(BaseModel):
 
     /conversations/{conversation_id}/stream エンドポイント用。
     conversation_idはURLパスから取得するため、このスキーマには含まれない。
+    model_id, enable_workspaceは会話レコードから取得する。
     """
 
     # 必須パラメータ
-    agent_config_id: str = Field(..., description="エージェント実行設定ID")
-    model_id: str = Field(..., description="モデルID")
     user_input: str = Field(..., description="ユーザー入力")
     executor: ExecutorInfo = Field(..., description="実行者情報")
 
@@ -38,92 +36,42 @@ class StreamRequest(BaseModel):
         description="MCPサーバー用認証情報（例: {'servicenowToken': 'xxx'}）",
     )
 
-    # 任意パラメータ
-    resume_session_id: Optional[str] = Field(
-        None, description="継続するSDKセッションID"
-    )
-    fork_session: bool = Field(default=False, description="セッションをフォークするか")
-
-    # ワークスペース設定
-    enable_workspace: bool = Field(
-        default=False,
-        description="会話専用ワークスペースを有効にする",
-    )
-
     # Skill/ツール優先指定
     preferred_skills: Optional[list[str]] = Field(
         None,
-        description="優先的に使用するSkill/MCPサーバー名のリスト",
+        description="優先的に使用するSkill名のリスト",
     )
-
-    def to_execute_request(self, conversation_id: str) -> "ExecuteRequest":
-        """
-        ExecuteRequestに変換
-
-        Args:
-            conversation_id: URLパスから取得した会話ID
-
-        Returns:
-            ExecuteRequest
-        """
-        return ExecuteRequest(
-            agent_config_id=self.agent_config_id,
-            model_id=self.model_id,
-            conversation_id=conversation_id,
-            user_input=self.user_input,
-            executor=self.executor,
-            tokens=self.tokens,
-            resume_session_id=self.resume_session_id,
-            fork_session=self.fork_session,
-            enable_workspace=self.enable_workspace,
-            preferred_skills=self.preferred_skills,
-        )
 
 
 class ExecuteRequest(BaseModel):
-    """エージェント実行リクエスト"""
+    """
+    エージェント実行リクエスト（内部用）
 
-    # 必須パラメータ
-    agent_config_id: str = Field(..., description="エージェント実行設定ID")
+    APIからExecuteServiceに渡される内部リクエスト。
+    会話から取得した情報を含む。
+    """
+
+    # 会話情報（会話から取得）
+    conversation_id: str = Field(..., description="会話ID")
+    tenant_id: str = Field(..., description="テナントID")
     model_id: str = Field(..., description="モデルID")
-    conversation_id: Optional[str] = Field(
-        None, description="会話ID（省略時は新規作成、指定時は継続）"
-    )
+    enable_workspace: bool = Field(default=False, description="ワークスペース有効フラグ")
+
+    # リクエスト情報
     user_input: str = Field(..., description="ユーザー入力")
     executor: ExecutorInfo = Field(..., description="実行者情報")
 
-    # MCPサーバー用認証情報（一時トークン）
+    # MCPサーバー用認証情報
     tokens: Optional[dict[str, str]] = Field(
         None,
-        description="MCPサーバー用認証情報（例: {'servicenowToken': 'xxx'}）",
+        description="MCPサーバー用認証情報",
     )
 
-    # 任意パラメータ
-    resume_session_id: Optional[str] = Field(
-        None, description="継続するSDKセッションID"
-    )
-    fork_session: bool = Field(default=False, description="セッションをフォークするか")
-
-    # ワークスペース設定
-    enable_workspace: bool = Field(
-        default=False,
-        description="会話専用ワークスペースを有効にする",
-    )
-
-    # Skill/ツール優先指定
+    # Skill優先指定
     preferred_skills: Optional[list[str]] = Field(
         None,
-        description="優先的に使用するSkill/MCPサーバー名のリスト（例: ['servicenow-docs']）。指定されたツールを必ず最初に使用するよう指示される",
+        description="優先的に使用するSkill名のリスト",
     )
-
-    @model_validator(mode="after")
-    def ensure_conversation_id(self) -> "ExecuteRequest":
-        """conversation_idがNoneまたは空文字列の場合は新しいUUIDを生成"""
-        if not self.conversation_id or (
-            isinstance(self.conversation_id, str) and self.conversation_id.strip() == ""
-        ):
-            self.conversation_id = str(uuid4())
-        return self
 
 
 class UsageInfo(BaseModel):

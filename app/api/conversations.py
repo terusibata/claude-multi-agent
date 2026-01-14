@@ -1,29 +1,42 @@
 """
-会話・履歴API
-会話と会話履歴の管理
+会話管理・ストリーミングAPI
 """
 import asyncio
 import json
 import logging
 from datetime import datetime
 from typing import AsyncIterator, Optional
+from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    UploadFile,
+    status,
+)
+from pydantic import ValidationError
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
 from app.database import get_db
+from app.models.model import Model
+from app.models.tenant import Tenant
 from app.schemas.conversation import (
-    ConversationResponse,
-    MessageLogResponse,
-    ConversationUpdateRequest,
+    ConversationArchiveRequest,
     ConversationCreateRequest,
+    ConversationResponse,
+    ConversationUpdateRequest,
+    MessageLogResponse,
 )
 from app.schemas.execute import ExecuteRequest, StreamRequest
-from app.services.agent_config_service import AgentConfigService
 from app.services.conversation_service import ConversationService
 from app.services.execute_service import ExecuteService
-from app.services.model_service import ModelService
+from app.services.tenant_service import TenantService
 from app.services.workspace_service import WorkspaceService
 from app.utils.streaming import format_error_event
 
@@ -35,7 +48,16 @@ EVENT_TIMEOUT_SECONDS = 300  # イベント待機タイムアウト（秒）
 MAX_CONSECUTIVE_TIMEOUTS = 3  # 連続タイムアウトの最大回数
 
 
-@router.get("", response_model=list[ConversationResponse], summary="会話一覧取得")
+# =============================================================================
+# 会話管理エンドポイント
+# =============================================================================
+
+
+@router.get(
+    "",
+    response_model=list[ConversationResponse],
+    summary="会話一覧取得",
+)
 async def get_conversations(
     tenant_id: str,
     user_id: Optional[str] = Query(None, description="ユーザーIDフィルター"),
@@ -49,6 +71,15 @@ async def get_conversations(
     """
     テナントの会話一覧を取得します。
     """
+    # テナント存在確認
+    tenant_service = TenantService(db)
+    tenant = await tenant_service.get_by_id(tenant_id)
+    if not tenant:
+        raise HTTPException(
+            status_code=404,
+            detail=f"テナント '{tenant_id}' が見つかりません",
+        )
+
     service = ConversationService(db)
     return await service.get_conversations_by_tenant(
         tenant_id=tenant_id,
@@ -84,6 +115,75 @@ async def get_conversation(
     return conversation
 
 
+@router.post(
+    "",
+    response_model=ConversationResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="会話作成",
+)
+async def create_conversation(
+    tenant_id: str,
+    request: ConversationCreateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    新しい会話を作成します。
+
+    ## リクエストボディ
+
+    - **user_id**: ユーザーID（必須）
+    - **model_id**: モデルID（オプション、省略時はテナントのデフォルト）
+    - **enable_workspace**: ワークスペースを有効にするか（オプション、デフォルトfalse）
+
+    タイトルはストリーミング実行時にAIが自動生成します。
+    """
+    # テナント存在確認
+    tenant_service = TenantService(db)
+    tenant = await tenant_service.get_by_id(tenant_id)
+    if not tenant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"テナント '{tenant_id}' が見つかりません",
+        )
+
+    # モデルIDの決定（リクエスト > テナントのデフォルト）
+    model_id = request.model_id or tenant.model_id
+    if not model_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="model_idが指定されていません。リクエストまたはテナントのデフォルトモデルを設定してください。",
+        )
+
+    # モデルの存在・アクティブ確認
+    model_query = select(Model).where(Model.model_id == model_id)
+    model_result = await db.execute(model_query)
+    model = model_result.scalar_one_or_none()
+    if not model:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"モデル '{model_id}' が見つかりません",
+        )
+    if model.status != "active":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"モデル '{model_id}' は現在利用できません",
+        )
+
+    # 会話作成
+    conversation_id = str(uuid4())
+    service = ConversationService(db)
+    conversation = await service.create_conversation(
+        conversation_id=conversation_id,
+        tenant_id=tenant_id,
+        user_id=request.user_id,
+        model_id=model_id,
+        enable_workspace=request.enable_workspace,
+    )
+
+    await db.commit()
+    return conversation
+
+
 @router.put(
     "/{conversation_id}",
     response_model=ConversationResponse,
@@ -110,6 +210,7 @@ async def update_conversation(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"会話 '{conversation_id}' が見つかりません",
         )
+    await db.commit()
     return conversation
 
 
@@ -121,6 +222,7 @@ async def update_conversation(
 async def archive_conversation(
     tenant_id: str,
     conversation_id: str,
+    request: ConversationArchiveRequest,
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -133,6 +235,7 @@ async def archive_conversation(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"会話 '{conversation_id}' が見つかりません",
         )
+    await db.commit()
     return conversation
 
 
@@ -156,6 +259,12 @@ async def delete_conversation(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"会話 '{conversation_id}' が見つかりません",
         )
+    await db.commit()
+
+
+# =============================================================================
+# メッセージログエンドポイント
+# =============================================================================
 
 
 @router.get(
@@ -177,48 +286,16 @@ async def get_message_logs(
     return logs
 
 
-@router.post(
-    "",
-    response_model=ConversationResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="会話作成",
-)
-async def create_conversation(
-    tenant_id: str,
-    request: ConversationCreateRequest,
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    新しい会話を作成します。
-
-    ## リクエストボディ
-
-    - **user_id**: ユーザーID（必須）
-    - **agent_config_id**: エージェント設定ID（必須）
-
-    タイトルはストリーミング実行時にAIが自動生成します。
-    """
-    from uuid import uuid4
-
-    service = ConversationService(db)
-    conversation_id = str(uuid4())
-
-    conversation = await service.create_conversation(
-        conversation_id=conversation_id,
-        tenant_id=tenant_id,
-        user_id=request.user_id,
-        agent_config_id=request.agent_config_id,
-        title=None,
-    )
-    return conversation
+# =============================================================================
+# ストリーミング実行
+# =============================================================================
 
 
 async def _background_execution(
     execute_service: ExecuteService,
     request: ExecuteRequest,
-    agent_config,
-    model,
-    tenant_id: str,
+    tenant: Tenant,
+    model: Model,
     event_queue: asyncio.Queue,
 ) -> None:
     """
@@ -227,17 +304,15 @@ async def _background_execution(
     Args:
         execute_service: 実行サービス
         request: 実行リクエスト
-        agent_config: エージェント設定
+        tenant: テナント
         model: モデル定義
-        tenant_id: テナントID
         event_queue: イベントキュー
     """
     try:
         async for event in execute_service.execute_streaming(
             request=request,
-            agent_config=agent_config,
+            tenant=tenant,
             model=model,
-            tenant_id=tenant_id,
         ):
             await event_queue.put(event)
     except Exception as e:
@@ -258,9 +333,8 @@ async def _background_execution(
 async def _event_generator(
     execute_service: ExecuteService,
     request: ExecuteRequest,
-    agent_config,
-    model,
-    tenant_id: str,
+    tenant: Tenant,
+    model: Model,
 ) -> AsyncIterator[dict]:
     """
     SSEイベントジェネレータ
@@ -269,9 +343,8 @@ async def _event_generator(
     Args:
         execute_service: 実行サービス
         request: 実行リクエスト
-        agent_config: エージェント設定
+        tenant: テナント
         model: モデル定義
-        tenant_id: テナントID
 
     Yields:
         SSEイベント
@@ -283,9 +356,8 @@ async def _event_generator(
         _background_execution(
             execute_service,
             request,
-            agent_config,
+            tenant,
             model,
-            tenant_id,
             event_queue,
         )
     )
@@ -401,19 +473,29 @@ async def stream_conversation(
 
     ## StreamRequest JSON フィールド
 
-    - **agent_config_id**: エージェント実行設定ID
-    - **model_id**: 使用するモデルID
-    - **user_input**: ユーザー入力
-    - **executor**: 実行者情報
+    - **user_input**: ユーザー入力（必須）
+    - **executor**: 実行者情報（必須）
     - **tokens**: MCPサーバー用認証情報（オプション）
-    - **resume_session_id**: 継続するSDKセッションID（オプション）
-    - **fork_session**: セッションをフォークするか（オプション）
-    - **enable_workspace**: ワークスペースを有効にするか（オプション）
+    - **preferred_skills**: 優先使用するスキル名のリスト（オプション）
 
     ## レスポンス
 
     Server-Sent Events (SSE) 形式でストリーミング送信されます。
     """
+    # テナント取得・検証
+    tenant_service = TenantService(db)
+    tenant = await tenant_service.get_by_id(tenant_id)
+    if not tenant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"テナント '{tenant_id}' が見つかりません",
+        )
+    if tenant.status != "active":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"テナント '{tenant_id}' は現在利用できません",
+        )
+
     # 会話の存在確認
     conversation_service = ConversationService(db)
     conversation = await conversation_service.get_conversation_by_id(conversation_id, tenant_id)
@@ -422,23 +504,39 @@ async def stream_conversation(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"会話 '{conversation_id}' が見つかりません",
         )
+    if conversation.status != "active":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"会話 '{conversation_id}' はアーカイブされています",
+        )
 
     # リクエストをパース
     try:
         stream_request = StreamRequest.model_validate_json(request_data)
-    except Exception as e:
+    except ValidationError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"リクエストデータのパースに失敗しました: {str(e)}",
         )
 
-    # StreamRequestをExecuteRequestに変換
-    request = stream_request.to_execute_request(conversation_id)
+    # モデル定義の取得
+    model_query = select(Model).where(Model.model_id == conversation.model_id)
+    model_result = await db.execute(model_query)
+    model = model_result.scalar_one_or_none()
+    if not model:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"モデル '{conversation.model_id}' が見つかりません",
+        )
+    if model.status != "active":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"モデル '{conversation.model_id}' は非推奨です",
+        )
 
-    # ファイルがある場合はS3にアップロード
-    if files:
+    # ファイルがある場合はワークスペースにアップロード
+    if files and conversation.enable_workspace:
         workspace_service = WorkspaceService(db)
-        file_data = []
         try:
             for file in files:
                 if not file.filename:
@@ -446,13 +544,11 @@ async def stream_conversation(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail="ファイル名が指定されていません",
                     )
-                content = await file.read()
-                content_type = file.content_type or "application/octet-stream"
-                file_data.append((file.filename, content, content_type))
-
-            await workspace_service.upload_files(tenant_id, conversation_id, file_data)
-            request.enable_workspace = True
-            await workspace_service.enable_workspace(tenant_id, conversation_id)
+                await workspace_service.upload_user_file(
+                    tenant_id=tenant_id,
+                    conversation_id=conversation_id,
+                    file=file,
+                )
             await db.commit()
         except HTTPException:
             await db.rollback()
@@ -473,33 +569,17 @@ async def stream_conversation(
                 detail=f"ファイルのアップロードに失敗しました: {str(e)}",
             )
 
-    # エージェント設定の取得
-    config_service = AgentConfigService(db)
-    agent_config = await config_service.get_by_id(request.agent_config_id, tenant_id)
-    if not agent_config:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"エージェント設定 '{request.agent_config_id}' が見つかりません",
-        )
-    if agent_config.status != "active":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"エージェント設定 '{request.agent_config_id}' は無効です",
-        )
-
-    # モデル定義の取得
-    model_service = ModelService(db)
-    model = await model_service.get_by_id(request.model_id)
-    if not model:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"モデル '{request.model_id}' が見つかりません",
-        )
-    if model.status != "active":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"モデル '{request.model_id}' は非推奨です",
-        )
+    # ExecuteRequest作成
+    execute_request = ExecuteRequest(
+        conversation_id=conversation_id,
+        tenant_id=tenant_id,
+        model_id=conversation.model_id,
+        enable_workspace=conversation.enable_workspace,
+        user_input=stream_request.user_input,
+        executor=stream_request.executor,
+        tokens=stream_request.tokens,
+        preferred_skills=stream_request.preferred_skills,
+    )
 
     # 実行サービスの作成
     execute_service = ExecuteService(db)
@@ -508,10 +588,9 @@ async def stream_conversation(
     return EventSourceResponse(
         _event_generator(
             execute_service=execute_service,
-            request=request,
-            agent_config=agent_config,
+            request=execute_request,
+            tenant=tenant,
             model=model,
-            tenant_id=tenant_id,
         ),
         media_type="text/event-stream",
     )

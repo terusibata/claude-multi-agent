@@ -41,7 +41,6 @@ class UsageService:
         cache_creation_tokens: int = 0,
         cache_read_tokens: int = 0,
         cost_usd: Decimal = Decimal("0"),
-        agent_config_id: Optional[str] = None,
         session_id: Optional[str] = None,
         conversation_id: Optional[str] = None,
     ) -> UsageLog:
@@ -57,7 +56,6 @@ class UsageService:
             cache_creation_tokens: キャッシュ作成トークン数
             cache_read_tokens: キャッシュ読み込みトークン数
             cost_usd: コスト（USD）
-            agent_config_id: エージェント設定ID
             session_id: SDKセッションID
             conversation_id: 会話ID
 
@@ -72,7 +70,6 @@ class UsageService:
             usage_log_id=str(uuid4()),
             tenant_id=tenant_id,
             user_id=user_id,
-            agent_config_id=agent_config_id,
             model_id=model_id,
             session_id=session_id,
             conversation_id=conversation_id,

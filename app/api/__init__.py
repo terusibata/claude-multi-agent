@@ -5,12 +5,11 @@ REST APIエンドポイントの定義
 from fastapi import APIRouter
 
 from app.api import (
-    agent_configs,
     conversations,
-    execute,
     mcp_servers,
     models,
     skills,
+    tenants,
     usage,
     workspace,
 )
@@ -18,19 +17,20 @@ from app.api import (
 # メインルーター
 api_router = APIRouter()
 
-# 各APIルーターを登録
+# テナント管理API
+api_router.include_router(
+    tenants.router,
+    tags=["テナント管理"],
+)
+
+# モデル管理API
 api_router.include_router(
     models.router,
     prefix="/models",
     tags=["モデル管理"],
 )
 
-api_router.include_router(
-    agent_configs.router,
-    prefix="/tenants/{tenant_id}/agent-configs",
-    tags=["エージェント実行設定"],
-)
-
+# テナント配下のリソース
 api_router.include_router(
     skills.router,
     prefix="/tenants/{tenant_id}/skills",
@@ -41,12 +41,6 @@ api_router.include_router(
     mcp_servers.router,
     prefix="/tenants/{tenant_id}/mcp-servers",
     tags=["MCPサーバー管理"],
-)
-
-api_router.include_router(
-    execute.router,
-    prefix="/tenants/{tenant_id}",
-    tags=["エージェント実行"],
 )
 
 api_router.include_router(

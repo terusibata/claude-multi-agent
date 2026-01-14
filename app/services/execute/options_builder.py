@@ -69,15 +69,30 @@ class OptionsBuilder:
             workspace_enabled=context.enable_workspace,
         )
 
-        # 許可するツールリストの構築
-        allowed_tools = await self._build_allowed_tools(context)
+        # 許可するツールリストの構築（全ツール許可）
+        allowed_tools = ["*"]
+
+        # テナントのアクティブなスキルを取得
+        skills = await self.skill_service.get_by_tenant(context.tenant_id)
+        active_skills = [s for s in skills if s.status == "active"]
+
+        # スキルがある場合はSkillツールを追加
+        if active_skills:
+            if "Skill" not in allowed_tools:
+                allowed_tools.append("Skill")
+
+        # テナントのアクティブなMCPサーバーを取得
+        all_mcp_servers = await self.mcp_service.get_by_tenant(context.tenant_id)
+        active_mcp_servers = [m for m in all_mcp_servers if m.status == "active"]
 
         # MCPサーバー設定の構築
-        mcp_servers, mcp_tools, builtin_servers, openapi_servers = await self._build_mcp_servers(context, tokens)
+        mcp_servers, mcp_tools, builtin_servers, openapi_servers = await self._build_mcp_servers(
+            context, active_mcp_servers, tokens
+        )
         allowed_tools.extend(mcp_tools)
 
         # システムプロンプトの構築
-        system_prompt = context.agent_config.system_prompt or ""
+        system_prompt = context.system_prompt or ""
 
         # cwdの決定
         cwd = await self._determine_cwd(context)
@@ -86,7 +101,7 @@ class OptionsBuilder:
         # ワークスペースコンテキストの追加
         system_prompt = await self._add_workspace_context(context, system_prompt)
 
-        # ビルトインMCPサーバーの追加（DB登録されたbuiltinサーバーを含む）
+        # ビルトインMCPサーバーの追加
         mcp_servers, allowed_tools, system_prompt = self._add_builtin_mcp_server(
             cwd, mcp_servers, allowed_tools, system_prompt, builtin_servers
         )
@@ -111,44 +126,24 @@ class OptionsBuilder:
             system_prompt=system_prompt if system_prompt else None,
             model=context.model.bedrock_model_id,
             allowed_tools=allowed_tools,
-            permission_mode=context.agent_config.permission_mode,
             mcp_servers=mcp_servers if mcp_servers else None,
             cwd=cwd,
             env=env,
         )
 
-        # Skills設定
-        if context.agent_config.agent_skills:
+        # Skills設定（スキルがある場合はproject設定を読み込む）
+        if active_skills:
             sdk_options.setting_sources = ["project"]
-
-        # セッション継続・フォーク設定
-        if context.resume_session_id:
-            sdk_options.resume = context.resume_session_id
-        if context.fork_session:
-            sdk_options.fork_session = True
 
         options = sdk_options.to_dict()
         logger.info("オプション構築完了", options_keys=list(options.keys()))
 
         return options
 
-    async def _build_allowed_tools(
-        self,
-        context: ExecutionContext,
-    ) -> list[str]:
-        """許可するツールリストを構築"""
-        allowed_tools = list(context.agent_config.allowed_tools or [])
-
-        # Skillツールを追加
-        if context.agent_config.agent_skills:
-            if "Skill" not in allowed_tools:
-                allowed_tools.append("Skill")
-
-        return allowed_tools
-
     async def _build_mcp_servers(
         self,
         context: ExecutionContext,
+        mcp_definitions: list,
         tokens: Optional[dict[str, str]],
     ) -> tuple[dict, list[str], list[str], list]:
         """
@@ -160,13 +155,9 @@ class OptionsBuilder:
         mcp_servers = {}
         mcp_tools = []
         builtin_servers = []
-        openapi_servers = []  # OpenAPIタイプのサーバー定義を保持
+        openapi_servers = []
 
-        if context.agent_config.mcp_servers:
-            mcp_definitions = await self.mcp_service.get_by_ids(
-                context.agent_config.mcp_servers, context.tenant_id
-            )
-
+        if mcp_definitions:
             # builtin/openapiタイプのサーバーを分離
             non_special_definitions = []
             for mcp_def in mcp_definitions:
@@ -206,7 +197,7 @@ class OptionsBuilder:
                     context.tenant_id, context.conversation_id
                 )
 
-            if workspace_info and workspace_info.workspace_enabled:
+            if workspace_info and workspace_info.enable_workspace:
                 # S3からローカルに同期
                 cwd = await self.workspace_service.sync_to_local(
                     context.tenant_id, context.conversation_id
@@ -233,7 +224,7 @@ class OptionsBuilder:
             context.tenant_id, context.conversation_id
         )
 
-        if workspace_info and workspace_info.workspace_enabled:
+        if workspace_info and workspace_info.enable_workspace:
             workspace_context = await self.workspace_service.get_context_for_ai(
                 context.tenant_id, context.conversation_id
             )
@@ -274,9 +265,6 @@ class OptionsBuilder:
                 "ビルトインMCPサーバー追加完了",
                 server_name="file-presentation",
             )
-
-        # 注: 他のビルトインサーバーはopenapiタイプでAPI経由で登録することを推奨
-        # requested_builtin_serversは将来の拡張用に残している
 
         return mcp_servers, allowed_tools, system_prompt
 

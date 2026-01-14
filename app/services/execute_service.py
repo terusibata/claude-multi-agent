@@ -11,8 +11,8 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.models.agent_config import AgentConfig
 from app.models.model import Model
+from app.models.tenant import Tenant
 from app.schemas.execute import ExecuteRequest
 from app.services.execute import (
     AWSConfig,
@@ -70,18 +70,16 @@ class ExecuteService:
     async def execute_streaming(
         self,
         request: ExecuteRequest,
-        agent_config: AgentConfig,
+        tenant: Tenant,
         model: Model,
-        tenant_id: str,
     ) -> AsyncGenerator[dict, None]:
         """
         エージェントをストリーミング実行
 
         Args:
             request: 実行リクエスト
-            agent_config: エージェント実行設定
+            tenant: テナント
             model: モデル定義
-            tenant_id: テナントID
 
         Yields:
             SSEイベント辞書
@@ -89,9 +87,8 @@ class ExecuteService:
         # 実行コンテキストを作成
         context = ExecutionContext(
             request=request,
-            agent_config=agent_config,
+            tenant=tenant,
             model=model,
-            tenant_id=tenant_id,
             start_time=time.time(),
         )
 
@@ -117,18 +114,13 @@ class ExecuteService:
 
         logger.info(
             "エージェント実行開始",
-            tenant_id=tenant_id,
+            tenant_id=context.tenant_id,
             conversation_id=context.conversation_id,
-            agent_config_id=request.agent_config_id,
             model_id=model.model_id,
-            agent_skills=agent_config.agent_skills,
         )
 
         execution_success = False
         try:
-            # 会話準備
-            await self._prepare_conversation(context)
-
             # オプション構築
             options = await self.options_builder.build(context, request.tokens)
             logger.info("SDK options", options=sanitize_sdk_options(options))
@@ -187,34 +179,6 @@ class ExecuteService:
                         error=str(rollback_error),
                         conversation_id=context.conversation_id,
                     )
-
-    async def _prepare_conversation(self, context: ExecutionContext) -> None:
-        """会話準備"""
-        logger.info("会話確認中", conversation_id=context.conversation_id)
-
-        existing_conversation = await self.conversation_service.get_conversation_by_id(
-            context.conversation_id, context.tenant_id
-        )
-
-        if not existing_conversation:
-            logger.info("新規会話作成中...")
-            await self.conversation_service.create_conversation(
-                conversation_id=context.conversation_id,
-                tenant_id=context.tenant_id,
-                user_id=context.request.executor.user_id,
-                agent_config_id=context.request.agent_config_id,
-                title=context.request.user_input[:100] if context.request.user_input else None,
-            )
-            logger.info("会話作成完了")
-        else:
-            logger.info("既存会話を使用")
-            # resume_session_idが指定されていない場合、前回のセッションを自動引き継ぎ
-            if not context.resume_session_id and existing_conversation.session_id:
-                context.resume_session_id = existing_conversation.session_id
-                logger.info(
-                    "前回のセッションを自動復元",
-                    session_id=existing_conversation.session_id,
-                )
 
     async def _execute_with_sdk(
         self,
@@ -357,16 +321,10 @@ class ExecuteService:
 
     async def _update_session_id(self, context: ExecutionContext) -> None:
         """セッションIDを更新"""
-        parent_id = (
-            context.resume_session_id
-            if context.fork_session
-            else None
-        )
         await self.conversation_service.update_conversation(
             conversation_id=context.conversation_id,
             tenant_id=context.tenant_id,
             session_id=context.session_id,
-            parent_session_id=parent_id,
         )
 
     async def _handle_result_message(
@@ -426,7 +384,6 @@ class ExecuteService:
             cache_creation_tokens=cache_creation,
             cache_read_tokens=cache_read,
             cost_usd=Decimal(str(total_cost)),
-            agent_config_id=context.request.agent_config_id,
             session_id=context.session_id,
             conversation_id=context.conversation_id,
         )
@@ -496,7 +453,11 @@ class ExecuteService:
             should_save = False
             logger.info("unknownメッセージタイプをスキップ", message_seq=context.message_seq)
         elif msg_type == "system" and getattr(message, "subtype", None) == "init":
-            if context.resume_session_id:
+            # 継続実行の場合はsystem/initをスキップ
+            existing = await self.conversation_service.get_conversation_by_id(
+                context.conversation_id, context.tenant_id
+            )
+            if existing and existing.session_id:
                 should_save = False
                 logger.info(
                     "継続実行のためsystem/initメッセージをスキップ",

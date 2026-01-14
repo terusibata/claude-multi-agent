@@ -19,7 +19,9 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # ===========================================
     # モデル定義テーブル
+    # ===========================================
     op.create_table(
         'models',
         sa.Column('model_id', sa.String(100), primary_key=True),
@@ -35,44 +37,46 @@ def upgrade() -> None:
         sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.func.now(), onupdate=sa.func.now()),
     )
 
-    # エージェント実行設定テーブル
+    # ===========================================
+    # テナントテーブル
+    # ===========================================
     op.create_table(
-        'agent_configs',
-        sa.Column('agent_config_id', postgresql.UUID(as_uuid=False), primary_key=True),
-        sa.Column('tenant_id', sa.String(100), nullable=False, index=True),
-        sa.Column('name', sa.String(200), nullable=False),
-        sa.Column('description', sa.Text, nullable=True),
+        'tenants',
+        sa.Column('tenant_id', sa.String(100), primary_key=True),
         sa.Column('system_prompt', sa.Text, nullable=True),
-        sa.Column('model_id', sa.String(100), sa.ForeignKey('models.model_id'), nullable=False),
-        sa.Column('allowed_tools', postgresql.JSON, nullable=True),
-        sa.Column('permission_mode', sa.String(50), nullable=False, server_default='default'),
-        sa.Column('agent_skills', postgresql.JSON, nullable=True),
-        sa.Column('mcp_servers', postgresql.JSON, nullable=True),
+        sa.Column('model_id', sa.String(100), sa.ForeignKey('models.model_id'), nullable=True),
         sa.Column('status', sa.String(20), nullable=False, server_default='active'),
         sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.func.now(), onupdate=sa.func.now()),
     )
 
+    # ===========================================
     # Agent Skillsテーブル
+    # ===========================================
     op.create_table(
         'agent_skills',
         sa.Column('skill_id', postgresql.UUID(as_uuid=False), primary_key=True),
-        sa.Column('tenant_id', sa.String(100), nullable=False, index=True),
+        sa.Column('tenant_id', sa.String(100), sa.ForeignKey('tenants.tenant_id'), nullable=False, index=True),
         sa.Column('name', sa.String(200), nullable=False),
         sa.Column('display_title', sa.String(300), nullable=True),
         sa.Column('description', sa.Text, nullable=True),
         sa.Column('version', sa.Integer, nullable=False, server_default='1'),
         sa.Column('file_path', sa.String(500), nullable=False),
+        sa.Column('slash_command', sa.String(200), nullable=True),
+        sa.Column('slash_command_description', sa.String(500), nullable=True),
+        sa.Column('is_user_selectable', sa.Boolean, nullable=False, server_default='true'),
         sa.Column('status', sa.String(20), nullable=False, server_default='active'),
         sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.func.now(), onupdate=sa.func.now()),
     )
 
+    # ===========================================
     # MCPサーバーテーブル
+    # ===========================================
     op.create_table(
         'mcp_servers',
         sa.Column('mcp_server_id', postgresql.UUID(as_uuid=False), primary_key=True),
-        sa.Column('tenant_id', sa.String(100), nullable=False, index=True),
+        sa.Column('tenant_id', sa.String(100), sa.ForeignKey('tenants.tenant_id'), nullable=False, index=True),
         sa.Column('name', sa.String(200), nullable=False),
         sa.Column('display_name', sa.String(300), nullable=True),
         sa.Column('type', sa.String(20), nullable=False),
@@ -82,32 +86,60 @@ def upgrade() -> None:
         sa.Column('env', postgresql.JSON, nullable=True),
         sa.Column('headers_template', postgresql.JSON, nullable=True),
         sa.Column('allowed_tools', postgresql.JSON, nullable=True),
+        sa.Column('tools', postgresql.JSON, nullable=True),
         sa.Column('description', sa.Text, nullable=True),
+        sa.Column('openapi_spec', postgresql.JSON, nullable=True),
+        sa.Column('openapi_base_url', sa.String(500), nullable=True),
         sa.Column('status', sa.String(20), nullable=False, server_default='active'),
         sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.func.now(), onupdate=sa.func.now()),
     )
 
-    # チャットセッションテーブル
+    # ===========================================
+    # 会話テーブル
+    # ===========================================
     op.create_table(
-        'chat_sessions',
-        sa.Column('chat_session_id', postgresql.UUID(as_uuid=False), primary_key=True),
+        'conversations',
+        sa.Column('conversation_id', postgresql.UUID(as_uuid=False), primary_key=True),
         sa.Column('session_id', sa.String(200), nullable=True),
-        sa.Column('parent_session_id', sa.String(200), nullable=True),
-        sa.Column('tenant_id', sa.String(100), nullable=False, index=True),
+        sa.Column('tenant_id', sa.String(100), sa.ForeignKey('tenants.tenant_id'), nullable=False, index=True),
         sa.Column('user_id', sa.String(100), nullable=False, index=True),
-        sa.Column('agent_config_id', postgresql.UUID(as_uuid=False), sa.ForeignKey('agent_configs.agent_config_id'), nullable=True),
+        sa.Column('model_id', sa.String(100), sa.ForeignKey('models.model_id'), nullable=False),
         sa.Column('title', sa.String(500), nullable=True),
         sa.Column('status', sa.String(20), nullable=False, server_default='active'),
+        sa.Column('enable_workspace', sa.Boolean, nullable=False, server_default='false'),
+        sa.Column('workspace_path', sa.String(500), nullable=True),
+        sa.Column('workspace_created_at', sa.DateTime(timezone=True), nullable=True),
         sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.func.now(), onupdate=sa.func.now()),
     )
 
+    # ===========================================
+    # 会話ファイルテーブル
+    # ===========================================
+    op.create_table(
+        'conversation_files',
+        sa.Column('file_id', postgresql.UUID(as_uuid=False), primary_key=True),
+        sa.Column('conversation_id', postgresql.UUID(as_uuid=False), sa.ForeignKey('conversations.conversation_id'), nullable=False, index=True),
+        sa.Column('file_name', sa.String(500), nullable=False),
+        sa.Column('file_path', sa.String(1000), nullable=False),
+        sa.Column('file_size', sa.BigInteger, nullable=True),
+        sa.Column('mime_type', sa.String(100), nullable=True),
+        sa.Column('s3_key', sa.String(1000), nullable=True),
+        sa.Column('source', sa.String(20), nullable=False, server_default='user'),
+        sa.Column('is_presented', sa.Boolean, nullable=False, server_default='false'),
+        sa.Column('status', sa.String(20), nullable=False, server_default='active'),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.func.now(), onupdate=sa.func.now()),
+    )
+
+    # ===========================================
     # メッセージログテーブル
+    # ===========================================
     op.create_table(
         'messages_log',
         sa.Column('message_id', postgresql.UUID(as_uuid=False), primary_key=True),
-        sa.Column('chat_session_id', postgresql.UUID(as_uuid=False), sa.ForeignKey('chat_sessions.chat_session_id'), nullable=False, index=True),
+        sa.Column('conversation_id', postgresql.UUID(as_uuid=False), sa.ForeignKey('conversations.conversation_id'), nullable=False, index=True),
         sa.Column('message_seq', sa.Integer, nullable=False),
         sa.Column('message_type', sa.String(50), nullable=False),
         sa.Column('message_subtype', sa.String(50), nullable=True),
@@ -115,29 +147,17 @@ def upgrade() -> None:
         sa.Column('timestamp', sa.DateTime(timezone=True), server_default=sa.func.now()),
     )
 
-    # 表示用キャッシュテーブル
-    op.create_table(
-        'display_cache',
-        sa.Column('cache_id', postgresql.UUID(as_uuid=False), primary_key=True),
-        sa.Column('chat_session_id', postgresql.UUID(as_uuid=False), sa.ForeignKey('chat_sessions.chat_session_id'), nullable=False, index=True),
-        sa.Column('turn_number', sa.Integer, nullable=False),
-        sa.Column('user_message', sa.Text, nullable=True),
-        sa.Column('assistant_message', sa.Text, nullable=True),
-        sa.Column('tools_summary', postgresql.JSON, nullable=True),
-        sa.Column('metadata', postgresql.JSON, nullable=True),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
-    )
-
+    # ===========================================
     # 使用状況ログテーブル
+    # ===========================================
     op.create_table(
         'usage_logs',
         sa.Column('usage_log_id', postgresql.UUID(as_uuid=False), primary_key=True),
-        sa.Column('tenant_id', sa.String(100), nullable=False, index=True),
+        sa.Column('tenant_id', sa.String(100), sa.ForeignKey('tenants.tenant_id'), nullable=False, index=True),
         sa.Column('user_id', sa.String(100), nullable=False, index=True),
-        sa.Column('agent_config_id', postgresql.UUID(as_uuid=False), sa.ForeignKey('agent_configs.agent_config_id'), nullable=True),
         sa.Column('model_id', sa.String(100), sa.ForeignKey('models.model_id'), nullable=False),
         sa.Column('session_id', sa.String(200), nullable=True),
-        sa.Column('chat_session_id', postgresql.UUID(as_uuid=False), sa.ForeignKey('chat_sessions.chat_session_id'), nullable=True),
+        sa.Column('conversation_id', postgresql.UUID(as_uuid=False), sa.ForeignKey('conversations.conversation_id'), nullable=True),
         sa.Column('input_tokens', sa.Integer, nullable=False, server_default='0'),
         sa.Column('output_tokens', sa.Integer, nullable=False, server_default='0'),
         sa.Column('cache_creation_tokens', sa.Integer, nullable=False, server_default='0'),
@@ -147,12 +167,14 @@ def upgrade() -> None:
         sa.Column('executed_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
     )
 
+    # ===========================================
     # ツール実行ログテーブル
+    # ===========================================
     op.create_table(
         'tool_execution_logs',
         sa.Column('tool_log_id', postgresql.UUID(as_uuid=False), primary_key=True),
         sa.Column('session_id', sa.String(200), nullable=False, index=True),
-        sa.Column('chat_session_id', postgresql.UUID(as_uuid=False), nullable=True, index=True),
+        sa.Column('conversation_id', postgresql.UUID(as_uuid=False), nullable=True, index=True),
         sa.Column('tool_name', sa.String(200), nullable=False, index=True),
         sa.Column('tool_use_id', sa.String(200), nullable=True),
         sa.Column('tool_input', postgresql.JSON, nullable=True),
@@ -162,10 +184,12 @@ def upgrade() -> None:
         sa.Column('executed_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
     )
 
+    # ===========================================
     # インデックス作成
-    op.create_index('ix_agent_configs_tenant_status', 'agent_configs', ['tenant_id', 'status'])
-    op.create_index('ix_chat_sessions_tenant_user', 'chat_sessions', ['tenant_id', 'user_id'])
-    op.create_index('ix_chat_sessions_created_at', 'chat_sessions', ['created_at'])
+    # ===========================================
+    op.create_index('ix_tenants_status', 'tenants', ['status'])
+    op.create_index('ix_conversations_tenant_user', 'conversations', ['tenant_id', 'user_id'])
+    op.create_index('ix_conversations_created_at', 'conversations', ['created_at'])
     op.create_index('ix_usage_logs_tenant_executed', 'usage_logs', ['tenant_id', 'executed_at'])
     op.create_index('ix_tool_logs_executed_at', 'tool_execution_logs', ['executed_at'])
 
@@ -174,17 +198,17 @@ def downgrade() -> None:
     # インデックス削除
     op.drop_index('ix_tool_logs_executed_at')
     op.drop_index('ix_usage_logs_tenant_executed')
-    op.drop_index('ix_chat_sessions_created_at')
-    op.drop_index('ix_chat_sessions_tenant_user')
-    op.drop_index('ix_agent_configs_tenant_status')
+    op.drop_index('ix_conversations_created_at')
+    op.drop_index('ix_conversations_tenant_user')
+    op.drop_index('ix_tenants_status')
 
     # テーブル削除（依存関係の順序で）
     op.drop_table('tool_execution_logs')
     op.drop_table('usage_logs')
-    op.drop_table('display_cache')
     op.drop_table('messages_log')
-    op.drop_table('chat_sessions')
+    op.drop_table('conversation_files')
+    op.drop_table('conversations')
     op.drop_table('mcp_servers')
     op.drop_table('agent_skills')
-    op.drop_table('agent_configs')
+    op.drop_table('tenants')
     op.drop_table('models')
