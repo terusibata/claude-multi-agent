@@ -11,7 +11,7 @@ from app.models.tenant import Tenant
 from app.schemas.tenant import TenantCreateRequest, TenantResponse, TenantUpdateRequest
 from app.services.tenant_service import TenantService
 
-router = APIRouter(prefix="/tenants", tags=["tenants"])
+router = APIRouter(prefix="/tenants")
 
 
 @router.get(
