@@ -82,7 +82,7 @@ class OptionsBuilder:
                 allowed_tools.append("Skill")
 
         # テナントのアクティブなMCPサーバーを取得
-        all_mcp_servers = await self.mcp_service.get_by_tenant(context.tenant_id)
+        all_mcp_servers = await self.mcp_service.get_all_by_tenant(context.tenant_id)
         active_mcp_servers = [m for m in all_mcp_servers if m.status == "active"]
 
         # MCPサーバー設定の構築
