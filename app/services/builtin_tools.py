@@ -62,13 +62,18 @@ def create_present_files_handler(workspace_cwd: str = ""):
         file_paths_input = args.get("file_paths", [])
         description = args.get("description", "")
 
-        # file_pathsが文字列の場合はリストに変換
+        # file_pathsの正規化
         if isinstance(file_paths_input, str):
-            file_paths = [file_paths_input]
-            logger.info(
-                "ファイル提示: file_pathsを文字列からリストに変換",
-                original=file_paths_input
-            )
+            # JSON文字列の場合はパース
+            if file_paths_input.startswith("["):
+                import json
+                try:
+                    file_paths = json.loads(file_paths_input)
+                except json.JSONDecodeError:
+                    file_paths = [file_paths_input]
+            else:
+                file_paths = [file_paths_input]
+            logger.info("ファイル提示: file_paths正規化", original=file_paths_input, result=file_paths)
         else:
             file_paths = file_paths_input
 
@@ -261,42 +266,8 @@ def create_file_presentation_mcp_server(workspace_cwd: str = ""):
 
 # ファイル提示ツールに関するシステムプロンプト
 FILE_PRESENTATION_PROMPT = """
-## ファイル作成と提示について
-
-### 重要: ファイルパスの指定方法
-- ファイルを作成する際は、**必ず相対パス**（例: `hello.py`、`output/result.txt`）を使用してください
-- **絶対パス（/tmp/hello.py など）は使用しないでください**
-- カレントディレクトリ（作業ディレクトリ）に直接ファイルを作成してください
-
-### ファイル提示の手順
-Write、Edit、NotebookEditツールでファイルを作成または編集した場合は、作業完了後に必ず`mcp__file-presentation__present_files`ツールを使用してユーザーにファイルを提示してください。
-
-### present_filesツールの使用方法
-- file_paths: 作成・編集したファイルのパスを**配列で**指定（例: `["hello.py"]`）
-- description: ファイルの内容や目的を簡潔に説明
-
-### 正しい例
-```
-mcp__file-presentation__present_files({
-  "file_paths": ["hello.py"],
-  "description": "Pythonのサンプルプログラム"
-})
-```
-
-### 間違った例（絶対パスは使わない）
-```
-// NG: 絶対パスは使わないでください
-mcp__file-presentation__present_files({
-  "file_paths": ["/tmp/hello.py"],
-  "description": "..."
-})
-```
-
-### 複数ファイルの場合
-```
-mcp__file-presentation__present_files({
-  "file_paths": ["src/main.py", "src/utils.py", "README.md"],
-  "description": "プロジェクトの初期ファイル一式"
-})
-```
+## ファイル作成ルール
+- **相対パスのみ使用**（例: `hello.py`）。絶対パス（/tmp/等）は禁止
+- ファイル作成後は `mcp__file-presentation__present_files` で提示
+- file_paths は配列で指定: `["hello.py"]`
 """

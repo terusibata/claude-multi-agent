@@ -55,7 +55,7 @@ class ExecuteRequest(BaseModel):
     conversation_id: str = Field(..., description="会話ID")
     tenant_id: str = Field(..., description="テナントID")
     model_id: str = Field(..., description="モデルID")
-    workspace_enabled: bool = Field(default=False, description="ワークスペース有効フラグ")
+    workspace_enabled: bool = Field(default=True, description="ワークスペース有効フラグ")
 
     # リクエスト情報
     user_input: str = Field(..., description="ユーザー入力")
