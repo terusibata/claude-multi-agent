@@ -17,7 +17,7 @@ class UsageLogResponse(BaseModel):
     agent_config_id: Optional[str] = None
     model_id: str
     session_id: Optional[str] = None
-    chat_session_id: Optional[str] = None
+    conversation_id: Optional[str] = None
     input_tokens: int
     output_tokens: int
     cache_creation_tokens: int
@@ -94,7 +94,7 @@ class ToolLogResponse(BaseModel):
 
     tool_log_id: str
     session_id: str
-    chat_session_id: Optional[str] = None
+    conversation_id: Optional[str] = None
     tool_name: str
     tool_use_id: Optional[str] = None
     tool_input: Optional[dict] = None

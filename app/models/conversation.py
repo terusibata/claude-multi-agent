@@ -1,6 +1,6 @@
 """
-チャットセッションテーブル
-ユーザーとエージェント間の会話セッションを管理
+会話テーブル
+ユーザーとエージェント間の会話を管理
 """
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
@@ -13,19 +13,19 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
 if TYPE_CHECKING:
-    from app.models.session_file import SessionFile
+    from app.models.conversation_file import ConversationFile
 
 
-class ChatSession(Base):
+class Conversation(Base):
     """
-    チャットセッションテーブル
-    アプリケーション層のセッション管理とSDKセッションの紐づけ
-    セッション専用ワークスペース管理を含む
+    会話テーブル
+    アプリケーション層の会話管理とSDKセッションの紐づけ
+    会話専用ワークスペース管理を含む
     """
-    __tablename__ = "chat_sessions"
+    __tablename__ = "conversations"
 
-    # チャットセッションID（アプリケーション層のセッションID）
-    chat_session_id: Mapped[str] = mapped_column(
+    # 会話ID（アプリケーション層の会話ID）
+    conversation_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4())
     )
 
@@ -48,7 +48,7 @@ class ChatSession(Base):
         nullable=True,
     )
 
-    # セッションタイトル
+    # 会話タイトル
     title: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
     # ステータス (active / archived)
@@ -61,7 +61,7 @@ class ChatSession(Base):
         Boolean, nullable=False, default=False
     )
 
-    # ワークスペースパス（セッション専用ディレクトリ）
+    # ワークスペースパス（会話専用ディレクトリ）
     workspace_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
     # ワークスペース作成日時
@@ -79,12 +79,12 @@ class ChatSession(Base):
 
     # リレーションシップ
     agent_config = relationship("AgentConfig", lazy="selectin")
-    files: Mapped[list["SessionFile"]] = relationship(
-        "SessionFile",
-        back_populates="chat_session",
+    files: Mapped[list["ConversationFile"]] = relationship(
+        "ConversationFile",
+        back_populates="conversation",
         lazy="selectin",
         cascade="all, delete-orphan",
     )
 
     def __repr__(self) -> str:
-        return f"<ChatSession(chat_session_id={self.chat_session_id}, title={self.title})>"
+        return f"<Conversation(conversation_id={self.conversation_id}, title={self.title})>"

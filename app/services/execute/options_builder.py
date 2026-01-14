@@ -194,27 +194,27 @@ class OptionsBuilder:
         if context.enable_workspace:
             # ワークスペース情報を取得
             workspace_info = await self.workspace_service.get_workspace_info(
-                context.tenant_id, context.chat_session_id
+                context.tenant_id, context.conversation_id
             )
 
             # ワークスペースが未有効化の場合は有効化
             if not workspace_info:
                 await self.workspace_service.enable_workspace(
-                    context.tenant_id, context.chat_session_id
+                    context.tenant_id, context.conversation_id
                 )
                 workspace_info = await self.workspace_service.get_workspace_info(
-                    context.tenant_id, context.chat_session_id
+                    context.tenant_id, context.conversation_id
                 )
 
             if workspace_info and workspace_info.workspace_enabled:
                 # S3からローカルに同期
                 cwd = await self.workspace_service.sync_to_local(
-                    context.tenant_id, context.chat_session_id
+                    context.tenant_id, context.conversation_id
                 )
                 logger.info(
                     "S3→ローカル同期完了",
                     tenant_id=context.tenant_id,
-                    session_id=context.chat_session_id,
+                    conversation_id=context.conversation_id,
                     cwd=cwd,
                 )
 
@@ -230,12 +230,12 @@ class OptionsBuilder:
             return system_prompt
 
         workspace_info = await self.workspace_service.get_workspace_info(
-            context.tenant_id, context.chat_session_id
+            context.tenant_id, context.conversation_id
         )
 
         if workspace_info and workspace_info.workspace_enabled:
             workspace_context = await self.workspace_service.get_context_for_ai(
-                context.tenant_id, context.chat_session_id
+                context.tenant_id, context.conversation_id
             )
 
             if workspace_context:

@@ -4,11 +4,11 @@ SQLAlchemyモデル定義
 """
 from app.models.agent_config import AgentConfig
 from app.models.agent_skill import AgentSkill
-from app.models.chat_session import ChatSession
+from app.models.conversation import Conversation
+from app.models.conversation_file import ConversationFile
 from app.models.mcp_server import McpServer
 from app.models.message_log import MessageLog
 from app.models.model import Model
-from app.models.session_file import SessionFile
 from app.models.tool_execution_log import ToolExecutionLog
 from app.models.usage_log import UsageLog
 
@@ -17,8 +17,8 @@ __all__ = [
     "AgentConfig",
     "AgentSkill",
     "McpServer",
-    "ChatSession",
-    "SessionFile",
+    "Conversation",
+    "ConversationFile",
     "MessageLog",
     "UsageLog",
     "ToolExecutionLog",

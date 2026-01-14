@@ -49,10 +49,10 @@ class UsageLog(Base):
     # SDKセッションID
     session_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
 
-    # チャットセッションID
-    chat_session_id: Mapped[Optional[str]] = mapped_column(
+    # 会話ID
+    conversation_id: Mapped[Optional[str]] = mapped_column(
         UUID(as_uuid=False),
-        ForeignKey("chat_sessions.chat_session_id"),
+        ForeignKey("conversations.conversation_id"),
         nullable=True,
     )
 

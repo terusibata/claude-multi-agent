@@ -25,9 +25,9 @@ class ExecutionContext:
     model: Model
     tenant_id: str
 
-    # セッション関連
-    chat_session_id: str = ""
-    session_id: Optional[str] = None
+    # 会話関連
+    conversation_id: str = ""
+    session_id: Optional[str] = None  # Claude SDK用セッションID
     turn_number: int = 1
     message_seq: int = 0
 
@@ -47,7 +47,7 @@ class ExecutionContext:
 
     def __post_init__(self):
         """初期化後の処理"""
-        self.chat_session_id = self.request.chat_session_id or ""
+        self.conversation_id = self.request.conversation_id or ""
         self.resume_session_id = self.request.resume_session_id
         self.fork_session = self.request.fork_session
         self.enable_workspace = (

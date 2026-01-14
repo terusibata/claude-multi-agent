@@ -1,7 +1,7 @@
 """
-セッションロック機構
+会話ロック機構
 
-同一セッションへの同時実行を防ぐためのロックマネージャー
+同一会話への同時実行を防ぐためのロックマネージャー
 """
 import asyncio
 from contextlib import asynccontextmanager
@@ -13,20 +13,20 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 
-class SessionLockError(Exception):
-    """セッションロック取得エラー"""
+class ConversationLockError(Exception):
+    """会話ロック取得エラー"""
 
-    def __init__(self, session_id: str, message: str = "セッションは現在使用中です"):
-        self.session_id = session_id
+    def __init__(self, conversation_id: str, message: str = "会話は現在使用中です"):
+        self.conversation_id = conversation_id
         self.message = message
-        super().__init__(f"{message}: {session_id}")
+        super().__init__(f"{message}: {conversation_id}")
 
 
-class SessionLockManager:
+class ConversationLockManager:
     """
-    セッションロックマネージャー
+    会話ロックマネージャー
 
-    インメモリでセッションごとのロックを管理。
+    インメモリで会話ごとのロックを管理。
     将来的にRedisなどの分散ロックに置き換え可能な設計。
     """
 
@@ -37,22 +37,22 @@ class SessionLockManager:
 
     def __init__(self):
         """初期化"""
-        # セッションID -> (Lock, 取得時刻, タイムアウト)
+        # 会話ID -> (Lock, 取得時刻, タイムアウト)
         self._locks: dict[str, tuple[asyncio.Lock, datetime, int]] = {}
         # メンテナンス用のロック
         self._manager_lock = asyncio.Lock()
 
     async def acquire(
         self,
-        session_id: str,
+        conversation_id: str,
         timeout: int = DEFAULT_LOCK_TIMEOUT,
         wait_timeout: float = DEFAULT_ACQUIRE_TIMEOUT,
     ) -> bool:
         """
-        セッションロックを取得
+        会話ロックを取得
 
         Args:
-            session_id: セッションID
+            conversation_id: 会話ID
             timeout: ロックのタイムアウト（秒）
             wait_timeout: ロック取得の待機タイムアウト（秒）
 
@@ -60,32 +60,32 @@ class SessionLockManager:
             取得成功かどうか
 
         Raises:
-            SessionLockError: ロック取得に失敗した場合
+            ConversationLockError: ロック取得に失敗した場合
         """
         async with self._manager_lock:
             # 既存のロックがあるか確認
-            if session_id in self._locks:
-                lock, acquired_at, lock_timeout = self._locks[session_id]
+            if conversation_id in self._locks:
+                lock, acquired_at, lock_timeout = self._locks[conversation_id]
 
                 # ロックがタイムアウトしているか確認
                 if datetime.utcnow() - acquired_at > timedelta(seconds=lock_timeout):
                     # タイムアウトしたロックを解放
                     logger.warning(
-                        "タイムアウトしたセッションロックを強制解放",
-                        session_id=session_id,
+                        "タイムアウトした会話ロックを強制解放",
+                        conversation_id=conversation_id,
                         acquired_at=acquired_at.isoformat(),
                     )
-                    del self._locks[session_id]
+                    del self._locks[conversation_id]
                 elif lock.locked():
                     # 他の処理がロックを保持中
-                    raise SessionLockError(
-                        session_id,
-                        "セッションは現在別の処理で使用中です"
+                    raise ConversationLockError(
+                        conversation_id,
+                        "会話は現在別の処理で使用中です"
                     )
 
             # 新しいロックを作成
             lock = asyncio.Lock()
-            self._locks[session_id] = (lock, datetime.utcnow(), timeout)
+            self._locks[conversation_id] = (lock, datetime.utcnow(), timeout)
 
         # ロックを取得
         try:
@@ -95,66 +95,66 @@ class SessionLockManager:
             )
             if acquired:
                 logger.debug(
-                    "セッションロック取得",
-                    session_id=session_id,
+                    "会話ロック取得",
+                    conversation_id=conversation_id,
                     timeout=timeout,
                 )
             return acquired
         except asyncio.TimeoutError:
             # 取得タイムアウト
             async with self._manager_lock:
-                if session_id in self._locks:
-                    del self._locks[session_id]
-            raise SessionLockError(
-                session_id,
+                if conversation_id in self._locks:
+                    del self._locks[conversation_id]
+            raise ConversationLockError(
+                conversation_id,
                 f"ロック取得がタイムアウトしました（{wait_timeout}秒）"
             )
 
-    async def release(self, session_id: str) -> bool:
+    async def release(self, conversation_id: str) -> bool:
         """
-        セッションロックを解放
+        会話ロックを解放
 
         Args:
-            session_id: セッションID
+            conversation_id: 会話ID
 
         Returns:
             解放成功かどうか
         """
         async with self._manager_lock:
-            if session_id not in self._locks:
+            if conversation_id not in self._locks:
                 logger.warning(
-                    "存在しないセッションロックの解放を試行",
-                    session_id=session_id,
+                    "存在しない会話ロックの解放を試行",
+                    conversation_id=conversation_id,
                 )
                 return False
 
-            lock, _, _ = self._locks[session_id]
+            lock, _, _ = self._locks[conversation_id]
 
             if lock.locked():
                 lock.release()
 
-            del self._locks[session_id]
+            del self._locks[conversation_id]
 
             logger.debug(
-                "セッションロック解放",
-                session_id=session_id,
+                "会話ロック解放",
+                conversation_id=conversation_id,
             )
             return True
 
-    def is_locked(self, session_id: str) -> bool:
+    def is_locked(self, conversation_id: str) -> bool:
         """
-        セッションがロックされているか確認
+        会話がロックされているか確認
 
         Args:
-            session_id: セッションID
+            conversation_id: 会話ID
 
         Returns:
             ロックされているかどうか
         """
-        if session_id not in self._locks:
+        if conversation_id not in self._locks:
             return False
 
-        lock, acquired_at, timeout = self._locks[session_id]
+        lock, acquired_at, timeout = self._locks[conversation_id]
 
         # タイムアウトチェック
         if datetime.utcnow() - acquired_at > timedelta(seconds=timeout):
@@ -173,18 +173,18 @@ class SessionLockManager:
             expired = []
             now = datetime.utcnow()
 
-            for session_id, (lock, acquired_at, timeout) in self._locks.items():
+            for conversation_id, (lock, acquired_at, timeout) in self._locks.items():
                 if now - acquired_at > timedelta(seconds=timeout):
-                    expired.append(session_id)
+                    expired.append(conversation_id)
 
-            for session_id in expired:
-                if self._locks[session_id][0].locked():
-                    self._locks[session_id][0].release()
-                del self._locks[session_id]
+            for conversation_id in expired:
+                if self._locks[conversation_id][0].locked():
+                    self._locks[conversation_id][0].release()
+                del self._locks[conversation_id]
 
             if expired:
                 logger.info(
-                    "期限切れセッションロックをクリーンアップ",
+                    "期限切れ会話ロックをクリーンアップ",
                     count=len(expired),
                 )
 
@@ -193,15 +193,15 @@ class SessionLockManager:
     @asynccontextmanager
     async def lock(
         self,
-        session_id: str,
+        conversation_id: str,
         timeout: int = DEFAULT_LOCK_TIMEOUT,
         wait_timeout: float = DEFAULT_ACQUIRE_TIMEOUT,
     ):
         """
-        セッションロックのコンテキストマネージャー
+        会話ロックのコンテキストマネージャー
 
         Args:
-            session_id: セッションID
+            conversation_id: 会話ID
             timeout: ロックのタイムアウト（秒）
             wait_timeout: ロック取得の待機タイムアウト（秒）
 
@@ -209,27 +209,27 @@ class SessionLockManager:
             None
 
         Raises:
-            SessionLockError: ロック取得に失敗した場合
+            ConversationLockError: ロック取得に失敗した場合
         """
-        await self.acquire(session_id, timeout, wait_timeout)
+        await self.acquire(conversation_id, timeout, wait_timeout)
         try:
             yield
         finally:
-            await self.release(session_id)
+            await self.release(conversation_id)
 
 
 # グローバルインスタンス（シングルトン）
-_session_lock_manager: Optional[SessionLockManager] = None
+_conversation_lock_manager: Optional[ConversationLockManager] = None
 
 
-def get_session_lock_manager() -> SessionLockManager:
+def get_conversation_lock_manager() -> ConversationLockManager:
     """
-    セッションロックマネージャーを取得
+    会話ロックマネージャーを取得
 
     Returns:
-        SessionLockManager インスタンス
+        ConversationLockManager インスタンス
     """
-    global _session_lock_manager
-    if _session_lock_manager is None:
-        _session_lock_manager = SessionLockManager()
-    return _session_lock_manager
+    global _conversation_lock_manager
+    if _conversation_lock_manager is None:
+        _conversation_lock_manager = ConversationLockManager()
+    return _conversation_lock_manager

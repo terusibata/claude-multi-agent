@@ -1,6 +1,6 @@
 """
 ワークスペース関連スキーマ
-セッション専用ワークスペースのファイル管理
+会話専用ワークスペースのファイル管理
 """
 from datetime import datetime
 from typing import Optional
@@ -8,8 +8,8 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 
-class SessionFileInfo(BaseModel):
-    """セッションファイル情報"""
+class ConversationFileInfo(BaseModel):
+    """会話ファイル情報"""
 
     file_id: str = Field(..., description="ファイルID")
     file_path: str = Field(..., description="ワークスペース内のファイルパス")
@@ -25,8 +25,8 @@ class SessionFileInfo(BaseModel):
     updated_at: datetime = Field(..., description="更新日時")
 
 
-class SessionFileCreate(BaseModel):
-    """セッションファイル作成リクエスト"""
+class ConversationFileCreate(BaseModel):
+    """会話ファイル作成リクエスト"""
 
     file_path: str = Field(..., description="保存先のファイルパス（ワークスペース内）")
     description: Optional[str] = Field(None, description="ファイル説明")
@@ -35,7 +35,7 @@ class SessionFileCreate(BaseModel):
 class WorkspaceInfo(BaseModel):
     """ワークスペース情報"""
 
-    chat_session_id: str = Field(..., description="セッションID")
+    conversation_id: str = Field(..., description="会話ID")
     workspace_enabled: bool = Field(..., description="ワークスペース有効フラグ")
     workspace_path: Optional[str] = Field(None, description="ワークスペースパス")
     workspace_created_at: Optional[datetime] = Field(None, description="作成日時")
@@ -46,8 +46,8 @@ class WorkspaceInfo(BaseModel):
 class WorkspaceFileList(BaseModel):
     """ワークスペースファイル一覧レスポンス"""
 
-    chat_session_id: str = Field(..., description="セッションID")
-    files: list[SessionFileInfo] = Field(default_factory=list, description="ファイル一覧")
+    conversation_id: str = Field(..., description="会話ID")
+    files: list[ConversationFileInfo] = Field(default_factory=list, description="ファイル一覧")
     total_count: int = Field(0, description="合計ファイル数")
     total_size: int = Field(0, description="合計サイズ（バイト）")
 
@@ -55,22 +55,22 @@ class WorkspaceFileList(BaseModel):
 class PresentedFileList(BaseModel):
     """Presentedファイル一覧レスポンス"""
 
-    chat_session_id: str = Field(..., description="セッションID")
-    files: list[SessionFileInfo] = Field(default_factory=list, description="Presentedファイル一覧")
+    conversation_id: str = Field(..., description="会話ID")
+    files: list[ConversationFileInfo] = Field(default_factory=list, description="Presentedファイル一覧")
 
 
 class FileVersionHistory(BaseModel):
     """ファイルバージョン履歴"""
 
     file_path: str = Field(..., description="ファイルパス")
-    versions: list[SessionFileInfo] = Field(default_factory=list, description="バージョン一覧")
+    versions: list[ConversationFileInfo] = Field(default_factory=list, description="バージョン一覧")
 
 
 class UploadResponse(BaseModel):
     """ファイルアップロードレスポンス"""
 
     success: bool = Field(..., description="成功フラグ")
-    file: SessionFileInfo = Field(..., description="アップロードされたファイル情報")
+    file: ConversationFileInfo = Field(..., description="アップロードされたファイル情報")
     message: str = Field(..., description="メッセージ")
 
 
@@ -78,7 +78,7 @@ class MultiUploadResponse(BaseModel):
     """複数ファイルアップロードレスポンス"""
 
     success: bool = Field(..., description="成功フラグ")
-    uploaded_files: list[SessionFileInfo] = Field(default_factory=list, description="アップロードされたファイル一覧")
+    uploaded_files: list[ConversationFileInfo] = Field(default_factory=list, description="アップロードされたファイル一覧")
     failed_files: list[dict] = Field(default_factory=list, description="失敗したファイル一覧")
     message: str = Field(..., description="メッセージ")
 
@@ -109,9 +109,9 @@ class CleanupResponse(BaseModel):
     """ワークスペースクリーンアップレスポンス"""
 
     success: bool = Field(..., description="成功フラグ")
-    sessions_cleaned: int = Field(0, description="クリーンアップされたセッション数")
+    conversations_cleaned: int = Field(0, description="クリーンアップされた会話数")
     total_size_freed: int = Field(0, description="解放されたサイズ（バイト）")
-    sessions: list[str] = Field(default_factory=list, description="クリーンアップされたセッションID一覧")
+    conversations: list[str] = Field(default_factory=list, description="クリーンアップされた会話ID一覧")
     dry_run: bool = Field(True, description="ドライランフラグ")
 
 

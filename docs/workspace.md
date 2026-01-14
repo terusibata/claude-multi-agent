@@ -1,8 +1,8 @@
-# セッション専用ワークスペース機能（S3版）
+# 会話専用ワークスペース機能（S3版）
 
 ## 概要
 
-セッション専用ワークスペースは、AIエージェントがファイル操作を行う際に、セッションごとに独立したファイル空間を提供する機能です。ファイルはAmazon S3に保存され、APIサーバー経由でのみアクセス可能です。
+会話専用ワークスペースは、AIエージェントがファイル操作を行う際に、会話ごとに独立したファイル空間を提供する機能です。ファイルはAmazon S3に保存され、APIサーバー経由でのみアクセス可能です。
 
 ### アーキテクチャ
 
@@ -209,14 +209,14 @@ const response = await fetch(
 ### エンドポイント
 
 ```
-GET /api/tenants/{tenant_id}/sessions/{session_id}/files
+GET /api/tenants/{tenant_id}/conversations/{conversation_id}/files
 ```
 
 ### レスポンス例
 
 ```json
 {
-  "chat_session_id": "session-123",
+  "conversation_id": "conversation-123",
   "files": [
     {
       "file_id": "a1b2c3d4-...",
@@ -253,7 +253,7 @@ GET /api/tenants/{tenant_id}/sessions/{session_id}/files
 ### エンドポイント
 
 ```
-GET /api/tenants/{tenant_id}/sessions/{session_id}/files/download?path=xxx
+GET /api/tenants/{tenant_id}/conversations/{conversation_id}/files/download?path=xxx
 ```
 
 ### クエリパラメータ
@@ -266,10 +266,10 @@ GET /api/tenants/{tenant_id}/sessions/{session_id}/files/download?path=xxx
 
 ```bash
 # アップロードファイルをダウンロード
-curl -O "http://localhost:8000/api/tenants/tenant-001/sessions/session-123/files/download?path=uploads/data.csv"
+curl -O "http://localhost:8000/api/tenants/tenant-001/conversations/conversation-123/files/download?path=uploads/data.csv"
 
 # AI生成ファイルをダウンロード
-curl -O "http://localhost:8000/api/tenants/tenant-001/sessions/session-123/files/download?path=outputs/result.json"
+curl -O "http://localhost:8000/api/tenants/tenant-001/conversations/conversation-123/files/download?path=outputs/result.json"
 ```
 
 ### レスポンス
@@ -287,14 +287,14 @@ AIが作成したファイルのうち、ユーザーに提示したいものは
 ### Presentedファイル一覧取得
 
 ```
-GET /api/tenants/{tenant_id}/sessions/{session_id}/files/presented
+GET /api/tenants/{tenant_id}/conversations/{conversation_id}/files/presented
 ```
 
 ### レスポンス例
 
 ```json
 {
-  "chat_session_id": "session-123",
+  "conversation_id": "conversation-123",
   "files": [
     {
       "file_id": "e5f6g7h8-...",
@@ -321,7 +321,7 @@ GET /api/tenants/{tenant_id}/sessions/{session_id}/files/presented
 ```
 {S3_WORKSPACE_PREFIX}/
 └── {tenant_id}/
-    └── {session_id}/
+    └── {conversation_id}/
         ├── uploads/      # ユーザーアップロードファイル
         ├── outputs/      # AI生成ファイル（自動登録対象）
         └── ...           # その他のファイル
@@ -329,8 +329,8 @@ GET /api/tenants/{tenant_id}/sessions/{session_id}/files/presented
 
 例：
 ```
-workspaces/tenant-001/session-abc123/uploads/data.csv
-workspaces/tenant-001/session-abc123/outputs/result.json
+workspaces/tenant-001/conversation-abc123/uploads/data.csv
+workspaces/tenant-001/conversation-abc123/outputs/result.json
 ```
 
 ---
@@ -355,11 +355,11 @@ workspaces/tenant-001/session-abc123/outputs/result.json
 - APIサーバー経由でのみアクセス可能
 - IAM認証による安全なアクセス
 
-### テナント・セッション分離
+### テナント・会話分離
 
 - テナント間の完全分離
-- セッション間の完全分離
-- 他のセッションのファイルにはアクセス不可
+- 会話間の完全分離
+- 他の会話のファイルにはアクセス不可
 
 ---
 
@@ -381,9 +381,9 @@ AIはファイルの内容を読まなくても、どのファイルが利用可
 | メソッド | パス | 説明 |
 |---------|------|------|
 | POST | /tenants/{tenant_id}/execute | エージェント実行（ファイル添付可） |
-| GET | /tenants/{tenant_id}/sessions/{session_id}/files | ファイル一覧 |
-| GET | /tenants/{tenant_id}/sessions/{session_id}/files/download?path=xxx | ファイルダウンロード |
-| GET | /tenants/{tenant_id}/sessions/{session_id}/files/presented | AIが作成したファイル一覧 |
+| GET | /tenants/{tenant_id}/conversations/{conversation_id}/files | ファイル一覧 |
+| GET | /tenants/{tenant_id}/conversations/{conversation_id}/files/download?path=xxx | ファイルダウンロード |
+| GET | /tenants/{tenant_id}/conversations/{conversation_id}/files/presented | AIが作成したファイル一覧 |
 
 ---
 

@@ -24,8 +24,8 @@ class ExecuteRequest(BaseModel):
     # 必須パラメータ
     agent_config_id: str = Field(..., description="エージェント実行設定ID")
     model_id: str = Field(..., description="モデルID")
-    chat_session_id: Optional[str] = Field(
-        None, description="セッションID（省略時は新規作成、指定時は継続）"
+    conversation_id: Optional[str] = Field(
+        None, description="会話ID（省略時は新規作成、指定時は継続）"
     )
     user_input: str = Field(..., description="ユーザー入力")
     executor: ExecutorInfo = Field(..., description="実行者情報")
@@ -45,7 +45,7 @@ class ExecuteRequest(BaseModel):
     # ワークスペース設定
     enable_workspace: bool = Field(
         default=False,
-        description="セッション専用ワークスペースを有効にする",
+        description="会話専用ワークスペースを有効にする",
     )
 
     # Skill/ツール優先指定
@@ -55,12 +55,12 @@ class ExecuteRequest(BaseModel):
     )
 
     @model_validator(mode="after")
-    def ensure_chat_session_id(self) -> "ExecuteRequest":
-        """chat_session_idがNoneまたは空文字列の場合は新しいUUIDを生成"""
-        if not self.chat_session_id or (
-            isinstance(self.chat_session_id, str) and self.chat_session_id.strip() == ""
+    def ensure_conversation_id(self) -> "ExecuteRequest":
+        """conversation_idがNoneまたは空文字列の場合は新しいUUIDを生成"""
+        if not self.conversation_id or (
+            isinstance(self.conversation_id, str) and self.conversation_id.strip() == ""
         ):
-            self.chat_session_id = str(uuid4())
+            self.conversation_id = str(uuid4())
         return self
 
 
@@ -136,7 +136,7 @@ class ResultData(BaseModel):
 class ExecuteResponse(BaseModel):
     """エージェント実行レスポンス（非ストリーミング用）"""
 
-    chat_session_id: str
+    conversation_id: str
     session_id: str
     result: Optional[str]
     usage: UsageInfo

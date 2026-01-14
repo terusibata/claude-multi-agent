@@ -1,5 +1,5 @@
 """
-セッション・履歴スキーマ
+会話・履歴スキーマ
 """
 from datetime import datetime
 from typing import Any, Optional
@@ -7,10 +7,10 @@ from typing import Any, Optional
 from pydantic import BaseModel, Field
 
 
-class ChatSessionResponse(BaseModel):
-    """チャットセッションレスポンス"""
+class ConversationResponse(BaseModel):
+    """会話レスポンス"""
 
-    chat_session_id: str
+    conversation_id: str
     session_id: Optional[str] = None
     parent_session_id: Optional[str] = None
     tenant_id: str
@@ -29,7 +29,7 @@ class MessageLogResponse(BaseModel):
     """メッセージログレスポンス"""
 
     message_id: str
-    chat_session_id: str
+    conversation_id: str
     message_seq: int
     message_type: str
     message_subtype: Optional[str] = None
@@ -40,8 +40,8 @@ class MessageLogResponse(BaseModel):
         from_attributes = True
 
 
-class SessionListQuery(BaseModel):
-    """セッション一覧クエリ"""
+class ConversationListQuery(BaseModel):
+    """会話一覧クエリ"""
 
     user_id: Optional[str] = None
     status: Optional[str] = None
@@ -51,14 +51,14 @@ class SessionListQuery(BaseModel):
     offset: int = Field(default=0, ge=0)
 
 
-class SessionArchiveRequest(BaseModel):
-    """セッションアーカイブリクエスト"""
+class ConversationArchiveRequest(BaseModel):
+    """会話アーカイブリクエスト"""
 
     pass
 
 
-class SessionUpdateRequest(BaseModel):
-    """セッション更新リクエスト"""
+class ConversationUpdateRequest(BaseModel):
+    """会話更新リクエスト"""
 
     title: Optional[str] = Field(None, max_length=500)
     status: Optional[str] = Field(None, pattern="^(active|archived)$")

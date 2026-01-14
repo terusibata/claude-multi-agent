@@ -6,10 +6,10 @@ from fastapi import APIRouter
 
 from app.api import (
     agent_configs,
+    conversations,
     execute,
     mcp_servers,
     models,
-    sessions,
     skills,
     usage,
     workspace,
@@ -50,9 +50,9 @@ api_router.include_router(
 )
 
 api_router.include_router(
-    sessions.router,
-    prefix="/tenants/{tenant_id}/sessions",
-    tags=["セッション・履歴"],
+    conversations.router,
+    prefix="/tenants/{tenant_id}/conversations",
+    tags=["会話・履歴"],
 )
 
 api_router.include_router(

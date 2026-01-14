@@ -34,10 +34,10 @@ from app.utils.security import (
     validate_slash_command,
     validate_tenant_id,
 )
-from app.utils.session_lock import (
-    SessionLockError,
-    SessionLockManager,
-    get_session_lock_manager,
+from app.utils.conversation_lock import (
+    ConversationLockError,
+    ConversationLockManager,
+    get_conversation_lock_manager,
 )
 from app.utils.repository import BaseRepository
 
@@ -74,10 +74,10 @@ __all__ = [
     "validate_skill_name",
     "validate_slash_command",
     "validate_tenant_id",
-    # Session Lock
-    "SessionLockError",
-    "SessionLockManager",
-    "get_session_lock_manager",
+    # Conversation Lock
+    "ConversationLockError",
+    "ConversationLockManager",
+    "get_conversation_lock_manager",
     # Repository
     "BaseRepository",
 ]

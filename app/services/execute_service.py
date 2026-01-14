@@ -24,14 +24,14 @@ from app.services.execute import (
     ToolTracker,
 )
 from app.services.mcp_server_service import McpServerService
-from app.services.session_service import SessionService
+from app.services.conversation_service import ConversationService
 from app.services.skill_service import SkillService
 from app.services.usage_service import UsageService
 from app.services.workspace_service import WorkspaceService
 from app.utils.log_sanitizer import sanitize_sdk_options
-from app.utils.session_lock import (
-    SessionLockError,
-    get_session_lock_manager,
+from app.utils.conversation_lock import (
+    ConversationLockError,
+    get_conversation_lock_manager,
 )
 from app.utils.streaming import (
     format_error_event,
@@ -54,7 +54,7 @@ class ExecuteService:
             db: データベースセッション
         """
         self.db = db
-        self.session_service = SessionService(db)
+        self.conversation_service = ConversationService(db)
         self.usage_service = UsageService(db)
         self.skill_service = SkillService(db)
         self.mcp_service = McpServerService(db)
@@ -98,19 +98,19 @@ class ExecuteService:
         # ツールトラッカーを初期化
         tool_tracker = ToolTracker()
 
-        # セッションロックを取得
-        lock_manager = get_session_lock_manager()
+        # 会話ロックを取得
+        lock_manager = get_conversation_lock_manager()
         try:
-            await lock_manager.acquire(context.chat_session_id)
-        except SessionLockError as e:
+            await lock_manager.acquire(context.conversation_id)
+        except ConversationLockError as e:
             logger.warning(
-                "セッションロック取得失敗",
-                chat_session_id=context.chat_session_id,
+                "会話ロック取得失敗",
+                conversation_id=context.conversation_id,
                 error=str(e),
             )
             yield format_error_event(
-                f"セッションは現在使用中です。しばらくしてから再試行してください。",
-                "session_locked",
+                f"会話は現在使用中です。しばらくしてから再試行してください。",
+                "conversation_locked",
             )
             yield self._create_error_result(context, [str(e)])
             return
@@ -118,7 +118,7 @@ class ExecuteService:
         logger.info(
             "エージェント実行開始",
             tenant_id=tenant_id,
-            chat_session_id=context.chat_session_id,
+            conversation_id=context.conversation_id,
             agent_config_id=request.agent_config_id,
             model_id=model.model_id,
             agent_skills=agent_config.agent_skills,
@@ -126,19 +126,19 @@ class ExecuteService:
 
         execution_success = False
         try:
-            # セッション準備
-            await self._prepare_session(context)
+            # 会話準備
+            await self._prepare_conversation(context)
 
             # オプション構築
             options = await self.options_builder.build(context, request.tokens)
             logger.info("SDK options", options=sanitize_sdk_options(options))
 
             # ターン番号とメッセージ順序取得
-            context.turn_number = await self.session_service.get_latest_turn_number(
-                context.chat_session_id
+            context.turn_number = await self.conversation_service.get_latest_turn_number(
+                context.conversation_id
             ) + 1
-            context.message_seq = await self.session_service.get_max_message_seq(
-                context.chat_session_id
+            context.message_seq = await self.conversation_service.get_max_message_seq(
+                context.conversation_id
             )
 
             # SDKインポートと実行
@@ -152,14 +152,14 @@ class ExecuteService:
                 yield event
 
         finally:
-            # セッションロックを解放
+            # 会話ロックを解放
             try:
-                await lock_manager.release(context.chat_session_id)
+                await lock_manager.release(context.conversation_id)
             except Exception as lock_error:
                 logger.error(
-                    "セッションロック解放エラー",
+                    "会話ロック解放エラー",
                     error=str(lock_error),
-                    chat_session_id=context.chat_session_id,
+                    conversation_id=context.conversation_id,
                 )
 
             if execution_success:
@@ -170,7 +170,7 @@ class ExecuteService:
                     logger.error(
                         "コミットエラー",
                         error=str(commit_error),
-                        chat_session_id=context.chat_session_id,
+                        conversation_id=context.conversation_id,
                     )
                     await self.db.rollback()
             else:
@@ -179,41 +179,41 @@ class ExecuteService:
                     await self.db.rollback()
                     logger.info(
                         "トランザクションをロールバック",
-                        chat_session_id=context.chat_session_id,
+                        conversation_id=context.conversation_id,
                     )
                 except Exception as rollback_error:
                     logger.error(
                         "ロールバックエラー",
                         error=str(rollback_error),
-                        chat_session_id=context.chat_session_id,
+                        conversation_id=context.conversation_id,
                     )
 
-    async def _prepare_session(self, context: ExecutionContext) -> None:
-        """セッション準備"""
-        logger.info("セッション確認中", chat_session_id=context.chat_session_id)
+    async def _prepare_conversation(self, context: ExecutionContext) -> None:
+        """会話準備"""
+        logger.info("会話確認中", conversation_id=context.conversation_id)
 
-        existing_session = await self.session_service.get_session_by_id(
-            context.chat_session_id, context.tenant_id
+        existing_conversation = await self.conversation_service.get_conversation_by_id(
+            context.conversation_id, context.tenant_id
         )
 
-        if not existing_session:
-            logger.info("新規セッション作成中...")
-            await self.session_service.create_session(
-                chat_session_id=context.chat_session_id,
+        if not existing_conversation:
+            logger.info("新規会話作成中...")
+            await self.conversation_service.create_conversation(
+                conversation_id=context.conversation_id,
                 tenant_id=context.tenant_id,
                 user_id=context.request.executor.user_id,
                 agent_config_id=context.request.agent_config_id,
                 title=context.request.user_input[:100] if context.request.user_input else None,
             )
-            logger.info("セッション作成完了")
+            logger.info("会話作成完了")
         else:
-            logger.info("既存セッションを使用")
+            logger.info("既存会話を使用")
             # resume_session_idが指定されていない場合、前回のセッションを自動引き継ぎ
-            if not context.resume_session_id and existing_session.session_id:
-                context.resume_session_id = existing_session.session_id
+            if not context.resume_session_id and existing_conversation.session_id:
+                context.resume_session_id = existing_conversation.session_id
                 logger.info(
                     "前回のセッションを自動復元",
-                    session_id=existing_session.session_id,
+                    session_id=existing_conversation.session_id,
                 )
 
     async def _execute_with_sdk(
@@ -341,8 +341,8 @@ class ExecuteService:
         context.message_seq += 1
         user_message_timestamp = datetime.utcnow()
 
-        await self.session_service.save_message_log(
-            chat_session_id=context.chat_session_id,
+        await self.conversation_service.save_message_log(
+            conversation_id=context.conversation_id,
             message_seq=context.message_seq,
             message_type="user",
             message_subtype=None,
@@ -362,8 +362,8 @@ class ExecuteService:
             if context.fork_session
             else None
         )
-        await self.session_service.update_session(
-            chat_session_id=context.chat_session_id,
+        await self.conversation_service.update_conversation(
+            conversation_id=context.conversation_id,
             tenant_id=context.tenant_id,
             session_id=context.session_id,
             parent_session_id=parent_id,
@@ -428,7 +428,7 @@ class ExecuteService:
             cost_usd=Decimal(str(total_cost)),
             agent_config_id=context.request.agent_config_id,
             session_id=context.session_id,
-            chat_session_id=context.chat_session_id,
+            conversation_id=context.conversation_id,
         )
 
         # タイトル生成
@@ -473,8 +473,8 @@ class ExecuteService:
             model_region=context.model.model_region or settings.aws_region,
         )
 
-        await self.session_service.update_session_title(
-            chat_session_id=context.chat_session_id,
+        await self.conversation_service.update_conversation_title(
+            conversation_id=context.conversation_id,
             tenant_id=context.tenant_id,
             title=generated_title,
         )
@@ -504,8 +504,8 @@ class ExecuteService:
                 )
 
         if should_save:
-            await self.session_service.save_message_log(
-                chat_session_id=context.chat_session_id,
+            await self.conversation_service.save_message_log(
+                conversation_id=context.conversation_id,
                 message_seq=context.message_seq,
                 message_type=msg_type,
                 message_subtype=getattr(message, "subtype", None),
@@ -580,12 +580,12 @@ class ExecuteService:
         try:
             # ローカルからS3に同期
             synced_files = await self.workspace_service.sync_from_local(
-                context.tenant_id, context.chat_session_id
+                context.tenant_id, context.conversation_id
             )
             logger.info(
                 "ローカル→S3同期完了",
                 tenant_id=context.tenant_id,
-                session_id=context.chat_session_id,
+                conversation_id=context.conversation_id,
                 synced_count=len(synced_files),
             )
 
@@ -593,7 +593,7 @@ class ExecuteService:
             for file_path in synced_files:
                 await self.workspace_service.register_ai_file(
                     context.tenant_id,
-                    context.chat_session_id,
+                    context.conversation_id,
                     file_path,
                     is_presented=True,
                 )
@@ -603,10 +603,10 @@ class ExecuteService:
                 )
 
             # ローカルクリーンアップ
-            await self.workspace_service.cleanup_local(context.chat_session_id)
+            await self.workspace_service.cleanup_local(context.conversation_id)
             logger.info(
                 "ローカルクリーンアップ完了",
-                session_id=context.chat_session_id,
+                conversation_id=context.conversation_id,
             )
 
         except Exception as e:
@@ -614,6 +614,6 @@ class ExecuteService:
                 "ワークスペース同期エラー",
                 error=str(e),
                 tenant_id=context.tenant_id,
-                session_id=context.chat_session_id,
+                conversation_id=context.conversation_id,
                 exc_info=True,
             )

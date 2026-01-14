@@ -58,7 +58,7 @@ async def _background_execution(
         logger.error(
             f"Background execution error: {e}",
             exc_info=True,
-            extra={"chat_session_id": request.chat_session_id},
+            extra={"conversation_id": request.conversation_id},
         )
         # エラーイベントをキューに送信してクライアントに通知
         error_event = format_error_event(
@@ -131,7 +131,7 @@ async def event_generator(
                 consecutive_timeouts += 1
                 logger.warning(
                     f"Event queue timeout ({consecutive_timeouts}/{MAX_CONSECUTIVE_TIMEOUTS})",
-                    extra={"chat_session_id": request.chat_session_id},
+                    extra={"conversation_id": request.conversation_id},
                 )
 
                 # バックグラウンドタスクが完了しているかチェック
@@ -142,18 +142,18 @@ async def event_generator(
                     except asyncio.CancelledError:
                         logger.info(
                             "Background task was cancelled",
-                            extra={"chat_session_id": request.chat_session_id},
+                            extra={"conversation_id": request.conversation_id},
                         )
                     except Exception as task_error:
                         logger.error(
                             f"Background task error: {task_error}",
                             exc_info=True,
-                            extra={"chat_session_id": request.chat_session_id},
+                            extra={"conversation_id": request.conversation_id},
                         )
                     else:
                         logger.info(
                             "Background task completed during timeout",
-                            extra={"chat_session_id": request.chat_session_id},
+                            extra={"conversation_id": request.conversation_id},
                         )
                     break
 
@@ -161,7 +161,7 @@ async def event_generator(
                 if consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS:
                     logger.error(
                         f"Max consecutive timeouts reached, terminating",
-                        extra={"chat_session_id": request.chat_session_id},
+                        extra={"conversation_id": request.conversation_id},
                     )
                     error_event = format_error_event(
                         "応答タイムアウト: サーバーからの応答がありません",
@@ -178,7 +178,7 @@ async def event_generator(
     except asyncio.CancelledError:
         # クライアントが接続を切断した場合
         logger.info(
-            f"Client disconnected for session {request.chat_session_id}, "
+            f"Client disconnected for conversation {request.conversation_id}, "
             "but background execution continues"
         )
         # バックグラウンドタスクは継続させる（awaitしない）
@@ -187,7 +187,7 @@ async def event_generator(
         logger.error(
             f"Event generator error: {e}",
             exc_info=True,
-            extra={"chat_session_id": request.chat_session_id},
+            extra={"conversation_id": request.conversation_id},
         )
         background_task.cancel()
         # タスクのキャンセルを待つ
@@ -202,7 +202,7 @@ async def event_generator(
         # タスクが完了していない場合、ログに記録
         if not background_task.done():
             logger.info(
-                f"Background task continues for session {request.chat_session_id}"
+                f"Background task continues for conversation {request.conversation_id}"
             )
 
 
@@ -229,7 +229,7 @@ async def execute_agent(
 
     - **agent_config_id**: エージェント実行設定ID
     - **model_id**: 使用するモデルID
-    - **chat_session_id**: セッションID（省略時は新規作成、指定時は継続）
+    - **conversation_id**: 会話ID（省略時は新規作成、指定時は継続）
     - **user_input**: ユーザー入力
     - **executor**: 実行者情報
     - **tokens**: MCPサーバー用認証情報（オプション）
@@ -274,12 +274,12 @@ async def execute_agent(
                 file_data.append((file.filename, content, content_type))
 
             await workspace_service.upload_files(
-                tenant_id, request.chat_session_id, file_data
+                tenant_id, request.conversation_id, file_data
             )
 
             # ワークスペースを有効化
             request.enable_workspace = True
-            await workspace_service.enable_workspace(tenant_id, request.chat_session_id)
+            await workspace_service.enable_workspace(tenant_id, request.conversation_id)
             await db.commit()
         except HTTPException:
             # HTTPExceptionはそのまま再送出
@@ -292,7 +292,7 @@ async def execute_agent(
                 "ファイルアップロードエラー",
                 error=str(e),
                 tenant_id=tenant_id,
-                session_id=request.chat_session_id,
+                conversation_id=request.conversation_id,
                 exc_info=True,
             )
             raise HTTPException(

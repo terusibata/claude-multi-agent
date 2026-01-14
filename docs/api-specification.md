@@ -10,7 +10,7 @@ Claude Multi-Agent API のエンドポイント仕様書です。
 - [エンドポイント一覧](#エンドポイント一覧)
   - [Models](#models)
   - [Agent Configs](#agent-configs)
-  - [Sessions](#sessions)
+  - [Conversations](#conversations)
   - [Execute](#execute)
   - [Workspace](#workspace)
   - [Skills](#skills)
@@ -193,13 +193,13 @@ http://localhost:8000/api
 
 ---
 
-### Sessions
+### Conversations
 
-セッション（会話履歴）の管理API。
+会話（会話履歴）の管理API。
 
-#### GET /api/tenants/{tenant_id}/sessions
+#### GET /api/tenants/{tenant_id}/conversations
 
-セッション一覧を取得
+会話一覧を取得
 
 **クエリパラメータ:**
 
@@ -212,7 +212,7 @@ http://localhost:8000/api
 ```json
 [
   {
-    "chat_session_id": "session-uuid-001",
+    "conversation_id": "conversation-uuid-001",
     "tenant_id": "tenant-001",
     "user_id": "user-001",
     "agent_config_id": "default-agent",
@@ -226,19 +226,19 @@ http://localhost:8000/api
 ]
 ```
 
-#### GET /api/tenants/{tenant_id}/sessions/{session_id}
+#### GET /api/tenants/{tenant_id}/conversations/{conversation_id}
 
-特定のセッションを取得
+特定の会話を取得
 
-#### GET /api/tenants/{tenant_id}/sessions/{session_id}/messages
+#### GET /api/tenants/{tenant_id}/conversations/{conversation_id}/messages
 
-セッションのメッセージ履歴を取得
+会話のメッセージ履歴を取得
 
 **レスポンス:**
 
 ```json
 {
-  "chat_session_id": "session-uuid-001",
+  "conversation_id": "conversation-uuid-001",
   "messages": [
     {
       "message_seq": 1,
@@ -269,13 +269,13 @@ http://localhost:8000/api
 }
 ```
 
-#### GET /api/tenants/{tenant_id}/sessions/{session_id}/display
+#### GET /api/tenants/{tenant_id}/conversations/{conversation_id}/display
 
 UI表示用のメッセージ履歴を取得（整形済み）
 
-#### PUT /api/tenants/{tenant_id}/sessions/{session_id}
+#### PUT /api/tenants/{tenant_id}/conversations/{conversation_id}
 
-セッション情報を更新
+会話情報を更新
 
 ---
 
@@ -302,7 +302,7 @@ UI表示用のメッセージ履歴を取得（整形済み）
 {
   "agent_config_id": "default-agent",
   "model_id": "claude-sonnet-4",
-  "chat_session_id": "session-uuid-001",
+  "conversation_id": "conversation-uuid-001",
   "user_input": "Pythonでソートアルゴリズムを教えてください",
   "executor": {
     "user_id": "user-001",
@@ -341,11 +341,11 @@ curl -X POST "http://localhost:8000/api/tenants/tenant-001/execute" \
 
 ### Workspace
 
-セッション専用ワークスペースの管理API（S3ベース）。
+会話専用ワークスペースの管理API（S3ベース）。
 
 ファイルはAmazon S3に保存され、APIサーバー経由でのみアクセス可能です。
 
-#### GET /api/tenants/{tenant_id}/sessions/{session_id}/files
+#### GET /api/tenants/{tenant_id}/conversations/{conversation_id}/files
 
 ファイル一覧を取得
 
@@ -353,7 +353,7 @@ curl -X POST "http://localhost:8000/api/tenants/tenant-001/execute" \
 
 ```json
 {
-  "chat_session_id": "session-uuid-001",
+  "conversation_id": "conversation-uuid-001",
   "files": [
     {
       "file_id": "file-uuid-001",
@@ -373,7 +373,7 @@ curl -X POST "http://localhost:8000/api/tenants/tenant-001/execute" \
 }
 ```
 
-#### GET /api/tenants/{tenant_id}/sessions/{session_id}/files/download
+#### GET /api/tenants/{tenant_id}/conversations/{conversation_id}/files/download
 
 ファイルをダウンロード
 
@@ -387,7 +387,7 @@ curl -X POST "http://localhost:8000/api/tenants/tenant-001/execute" \
 - `Content-Disposition`: `attachment; filename="ファイル名"`
 - Body: ファイルのバイナリデータ
 
-#### GET /api/tenants/{tenant_id}/sessions/{session_id}/files/presented
+#### GET /api/tenants/{tenant_id}/conversations/{conversation_id}/files/presented
 
 AIが提示したファイル一覧を取得
 
@@ -395,7 +395,7 @@ AIが提示したファイル一覧を取得
 
 ```json
 {
-  "chat_session_id": "session-uuid-001",
+  "conversation_id": "conversation-uuid-001",
   "files": [
     {
       "file_id": "file-uuid-002",
@@ -556,6 +556,8 @@ MCPサーバーを削除
 ### ワークスペース（S3）
 
 ファイルはAmazon S3に保存されます。S3ライフサイクルポリシーでの自動削除・移行を推奨します。
+
+会話ごとに独立したワークスペースが作成され、テナント・会話間で完全に分離されます。
 
 ### リクエスト
 

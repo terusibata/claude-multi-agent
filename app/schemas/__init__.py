@@ -14,8 +14,8 @@ from app.schemas.mcp_server import (
     McpServerUpdate,
 )
 from app.schemas.model import ModelCreate, ModelResponse, ModelUpdate
-from app.schemas.session import (
-    ChatSessionResponse,
+from app.schemas.conversation import (
+    ConversationResponse,
     MessageLogResponse,
 )
 from app.schemas.skill import SkillCreate, SkillResponse, SkillUpdate
@@ -42,8 +42,8 @@ __all__ = [
     "ExecuteRequest",
     "ExecuteResponse",
     "SSEEvent",
-    # セッション
-    "ChatSessionResponse",
+    # 会話
+    "ConversationResponse",
     "MessageLogResponse",
     # 使用状況
     "UsageLogResponse",

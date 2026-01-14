@@ -1,6 +1,6 @@
 """
-セッション・履歴サービス
-チャットセッションと会話履歴の管理
+会話・履歴サービス
+会話と会話履歴の管理
 """
 from datetime import datetime
 from typing import Any, Optional
@@ -9,12 +9,12 @@ from uuid import uuid4
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.chat_session import ChatSession
+from app.models.conversation import Conversation
 from app.models.message_log import MessageLog
 
 
-class SessionService:
-    """セッション・履歴サービスクラス"""
+class ConversationService:
+    """会話・履歴サービスクラス"""
 
     def __init__(self, db: AsyncSession):
         """
@@ -26,10 +26,10 @@ class SessionService:
         self.db = db
 
     # ============================================
-    # チャットセッション操作
+    # 会話操作
     # ============================================
 
-    async def get_sessions_by_tenant(
+    async def get_conversations_by_tenant(
         self,
         tenant_id: str,
         user_id: Optional[str] = None,
@@ -38,9 +38,9 @@ class SessionService:
         to_date: Optional[datetime] = None,
         limit: int = 50,
         offset: int = 0,
-    ) -> list[ChatSession]:
+    ) -> list[Conversation]:
         """
-        テナントのセッション一覧を取得
+        テナントの会話一覧を取得
 
         Args:
             tenant_id: テナントID
@@ -52,95 +52,95 @@ class SessionService:
             offset: オフセット
 
         Returns:
-            セッションリスト
+            会話リスト
         """
-        query = select(ChatSession).where(ChatSession.tenant_id == tenant_id)
+        query = select(Conversation).where(Conversation.tenant_id == tenant_id)
 
         if user_id:
-            query = query.where(ChatSession.user_id == user_id)
+            query = query.where(Conversation.user_id == user_id)
         if status:
-            query = query.where(ChatSession.status == status)
+            query = query.where(Conversation.status == status)
         if from_date:
-            query = query.where(ChatSession.created_at >= from_date)
+            query = query.where(Conversation.created_at >= from_date)
         if to_date:
-            query = query.where(ChatSession.created_at <= to_date)
+            query = query.where(Conversation.created_at <= to_date)
 
-        query = query.order_by(ChatSession.updated_at.desc())
+        query = query.order_by(Conversation.updated_at.desc())
         query = query.limit(limit).offset(offset)
 
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
-    async def get_session_by_id(
+    async def get_conversation_by_id(
         self,
-        chat_session_id: str,
+        conversation_id: str,
         tenant_id: str,
-    ) -> Optional[ChatSession]:
+    ) -> Optional[Conversation]:
         """
-        IDでセッションを取得
+        IDで会話を取得
 
         Args:
-            chat_session_id: チャットセッションID
+            conversation_id: 会話ID
             tenant_id: テナントID
 
         Returns:
-            セッション（存在しない場合はNone）
+            会話（存在しない場合はNone）
         """
-        query = select(ChatSession).where(
-            ChatSession.chat_session_id == chat_session_id,
-            ChatSession.tenant_id == tenant_id,
+        query = select(Conversation).where(
+            Conversation.conversation_id == conversation_id,
+            Conversation.tenant_id == tenant_id,
         )
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
-    async def create_session(
+    async def create_conversation(
         self,
-        chat_session_id: str,
+        conversation_id: str,
         tenant_id: str,
         user_id: str,
         agent_config_id: Optional[str] = None,
         title: Optional[str] = None,
-    ) -> ChatSession:
+    ) -> Conversation:
         """
-        セッションを作成
+        会話を作成
 
         Args:
-            chat_session_id: チャットセッションID
+            conversation_id: 会話ID
             tenant_id: テナントID
             user_id: ユーザーID
             agent_config_id: エージェント設定ID
-            title: セッションタイトル
+            title: 会話タイトル
 
         Returns:
-            作成されたセッション
+            作成された会話
         """
-        session = ChatSession(
-            chat_session_id=chat_session_id,
+        conversation = Conversation(
+            conversation_id=conversation_id,
             tenant_id=tenant_id,
             user_id=user_id,
             agent_config_id=agent_config_id,
             title=title,
             status="active",
         )
-        self.db.add(session)
+        self.db.add(conversation)
         await self.db.flush()
-        await self.db.refresh(session)
-        return session
+        await self.db.refresh(conversation)
+        return conversation
 
-    async def update_session(
+    async def update_conversation(
         self,
-        chat_session_id: str,
+        conversation_id: str,
         tenant_id: str,
         session_id: Optional[str] = None,
         parent_session_id: Optional[str] = None,
         title: Optional[str] = None,
         status: Optional[str] = None,
-    ) -> Optional[ChatSession]:
+    ) -> Optional[Conversation]:
         """
-        セッションを更新
+        会話を更新
 
         Args:
-            chat_session_id: チャットセッションID
+            conversation_id: 会話ID
             tenant_id: テナントID
             session_id: SDKセッションID
             parent_session_id: 親セッションID
@@ -148,92 +148,92 @@ class SessionService:
             status: ステータス
 
         Returns:
-            更新されたセッション（存在しない場合はNone）
+            更新された会話（存在しない場合はNone）
         """
-        session = await self.get_session_by_id(chat_session_id, tenant_id)
-        if not session:
+        conversation = await self.get_conversation_by_id(conversation_id, tenant_id)
+        if not conversation:
             return None
 
         if session_id is not None:
-            session.session_id = session_id
+            conversation.session_id = session_id
         if parent_session_id is not None:
-            session.parent_session_id = parent_session_id
+            conversation.parent_session_id = parent_session_id
         if title is not None:
-            session.title = title
+            conversation.title = title
         if status is not None:
-            session.status = status
+            conversation.status = status
 
         await self.db.flush()
-        await self.db.refresh(session)
-        return session
+        await self.db.refresh(conversation)
+        return conversation
 
-    async def update_session_title(
+    async def update_conversation_title(
         self,
-        chat_session_id: str,
+        conversation_id: str,
         tenant_id: str,
         title: str,
-    ) -> Optional[ChatSession]:
+    ) -> Optional[Conversation]:
         """
-        セッションのタイトルを更新
+        会話のタイトルを更新
 
         Args:
-            chat_session_id: チャットセッションID
+            conversation_id: 会話ID
             tenant_id: テナントID
             title: 新しいタイトル
 
         Returns:
-            更新されたセッション（存在しない場合はNone）
+            更新された会話（存在しない場合はNone）
         """
-        return await self.update_session(
-            chat_session_id, tenant_id, title=title
+        return await self.update_conversation(
+            conversation_id, tenant_id, title=title
         )
 
-    async def archive_session(
+    async def archive_conversation(
         self,
-        chat_session_id: str,
+        conversation_id: str,
         tenant_id: str,
-    ) -> Optional[ChatSession]:
+    ) -> Optional[Conversation]:
         """
-        セッションをアーカイブ
+        会話をアーカイブ
 
         Args:
-            chat_session_id: チャットセッションID
+            conversation_id: 会話ID
             tenant_id: テナントID
 
         Returns:
-            更新されたセッション（存在しない場合はNone）
+            更新された会話（存在しない場合はNone）
         """
-        return await self.update_session(
-            chat_session_id, tenant_id, status="archived"
+        return await self.update_conversation(
+            conversation_id, tenant_id, status="archived"
         )
 
-    async def delete_session(
+    async def delete_conversation(
         self,
-        chat_session_id: str,
+        conversation_id: str,
         tenant_id: str,
     ) -> bool:
         """
-        セッションを削除
+        会話を削除
 
         Args:
-            chat_session_id: チャットセッションID
+            conversation_id: 会話ID
             tenant_id: テナントID
 
         Returns:
             削除成功かどうか
         """
-        session = await self.get_session_by_id(chat_session_id, tenant_id)
-        if not session:
+        conversation = await self.get_conversation_by_id(conversation_id, tenant_id)
+        if not conversation:
             return False
 
         # 関連するメッセージログを削除
         await self.db.execute(
             MessageLog.__table__.delete().where(
-                MessageLog.chat_session_id == chat_session_id
+                MessageLog.conversation_id == conversation_id
             )
         )
 
-        await self.db.delete(session)
+        await self.db.delete(conversation)
         return True
 
     # ============================================
@@ -242,7 +242,7 @@ class SessionService:
 
     async def save_message_log(
         self,
-        chat_session_id: str,
+        conversation_id: str,
         message_seq: int,
         message_type: str,
         message_subtype: Optional[str],
@@ -252,7 +252,7 @@ class SessionService:
         メッセージログを保存
 
         Args:
-            chat_session_id: チャットセッションID
+            conversation_id: 会話ID
             message_seq: メッセージ順序
             message_type: メッセージタイプ
             message_subtype: メッセージサブタイプ
@@ -263,7 +263,7 @@ class SessionService:
         """
         log = MessageLog(
             message_id=str(uuid4()),
-            chat_session_id=chat_session_id,
+            conversation_id=conversation_id,
             message_seq=message_seq,
             message_type=message_type,
             message_subtype=message_subtype,
@@ -275,27 +275,27 @@ class SessionService:
 
     async def get_message_logs(
         self,
-        chat_session_id: str,
+        conversation_id: str,
         tenant_id: str,
     ) -> list[MessageLog]:
         """
-        セッションのメッセージログを取得
+        会話のメッセージログを取得
 
         Args:
-            chat_session_id: チャットセッションID
+            conversation_id: 会話ID
             tenant_id: テナントID（権限チェック用）
 
         Returns:
             メッセージログリスト
         """
-        # まずセッションの存在確認
-        session = await self.get_session_by_id(chat_session_id, tenant_id)
-        if not session:
+        # まず会話の存在確認
+        conversation = await self.get_conversation_by_id(conversation_id, tenant_id)
+        if not conversation:
             return []
 
         query = (
             select(MessageLog)
-            .where(MessageLog.chat_session_id == chat_session_id)
+            .where(MessageLog.conversation_id == conversation_id)
             .order_by(MessageLog.message_seq)
         )
         result = await self.db.execute(query)
@@ -303,20 +303,20 @@ class SessionService:
 
     async def get_max_message_seq(
         self,
-        chat_session_id: str,
+        conversation_id: str,
     ) -> int:
         """
-        セッションの最大メッセージ順序を取得
+        会話の最大メッセージ順序を取得
 
         Args:
-            chat_session_id: チャットセッションID
+            conversation_id: 会話ID
 
         Returns:
             最大メッセージ順序（メッセージがない場合は0）
         """
         query = (
             select(func.max(MessageLog.message_seq))
-            .where(MessageLog.chat_session_id == chat_session_id)
+            .where(MessageLog.conversation_id == conversation_id)
         )
         result = await self.db.execute(query)
         max_seq = result.scalar()
@@ -324,14 +324,14 @@ class SessionService:
 
     async def get_latest_turn_number(
         self,
-        chat_session_id: str,
+        conversation_id: str,
     ) -> int:
         """
         最新のターン番号を取得
         ターン番号はユーザーメッセージの数として計算
 
         Args:
-            chat_session_id: チャットセッションID
+            conversation_id: 会話ID
 
         Returns:
             最新のターン番号（存在しない場合は0）
@@ -340,7 +340,7 @@ class SessionService:
             select(func.count())
             .select_from(MessageLog)
             .where(
-                MessageLog.chat_session_id == chat_session_id,
+                MessageLog.conversation_id == conversation_id,
                 MessageLog.message_type == "user",
             )
         )

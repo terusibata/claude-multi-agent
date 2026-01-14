@@ -2,7 +2,7 @@
 SSEストリーミングユーティリティ
 Server-Sent Events形式でのストリーミング送信
 
-イベント形式はmessagesエンドポイント（/api/tenants/{tenant_id}/sessions/{session_id}/messages）
+イベント形式はmessagesエンドポイント（/api/tenants/{tenant_id}/conversations/{conversation_id}/messages）
 で取得できる形式と統一されています。
 
 イベントタイプ:
@@ -201,16 +201,16 @@ def format_session_start_event(
     session_id: str,
     tools: list[str],
     model: str,
-    chat_session_id: str | None = None,
+    conversation_id: str | None = None,
 ) -> dict:
     """
     セッション開始イベントをフォーマット（messages形式）
 
     Args:
-        session_id: セッションID
+        session_id: セッションID（Claude SDK用）
         tools: 利用可能なツールリスト
         model: 使用モデル
-        chat_session_id: チャットセッションID（オプション）
+        conversation_id: 会話ID（オプション）
 
     Returns:
         イベントデータ
@@ -220,8 +220,8 @@ def format_session_start_event(
         "tools": tools,
         "model": model,
     }
-    if chat_session_id:
-        data["chat_session_id"] = chat_session_id
+    if conversation_id:
+        data["conversation_id"] = conversation_id
 
     return format_system_message_event(
         subtype="init",
