@@ -281,11 +281,21 @@ UI表示用のメッセージ履歴を取得（整形済み）
 
 新しい会話を作成
 
-**クエリパラメータ:**
+**リクエストボディ:**
 
-- `user_id`: ユーザーID（必須）
-- `agent_config_id`: エージェント設定ID（オプション）
-- `title`: 会話タイトル（オプション）
+```json
+{
+  "user_id": "user-001",
+  "agent_config_id": "default-agent"
+}
+```
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| `user_id` | string | ○ | ユーザーID |
+| `agent_config_id` | string | ○ | エージェント設定ID |
+
+タイトルはストリーミング実行時にAIが自動生成します。
 
 **レスポンス:**
 
@@ -294,7 +304,7 @@ UI表示用のメッセージ履歴を取得（整形済み）
   "conversation_id": "conversation-uuid-001",
   "tenant_id": "tenant-001",
   "user_id": "user-001",
-  "agent_config_id": null,
+  "agent_config_id": "default-agent",
   "session_id": null,
   "title": null,
   "status": "active",

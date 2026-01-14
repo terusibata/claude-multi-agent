@@ -62,3 +62,10 @@ class ConversationUpdateRequest(BaseModel):
 
     title: Optional[str] = Field(None, max_length=500)
     status: Optional[str] = Field(None, pattern="^(active|archived)$")
+
+
+class ConversationCreateRequest(BaseModel):
+    """会話作成リクエスト"""
+
+    user_id: str = Field(..., description="ユーザーID")
+    agent_config_id: str = Field(..., description="エージェント設定ID")

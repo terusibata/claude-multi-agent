@@ -17,6 +17,7 @@ from app.schemas.conversation import (
     ConversationResponse,
     MessageLogResponse,
     ConversationUpdateRequest,
+    ConversationCreateRequest,
 )
 from app.schemas.execute import ExecuteRequest, StreamRequest
 from app.services.agent_config_service import AgentConfigService
@@ -184,13 +185,18 @@ async def get_message_logs(
 )
 async def create_conversation(
     tenant_id: str,
-    user_id: str = Query(..., description="ユーザーID"),
-    agent_config_id: Optional[str] = Query(None, description="エージェント設定ID"),
-    title: Optional[str] = Query(None, description="会話タイトル"),
+    request: ConversationCreateRequest,
     db: AsyncSession = Depends(get_db),
 ):
     """
     新しい会話を作成します。
+
+    ## リクエストボディ
+
+    - **user_id**: ユーザーID（必須）
+    - **agent_config_id**: エージェント設定ID（必須）
+
+    タイトルはストリーミング実行時にAIが自動生成します。
     """
     from uuid import uuid4
 
@@ -200,9 +206,9 @@ async def create_conversation(
     conversation = await service.create_conversation(
         conversation_id=conversation_id,
         tenant_id=tenant_id,
-        user_id=user_id,
-        agent_config_id=agent_config_id,
-        title=title,
+        user_id=request.user_id,
+        agent_config_id=request.agent_config_id,
+        title=None,
     )
     return conversation
 

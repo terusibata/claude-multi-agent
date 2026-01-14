@@ -15,6 +15,7 @@ from app.schemas.mcp_server import (
 )
 from app.schemas.model import ModelCreate, ModelResponse, ModelUpdate
 from app.schemas.conversation import (
+    ConversationCreateRequest,
     ConversationResponse,
     MessageLogResponse,
 )
@@ -44,6 +45,7 @@ __all__ = [
     "SSEEvent",
     "StreamRequest",
     # 会話
+    "ConversationCreateRequest",
     "ConversationResponse",
     "MessageLogResponse",
     # 使用状況

@@ -187,7 +187,12 @@ curl -X POST http://localhost:8000/api/tenants/tenant-001/execute \
 **Step 1: 会話を作成**
 
 ```bash
-curl -X POST "http://localhost:8000/api/tenants/tenant-001/conversations?user_id=user-001"
+curl -X POST "http://localhost:8000/api/tenants/tenant-001/conversations" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "user-001",
+    "agent_config_id": "default-agent"
+  }'
 ```
 
 レスポンス：
@@ -196,10 +201,13 @@ curl -X POST "http://localhost:8000/api/tenants/tenant-001/conversations?user_id
   "conversation_id": "abc123-uuid",
   "tenant_id": "tenant-001",
   "user_id": "user-001",
+  "agent_config_id": "default-agent",
   "status": "active",
   "created_at": "2024-01-01T00:00:00Z"
 }
 ```
+
+タイトルはストリーミング実行時にAIが自動生成します。
 
 **Step 2: ストリーミング実行**
 
