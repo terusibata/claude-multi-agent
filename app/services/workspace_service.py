@@ -374,7 +374,7 @@ class WorkspaceService:
             )
         )
         conversation = result.scalar_one_or_none()
-        if not conversation or not conversation.workspace_enabled:
+        if not conversation or not conversation.enable_workspace:
             return None
 
         # ファイル統計を取得
@@ -382,7 +382,7 @@ class WorkspaceService:
 
         return WorkspaceInfo(
             conversation_id=conversation_id,
-            workspace_enabled=conversation.workspace_enabled,
+            workspace_enabled=conversation.enable_workspace,
             workspace_path=conversation.workspace_path,
             workspace_created_at=conversation.workspace_created_at,
             file_count=file_count,
