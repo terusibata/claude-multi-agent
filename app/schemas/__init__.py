@@ -7,7 +7,7 @@ from app.schemas.agent_config import (
     AgentConfigResponse,
     AgentConfigUpdate,
 )
-from app.schemas.execute import ExecuteRequest, ExecuteResponse, SSEEvent
+from app.schemas.execute import ExecuteRequest, ExecuteResponse, SSEEvent, StreamRequest
 from app.schemas.mcp_server import (
     McpServerCreate,
     McpServerResponse,
@@ -42,6 +42,7 @@ __all__ = [
     "ExecuteRequest",
     "ExecuteResponse",
     "SSEEvent",
+    "StreamRequest",
     # 会話
     "ConversationResponse",
     "MessageLogResponse",

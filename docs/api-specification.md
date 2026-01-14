@@ -277,6 +277,68 @@ UI表示用のメッセージ履歴を取得（整形済み）
 
 会話情報を更新
 
+#### POST /api/tenants/{tenant_id}/conversations
+
+新しい会話を作成
+
+**クエリパラメータ:**
+
+- `user_id`: ユーザーID（必須）
+- `agent_config_id`: エージェント設定ID（オプション）
+- `title`: 会話タイトル（オプション）
+
+**レスポンス:**
+
+```json
+{
+  "conversation_id": "conversation-uuid-001",
+  "tenant_id": "tenant-001",
+  "user_id": "user-001",
+  "agent_config_id": null,
+  "session_id": null,
+  "title": null,
+  "status": "active",
+  "created_at": "2024-01-01T00:00:00Z",
+  "updated_at": "2024-01-01T00:00:00Z"
+}
+```
+
+#### POST /api/tenants/{tenant_id}/conversations/{conversation_id}/stream
+
+既存の会話でエージェント実行（SSEストリーミング、ファイル添付対応）
+
+**Content-Type:** `multipart/form-data`
+
+**リクエストパラメータ:**
+
+| パラメータ | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| `request_data` | string | ○ | StreamRequestのJSON文字列 |
+| `files` | File[] | - | 添付ファイル（複数可、オプション） |
+
+**StreamRequest JSON フィールド:**
+
+```json
+{
+  "agent_config_id": "default-agent",
+  "model_id": "claude-sonnet-4",
+  "user_input": "質問内容",
+  "executor": {
+    "user_id": "user-001",
+    "name": "田中太郎",
+    "email": "tanaka@example.com"
+  },
+  "tokens": {},
+  "resume_session_id": null,
+  "fork_session": false,
+  "enable_workspace": false
+}
+```
+
+**レスポンス:** Server-Sent Events (SSE)
+
+詳細は [streaming-specification.md](./streaming-specification.md) を参照してください。
+
 ---
 
 ### Execute

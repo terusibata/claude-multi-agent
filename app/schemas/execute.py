@@ -18,6 +18,68 @@ class ExecutorInfo(BaseModel):
     employee_id: Optional[str] = Field(None, description="社員番号")
 
 
+class StreamRequest(BaseModel):
+    """
+    会話ストリーミングリクエスト
+
+    /conversations/{conversation_id}/stream エンドポイント用。
+    conversation_idはURLパスから取得するため、このスキーマには含まれない。
+    """
+
+    # 必須パラメータ
+    agent_config_id: str = Field(..., description="エージェント実行設定ID")
+    model_id: str = Field(..., description="モデルID")
+    user_input: str = Field(..., description="ユーザー入力")
+    executor: ExecutorInfo = Field(..., description="実行者情報")
+
+    # MCPサーバー用認証情報（一時トークン）
+    tokens: Optional[dict[str, str]] = Field(
+        None,
+        description="MCPサーバー用認証情報（例: {'servicenowToken': 'xxx'}）",
+    )
+
+    # 任意パラメータ
+    resume_session_id: Optional[str] = Field(
+        None, description="継続するSDKセッションID"
+    )
+    fork_session: bool = Field(default=False, description="セッションをフォークするか")
+
+    # ワークスペース設定
+    enable_workspace: bool = Field(
+        default=False,
+        description="会話専用ワークスペースを有効にする",
+    )
+
+    # Skill/ツール優先指定
+    preferred_skills: Optional[list[str]] = Field(
+        None,
+        description="優先的に使用するSkill/MCPサーバー名のリスト",
+    )
+
+    def to_execute_request(self, conversation_id: str) -> "ExecuteRequest":
+        """
+        ExecuteRequestに変換
+
+        Args:
+            conversation_id: URLパスから取得した会話ID
+
+        Returns:
+            ExecuteRequest
+        """
+        return ExecuteRequest(
+            agent_config_id=self.agent_config_id,
+            model_id=self.model_id,
+            conversation_id=conversation_id,
+            user_input=self.user_input,
+            executor=self.executor,
+            tokens=self.tokens,
+            resume_session_id=self.resume_session_id,
+            fork_session=self.fork_session,
+            enable_workspace=self.enable_workspace,
+            preferred_skills=self.preferred_skills,
+        )
+
+
 class ExecuteRequest(BaseModel):
     """エージェント実行リクエスト"""
 

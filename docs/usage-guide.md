@@ -174,6 +174,49 @@ curl -X POST http://localhost:8000/api/tenants/tenant-001/execute \
   }'
 ```
 
+### 5. フロントエンド推奨フロー
+
+フロントエンドアプリケーションでは、以下のフローを推奨します：
+
+```
+1. POST /conversations → 会話を作成（conversation_idを取得）
+2. ページ遷移（/chat/{conversation_id}など）
+3. POST /conversations/{conversation_id}/stream → ストリーミング実行
+```
+
+**Step 1: 会話を作成**
+
+```bash
+curl -X POST "http://localhost:8000/api/tenants/tenant-001/conversations?user_id=user-001"
+```
+
+レスポンス：
+```json
+{
+  "conversation_id": "abc123-uuid",
+  "tenant_id": "tenant-001",
+  "user_id": "user-001",
+  "status": "active",
+  "created_at": "2024-01-01T00:00:00Z"
+}
+```
+
+**Step 2: ストリーミング実行**
+
+```bash
+curl -X POST "http://localhost:8000/api/tenants/tenant-001/conversations/abc123-uuid/stream" \
+  -F 'request_data={
+    "agent_config_id": "default-agent",
+    "model_id": "claude-sonnet-4",
+    "user_input": "Pythonでソートアルゴリズムを実装してください",
+    "executor": {
+      "user_id": "user-001",
+      "name": "田中太郎",
+      "email": "tanaka@example.com"
+    }
+  }'
+```
+
 ## エージェント設定
 
 ### 利用可能なツール
