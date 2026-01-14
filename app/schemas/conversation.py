@@ -69,4 +69,4 @@ class ConversationCreateRequest(BaseModel):
 
     user_id: str = Field(..., description="ユーザーID")
     model_id: Optional[str] = Field(None, description="モデルID（省略時はテナントのデフォルト）")
-    workspace_enabled: bool = Field(default=False, description="ワークスペースを有効にするか")
+    workspace_enabled: bool = Field(default=True, description="ワークスペースを有効にするか")

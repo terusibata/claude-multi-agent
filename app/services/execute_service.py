@@ -538,7 +538,18 @@ class ExecuteService:
         2. AIファイルを自動登録
         3. ローカルクリーンアップ
         """
+        import os
         try:
+            # デバッグ: ローカルディレクトリの内容を確認
+            local_dir = self.workspace_service.get_workspace_local_path(context.conversation_id)
+            logger.info(
+                "同期前ローカルディレクトリ確認",
+                local_dir=local_dir,
+                cwd=context.cwd,
+                exists=os.path.exists(local_dir),
+                contents=os.listdir(local_dir) if os.path.exists(local_dir) else [],
+            )
+
             # ローカルからS3に同期
             synced_files = await self.workspace_service.sync_from_local(
                 context.tenant_id, context.conversation_id

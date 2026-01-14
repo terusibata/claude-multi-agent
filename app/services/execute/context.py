@@ -192,6 +192,7 @@ class SDKOptions:
     env: dict[str, str] = field(default_factory=dict)
     setting_sources: Optional[list[str]] = None
     resume: Optional[str] = None
+    permission_mode: str = "bypassPermissions"  # ファイル操作の権限をバイパス
 
     def to_dict(self) -> dict[str, Any]:
         """SDK用の辞書に変換"""
@@ -202,6 +203,7 @@ class SDKOptions:
             "mcp_servers": self.mcp_servers,
             "cwd": self.cwd,
             "env": self.env,
+            "permission_mode": self.permission_mode,
         }
 
         if self.setting_sources:
