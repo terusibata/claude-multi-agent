@@ -188,8 +188,8 @@ class OptionsBuilder:
                 context.tenant_id, context.conversation_id
             )
 
-            # ワークスペースが未有効化の場合は有効化
-            if not workspace_info:
+            # ワークスペースが未有効化またはworkspace_pathが未設定の場合は有効化
+            if not workspace_info or not workspace_info.workspace_path:
                 await self.workspace_service.enable_workspace(
                     context.tenant_id, context.conversation_id
                 )
