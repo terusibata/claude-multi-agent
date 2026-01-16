@@ -244,6 +244,16 @@ class ExecuteService:
             await client.query(context.request.user_input)
 
             async for message in client.receive_response():
+                # デバッグ: 受信したメッセージの型を確認
+                msg_class_name = type(message).__name__
+                msg_type_attr = getattr(message, "type", None)
+                logger.debug(
+                    "SDK メッセージ受信",
+                    class_name=msg_class_name,
+                    type_attr=msg_type_attr,
+                    has_event=hasattr(message, "event"),
+                )
+
                 # ストリーミングイベント（部分メッセージ）の処理
                 # include_partial_messages=True の場合、stream_event が送信される
                 if hasattr(message, "type") and message.type == "stream_event":
