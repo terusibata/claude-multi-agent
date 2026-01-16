@@ -9,7 +9,6 @@ sse-starlette>=3.1.2
 sqlalchemy>=2.0.45
 asyncpg>=0.31.0
 alembic>=1.17.2
-psycopg2-binary>=2.9.11
 
 # バリデーション
 pydantic>=2.12.5
@@ -25,7 +24,6 @@ botocore>=1.42.24
 # ユーティリティ
 python-multipart>=0.0.21
 python-dotenv>=1.2.1
-aiofiles>=25.1.0
 PyYAML>=6.0.3
 
 # ロギング
