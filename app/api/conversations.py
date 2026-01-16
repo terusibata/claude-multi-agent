@@ -38,7 +38,14 @@ from app.services.conversation_service import ConversationService
 from app.services.execute_service import ExecuteService
 from app.services.tenant_service import TenantService
 from app.services.workspace_service import WorkspaceService
-from app.utils.streaming import format_error_event
+from app.utils.streaming import (
+    format_error_event,
+    format_heartbeat_event,
+    format_connection_init_event,
+    EventIdGenerator,
+    HEARTBEAT_INTERVAL_SECONDS,
+    SSE_RETRY_MS,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -340,6 +347,11 @@ async def _event_generator(
     SSEイベントジェネレータ
     クライアントが切断しても、バックグラウンド処理は継続します。
 
+    Features:
+    - イベントID: 各イベントに一意のIDを付与（Last-Event-ID対応準備）
+    - ハートビート: 定期的に接続維持イベントを送信
+    - retry設定: SSE再接続間隔を指定
+
     Args:
         execute_service: 実行サービス
         request: 実行リクエスト
@@ -352,6 +364,9 @@ async def _event_generator(
     event_queue: asyncio.Queue = asyncio.Queue()
     consecutive_timeouts = 0
 
+    # イベントID生成器を初期化
+    event_id_gen = EventIdGenerator(request.conversation_id)
+
     background_task = asyncio.create_task(
         _background_execution(
             execute_service,
@@ -363,29 +378,38 @@ async def _event_generator(
     )
 
     try:
+        # 接続初期化イベントを送信（retry設定付き）
+        init_event = format_connection_init_event(SSE_RETRY_MS)
+        yield {
+            "id": event_id_gen.next(),
+            "event": init_event["event"],
+            "data": json.dumps(init_event["data"], ensure_ascii=False, default=str),
+            "retry": init_event.get("retry", SSE_RETRY_MS),
+        }
+
         while True:
             try:
+                # ハートビート間隔でイベントを待機
                 event = await asyncio.wait_for(
                     event_queue.get(),
-                    timeout=EVENT_TIMEOUT_SECONDS,
+                    timeout=HEARTBEAT_INTERVAL_SECONDS,
                 )
                 consecutive_timeouts = 0
 
                 if event is None:
                     break
 
+                # イベントにIDを付与して送信
                 yield {
+                    "id": event_id_gen.next(),
                     "event": event["event"],
                     "data": json.dumps(event["data"], ensure_ascii=False, default=str),
                 }
-            except asyncio.TimeoutError:
-                consecutive_timeouts += 1
-                logger.warning(
-                    f"Event queue timeout ({consecutive_timeouts}/{MAX_CONSECUTIVE_TIMEOUTS})",
-                    extra={"conversation_id": request.conversation_id},
-                )
 
+            except asyncio.TimeoutError:
+                # タイムアウト時はハートビートを送信
                 if background_task.done():
+                    # バックグラウンドタスクが完了している場合
                     try:
                         await background_task
                     except asyncio.CancelledError:
@@ -406,9 +430,25 @@ async def _event_generator(
                         )
                     break
 
-                if consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS:
+                # ハートビートイベントを送信
+                heartbeat_event = format_heartbeat_event("processing")
+                yield {
+                    "id": event_id_gen.next(),
+                    "event": heartbeat_event["event"],
+                    "data": json.dumps(heartbeat_event["data"], ensure_ascii=False, default=str),
+                }
+
+                consecutive_timeouts += 1
+                logger.debug(
+                    f"Heartbeat sent ({consecutive_timeouts})",
+                    extra={"conversation_id": request.conversation_id},
+                )
+
+                # 長時間タイムアウト（ハートビート間隔 × 最大回数）でエラー
+                max_heartbeats = EVENT_TIMEOUT_SECONDS // HEARTBEAT_INTERVAL_SECONDS
+                if consecutive_timeouts >= max_heartbeats:
                     logger.error(
-                        f"Max consecutive timeouts reached, terminating",
+                        f"Max heartbeat timeouts reached ({consecutive_timeouts}), terminating",
                         extra={"conversation_id": request.conversation_id},
                     )
                     error_event = format_error_event(
@@ -416,6 +456,7 @@ async def _event_generator(
                         "timeout_error",
                     )
                     yield {
+                        "id": event_id_gen.next(),
                         "event": error_event["event"],
                         "data": json.dumps(error_event["data"], ensure_ascii=False, default=str),
                     }

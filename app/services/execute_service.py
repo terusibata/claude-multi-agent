@@ -37,6 +37,11 @@ from app.utils.streaming import (
     format_error_event,
     format_result_event,
     format_title_generated_event,
+    format_text_delta_streaming_event,
+    format_thinking_delta_streaming_event,
+    format_input_json_delta_event,
+    format_content_block_start_event,
+    format_content_block_stop_event,
 )
 
 settings = get_settings()
@@ -239,6 +244,14 @@ class ExecuteService:
             await client.query(context.request.user_input)
 
             async for message in client.receive_response():
+                # ストリーミングイベント（部分メッセージ）の処理
+                # include_partial_messages=True の場合、stream_event が送信される
+                if hasattr(message, "type") and message.type == "stream_event":
+                    streaming_event = self._process_stream_event(message, context)
+                    if streaming_event:
+                        yield streaming_event
+                    continue
+
                 context.message_seq += 1
                 timestamp = datetime.utcnow()
 
@@ -299,6 +312,100 @@ class ExecuteService:
         """同期ジェネレータを非同期で処理"""
         for item in gen:
             yield item
+
+    def _process_stream_event(
+        self,
+        message,
+        context: ExecutionContext,
+    ) -> dict | None:
+        """
+        ストリーミングイベント（部分メッセージ）を処理
+
+        include_partial_messages=True の場合に送信される stream_event を処理し、
+        フロントエンドに配信するSSEイベントを生成する
+
+        Args:
+            message: SDKから受信したstream_eventメッセージ
+            context: 実行コンテキスト
+
+        Returns:
+            SSEイベント辞書、またはNone（スキップする場合）
+        """
+        try:
+            event = getattr(message, "event", None)
+            if not event:
+                return None
+
+            event_type = getattr(event, "type", None)
+
+            # content_block_start: コンテンツブロック開始
+            if event_type == "content_block_start":
+                index = getattr(event, "index", 0)
+                content_block = getattr(event, "content_block", {})
+
+                # content_blockをdictに変換
+                if hasattr(content_block, "__dict__"):
+                    block_dict = {
+                        "type": getattr(content_block, "type", "text"),
+                    }
+                    if hasattr(content_block, "text"):
+                        block_dict["text"] = content_block.text
+                    if hasattr(content_block, "id"):
+                        block_dict["id"] = content_block.id
+                    if hasattr(content_block, "name"):
+                        block_dict["name"] = content_block.name
+                else:
+                    block_dict = content_block if isinstance(content_block, dict) else {}
+
+                return format_content_block_start_event(index, block_dict)
+
+            # content_block_delta: コンテンツブロックの増分更新
+            if event_type == "content_block_delta":
+                index = getattr(event, "index", 0)
+                delta = getattr(event, "delta", None)
+
+                if not delta:
+                    return None
+
+                delta_type = getattr(delta, "type", None)
+
+                # text_delta: テキストの増分
+                if delta_type == "text_delta":
+                    text = getattr(delta, "text", "")
+                    if text:
+                        # 注: assistant_text への累積は AssistantMessage の処理で行うため、
+                        # ここでは重複を避けてストリーミングイベントの生成のみ行う
+                        return format_text_delta_streaming_event(text, index)
+
+                # thinking_delta: 思考の増分
+                elif delta_type == "thinking_delta":
+                    thinking = getattr(delta, "thinking", "")
+                    if thinking:
+                        return format_thinking_delta_streaming_event(thinking, index)
+
+                # input_json_delta: ツール入力JSONの増分
+                elif delta_type == "input_json_delta":
+                    partial_json = getattr(delta, "partial_json", "")
+                    # tool_use_id はeventからは取れないので、現在のブロックから取得する必要がある
+                    # ここでは空文字を設定（フロントエンド側でindexで対応）
+                    if partial_json:
+                        return format_input_json_delta_event(partial_json, "", index)
+
+            # content_block_stop: コンテンツブロック終了
+            if event_type == "content_block_stop":
+                index = getattr(event, "index", 0)
+                return format_content_block_stop_event(index)
+
+            # その他のイベントはスキップ（message_start, message_delta, ping等）
+            return None
+
+        except Exception as e:
+            logger.warning(
+                "ストリーミングイベント処理エラー",
+                error=str(e),
+                conversation_id=context.conversation_id,
+            )
+            return None
 
     async def _save_user_message(self, context: ExecutionContext) -> None:
         """ユーザーメッセージを保存"""

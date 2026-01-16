@@ -39,10 +39,106 @@ data: {"type": "result", "subtype": "success", ...}
 - **タイムアウト**: 300秒
 - **バックグラウンド実行**: クライアント切断後も処理は継続
 - **メッセージ順序**: 保証される
+- **ハートビート間隔**: 15秒
+- **再接続間隔**: 3秒（SSE `retry` フィールドで指定）
+
+### SSE イベントフォーマット
+
+各イベントには以下のフィールドが含まれます：
+
+```
+id: {conversation_id}:{sequence}
+event: {event_type}
+data: {JSON_data}
+retry: 3000
+```
+
+| フィールド | 説明 |
+|-----------|------|
+| `id` | イベントの一意識別子（`{conversation_id}:{sequence}` 形式） |
+| `event` | イベントタイプ |
+| `data` | JSON形式のイベントデータ |
+| `retry` | 再接続間隔（ミリ秒、初回のみ） |
 
 ## イベントタイプ
 
-### 1. message イベント
+### 1. connection_init イベント
+
+接続初期化イベント。SSE接続確立時に最初に送信されます。
+
+```json
+{
+  "status": "connected",
+  "timestamp": "2024-01-01T00:00:00.000000"
+}
+```
+
+### 2. heartbeat イベント
+
+ハートビートイベント。15秒間隔で送信され、接続維持とクライアントへの生存確認に使用されます。
+
+```json
+{
+  "status": "processing",
+  "timestamp": "2024-01-01T00:00:00.000000"
+}
+```
+
+### 3. text_delta イベント（リアルタイムストリーミング）
+
+テキストの増分をリアルタイムで配信します。トークンレベルのストリーミングを実現。
+
+```json
+{
+  "type": "text_delta",
+  "index": 0,
+  "text": "こんにちは",
+  "timestamp": "2024-01-01T00:00:00.000000"
+}
+```
+
+### 4. thinking_delta イベント（リアルタイムストリーミング）
+
+Extended Thinkingの思考内容をリアルタイムで配信します。
+
+```json
+{
+  "type": "thinking_delta",
+  "index": 0,
+  "thinking": "ユーザーの質問を分析しています...",
+  "timestamp": "2024-01-01T00:00:00.000000"
+}
+```
+
+### 5. content_block_start イベント
+
+コンテンツブロックの開始を通知します。
+
+```json
+{
+  "type": "content_block_start",
+  "index": 0,
+  "content_block": {
+    "type": "text",
+    "text": ""
+  },
+  "timestamp": "2024-01-01T00:00:00.000000"
+}
+```
+
+### 6. content_block_stop イベント
+
+コンテンツブロックの終了を通知します。
+
+```json
+{
+  "type": "content_block_stop",
+  "index": 0,
+  "timestamp": "2024-01-01T00:00:00.000000"
+}
+```
+
+### 7. message イベント
 
 メインのメッセージイベント。`type` フィールドで種類を区別します。
 
@@ -53,11 +149,11 @@ data: {"type": "result", "subtype": "success", ...}
 | `user_result` | ツール実行結果 |
 | `result` | 最終結果 |
 
-### 2. error イベント
+### 8. error イベント
 
 エラー発生時に送信されます。
 
-### 3. title_generated イベント
+### 9. title_generated イベント
 
 初回実行時、タイトルが自動生成された際に送信されます。
 
@@ -225,43 +321,86 @@ data: {"type": "result", "subtype": "success", ...}
 
 ## フロー図
 
+### リアルタイムストリーミングフロー（推奨）
+
 ```
-Client                          Server
-  |                               |
-  |  POST /conversations/{id}/stream
-  |------------------------------>|
-  |                               |
-  |  event: message               |
-  |  data: {type: "system", subtype: "init", ...}
-  |<------------------------------|
-  |                               |
-  |  event: message               |
-  |  data: {type: "assistant", content_blocks: [{type: "text", ...}]}
-  |<------------------------------|
-  |                               |
-  |  event: message               |
-  |  data: {type: "assistant", content_blocks: [{type: "tool_use", ...}]}
-  |<------------------------------|
-  |                               |
-  |  event: message               |
-  |  data: {type: "user_result", content_blocks: [{type: "tool_result", ...}]}
-  |<------------------------------|
-  |                               |
-  |  event: message               |
-  |  data: {type: "assistant", content_blocks: [{type: "text", ...}]}
-  |<------------------------------|
-  |                               |
-  |  event: title_generated       |
-  |  data: {title: "...", ...}    |
-  |<------------------------------|
-  |                               |
-  |  event: message               |
-  |  data: {type: "result", subtype: "success", ...}
-  |<------------------------------|
-  |                               |
-  |  (connection closed)          |
-  |<------------------------------|
+Client                                    Server
+  |                                         |
+  |  POST /conversations/{id}/stream        |
+  |---------------------------------------->|
+  |                                         |
+  |  id: conv-123:1                         |
+  |  event: connection_init                 |
+  |  data: {status: "connected"}            |
+  |  retry: 3000                            |
+  |<----------------------------------------|
+  |                                         |
+  |  id: conv-123:2                         |
+  |  event: message                         |
+  |  data: {type: "system", subtype: "init"}|
+  |<----------------------------------------|
+  |                                         |
+  |  id: conv-123:3                         |
+  |  event: content_block_start             |
+  |  data: {index: 0, content_block: {type: "text"}}
+  |<----------------------------------------|
+  |                                         |
+  |  id: conv-123:4                         |
+  |  event: text_delta                      |  ← リアルタイム
+  |  data: {index: 0, text: "こんにちは"}   |    テキスト配信
+  |<----------------------------------------|
+  |                                         |
+  |  id: conv-123:5                         |
+  |  event: text_delta                      |
+  |  data: {index: 0, text: "！"}           |
+  |<----------------------------------------|
+  |                                         |
+  |  id: conv-123:6                         |
+  |  event: content_block_stop              |
+  |  data: {index: 0}                       |
+  |<----------------------------------------|
+  |                                         |
+  |  id: conv-123:7                         |
+  |  event: message                         |  ← 完成した
+  |  data: {type: "assistant", ...}         |    メッセージ
+  |<----------------------------------------|
+  |                                         |
+  |  [ツール実行中、15秒経過]               |
+  |                                         |
+  |  id: conv-123:8                         |
+  |  event: heartbeat                       |  ← ハートビート
+  |  data: {status: "processing"}           |
+  |<----------------------------------------|
+  |                                         |
+  |  id: conv-123:9                         |
+  |  event: message                         |
+  |  data: {type: "user_result", ...}       |
+  |<----------------------------------------|
+  |                                         |
+  |  id: conv-123:10                        |
+  |  event: title_generated                 |
+  |  data: {title: "..."}                   |
+  |<----------------------------------------|
+  |                                         |
+  |  id: conv-123:11                        |
+  |  event: message                         |
+  |  data: {type: "result", subtype: "success"}
+  |<----------------------------------------|
+  |                                         |
+  |  (connection closed)                    |
+  |<----------------------------------------|
 ```
+
+### イベントID と Last-Event-ID
+
+クライアントが接続を再確立する際、`Last-Event-ID` ヘッダーを送信することで、
+欠落したイベントを特定できます（将来の実装で対応予定）。
+
+```
+id: {conversation_id}:{sequence}
+```
+
+例: `id: conv-abc123:42`
 
 ## Next.js型定義
 
@@ -400,6 +539,72 @@ export type StreamingMessage =
 // イベント型
 // ==========================================
 
+// 接続初期化イベント
+export interface ConnectionInitEvent {
+  event: 'connection_init';
+  data: {
+    status: 'connected';
+    timestamp: string;
+  };
+}
+
+// ハートビートイベント
+export interface HeartbeatEvent {
+  event: 'heartbeat';
+  data: {
+    status: 'processing' | 'idle';
+    timestamp: string;
+  };
+}
+
+// テキストデルタイベント（リアルタイムストリーミング）
+export interface TextDeltaEvent {
+  event: 'text_delta';
+  data: {
+    type: 'text_delta';
+    index: number;
+    text: string;
+    timestamp: string;
+  };
+}
+
+// 思考デルタイベント（リアルタイムストリーミング）
+export interface ThinkingDeltaEvent {
+  event: 'thinking_delta';
+  data: {
+    type: 'thinking_delta';
+    index: number;
+    thinking: string;
+    timestamp: string;
+  };
+}
+
+// コンテンツブロック開始イベント
+export interface ContentBlockStartEvent {
+  event: 'content_block_start';
+  data: {
+    type: 'content_block_start';
+    index: number;
+    content_block: {
+      type: string;
+      text?: string;
+      id?: string;
+      name?: string;
+    };
+    timestamp: string;
+  };
+}
+
+// コンテンツブロック終了イベント
+export interface ContentBlockStopEvent {
+  event: 'content_block_stop';
+  data: {
+    type: 'content_block_stop';
+    index: number;
+    timestamp: string;
+  };
+}
+
 export interface MessageEvent {
   event: 'message';
   data: StreamingMessage;
@@ -422,7 +627,25 @@ export interface TitleGeneratedEvent {
   };
 }
 
-export type StreamingEvent = MessageEvent | ErrorEvent | TitleGeneratedEvent;
+// 全イベント型
+export type StreamingEvent =
+  | ConnectionInitEvent
+  | HeartbeatEvent
+  | TextDeltaEvent
+  | ThinkingDeltaEvent
+  | ContentBlockStartEvent
+  | ContentBlockStopEvent
+  | MessageEvent
+  | ErrorEvent
+  | TitleGeneratedEvent;
+
+// SSEイベントのラッパー型（イベントIDを含む）
+export interface SSEEvent {
+  id: string;           // イベントID（例: "conv-123:42"）
+  event: string;        // イベントタイプ
+  data: string;         // JSON文字列
+  retry?: number;       // 再接続間隔（ミリ秒）
+}
 
 // ==========================================
 // リクエスト型
@@ -474,6 +697,43 @@ export function isThinkingBlock(block: ContentBlock): block is ThinkingBlock {
   return block.type === 'thinking';
 }
 
+// イベント型ガード
+export function isConnectionInitEvent(event: StreamingEvent): event is ConnectionInitEvent {
+  return event.event === 'connection_init';
+}
+
+export function isHeartbeatEvent(event: StreamingEvent): event is HeartbeatEvent {
+  return event.event === 'heartbeat';
+}
+
+export function isTextDeltaEvent(event: StreamingEvent): event is TextDeltaEvent {
+  return event.event === 'text_delta';
+}
+
+export function isThinkingDeltaEvent(event: StreamingEvent): event is ThinkingDeltaEvent {
+  return event.event === 'thinking_delta';
+}
+
+export function isContentBlockStartEvent(event: StreamingEvent): event is ContentBlockStartEvent {
+  return event.event === 'content_block_start';
+}
+
+export function isContentBlockStopEvent(event: StreamingEvent): event is ContentBlockStopEvent {
+  return event.event === 'content_block_stop';
+}
+
+export function isMessageEvent(event: StreamingEvent): event is MessageEvent {
+  return event.event === 'message';
+}
+
+export function isErrorEvent(event: StreamingEvent): event is ErrorEvent {
+  return event.event === 'error';
+}
+
+export function isTitleGeneratedEvent(event: StreamingEvent): event is TitleGeneratedEvent {
+  return event.event === 'title_generated';
+}
+
 export function isToolResultBlock(block: ContentBlock): block is ToolResultBlock {
   return block.type === 'tool_result';
 }
@@ -490,11 +750,18 @@ import { useState, useCallback, useRef } from 'react';
 import type {
   StreamRequest,
   StreamingMessage,
+  StreamingEvent,
   ContentBlock,
   UsageInfo,
 } from '@/types/streaming';
 
 interface StreamingHandlers {
+  onConnectionInit?: () => void;
+  onHeartbeat?: (status: string) => void;
+  onTextDelta?: (text: string, index: number) => void;
+  onThinkingDelta?: (thinking: string, index: number) => void;
+  onContentBlockStart?: (index: number, block: { type: string }) => void;
+  onContentBlockStop?: (index: number) => void;
   onSystem?: (message: StreamingMessage) => void;
   onAssistant?: (message: StreamingMessage) => void;
   onUserResult?: (message: StreamingMessage) => void;
@@ -505,23 +772,29 @@ interface StreamingHandlers {
 
 interface StreamingState {
   isStreaming: boolean;
+  isConnected: boolean;
   sessionId: string | null;
   messages: StreamingMessage[];
   currentText: string;
+  streamingText: string;  // リアルタイムストリーミング用
   tools: string[];
   usage: UsageInfo | null;
   error: string | null;
+  lastEventId: string | null;
 }
 
 export function useStreaming(tenantId: string, conversationId: string) {
   const [state, setState] = useState<StreamingState>({
     isStreaming: false,
+    isConnected: false,
     sessionId: null,
     messages: [],
     currentText: '',
+    streamingText: '',
     tools: [],
     usage: null,
     error: null,
+    lastEventId: null,
   });
 
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -537,8 +810,10 @@ export function useStreaming(tenantId: string, conversationId: string) {
       setState(prev => ({
         ...prev,
         isStreaming: true,
+        isConnected: false,
         error: null,
         currentText: '',
+        streamingText: '',
       }));
 
       try {
@@ -575,16 +850,24 @@ export function useStreaming(tenantId: string, conversationId: string) {
           const lines = buffer.split('\n');
           buffer = lines.pop() || '';
 
+          let eventId = '';
           let eventType = '';
           let eventData = '';
 
           for (const line of lines) {
-            if (line.startsWith('event:')) {
+            if (line.startsWith('id:')) {
+              eventId = line.slice(3).trim();
+            } else if (line.startsWith('event:')) {
               eventType = line.slice(6).trim();
             } else if (line.startsWith('data:')) {
               eventData = line.slice(5).trim();
             } else if (line === '' && eventType && eventData) {
+              // イベントIDを保存
+              if (eventId) {
+                setState(prev => ({ ...prev, lastEventId: eventId }));
+              }
               processEvent(eventType, eventData, handlers, setState);
+              eventId = '';
               eventType = '';
               eventData = '';
             }
@@ -600,7 +883,7 @@ export function useStreaming(tenantId: string, conversationId: string) {
           }));
         }
       } finally {
-        setState(prev => ({ ...prev, isStreaming: false }));
+        setState(prev => ({ ...prev, isStreaming: false, isConnected: false }));
       }
     },
     [tenantId, conversationId]
@@ -628,58 +911,112 @@ function processEvent(
   try {
     const data = JSON.parse(eventData);
 
-    if (eventType === 'message') {
-      const message = data as StreamingMessage;
+    switch (eventType) {
+      // 接続初期化イベント
+      case 'connection_init':
+        setState(prev => ({ ...prev, isConnected: true }));
+        handlers?.onConnectionInit?.();
+        break;
 
-      setState(prev => ({
-        ...prev,
-        messages: [...prev.messages, message],
-      }));
+      // ハートビートイベント
+      case 'heartbeat':
+        handlers?.onHeartbeat?.(data.status);
+        break;
 
-      switch (message.type) {
-        case 'system':
-          if (message.subtype === 'init') {
-            setState(prev => ({
-              ...prev,
-              sessionId: message.data.session_id,
-              tools: message.data.tools,
-            }));
-          }
-          handlers?.onSystem?.(message);
-          break;
+      // テキストデルタイベント（リアルタイムストリーミング）
+      case 'text_delta':
+        setState(prev => ({
+          ...prev,
+          streamingText: prev.streamingText + data.text,
+        }));
+        handlers?.onTextDelta?.(data.text, data.index);
+        break;
 
-        case 'assistant':
-          for (const block of message.content_blocks) {
-            if (block.type === 'text') {
+      // 思考デルタイベント
+      case 'thinking_delta':
+        handlers?.onThinkingDelta?.(data.thinking, data.index);
+        break;
+
+      // コンテンツブロック開始
+      case 'content_block_start':
+        handlers?.onContentBlockStart?.(data.index, data.content_block);
+        break;
+
+      // コンテンツブロック終了
+      case 'content_block_stop':
+        handlers?.onContentBlockStop?.(data.index);
+        break;
+
+      // メッセージイベント
+      case 'message': {
+        const message = data as StreamingMessage;
+
+        setState(prev => ({
+          ...prev,
+          messages: [...prev.messages, message],
+        }));
+
+        switch (message.type) {
+          case 'system':
+            if (message.subtype === 'init') {
               setState(prev => ({
                 ...prev,
-                currentText: prev.currentText + block.text,
+                sessionId: message.data.session_id,
+                tools: message.data.tools,
               }));
             }
-          }
-          handlers?.onAssistant?.(message);
-          break;
+            handlers?.onSystem?.(message);
+            break;
 
-        case 'user_result':
-          handlers?.onUserResult?.(message);
-          break;
+          case 'assistant':
+            // AssistantMessage受信時にstreamingTextをcurrentTextに反映
+            setState(prev => {
+              let newCurrentText = prev.currentText;
+              for (const block of message.content_blocks) {
+                if (block.type === 'text') {
+                  newCurrentText += block.text;
+                }
+              }
+              return {
+                ...prev,
+                currentText: newCurrentText,
+                streamingText: '',  // リセット
+              };
+            });
+            handlers?.onAssistant?.(message);
+            break;
 
-        case 'result':
-          setState(prev => ({
-            ...prev,
-            usage: message.usage,
-          }));
-          handlers?.onResult?.(message);
-          break;
+          case 'user_result':
+            handlers?.onUserResult?.(message);
+            break;
+
+          case 'result':
+            setState(prev => ({
+              ...prev,
+              usage: message.usage,
+            }));
+            handlers?.onResult?.(message);
+            break;
+        }
+        break;
       }
-    } else if (eventType === 'error') {
-      setState(prev => ({
-        ...prev,
-        error: data.message,
-      }));
-      handlers?.onError?.(data);
-    } else if (eventType === 'title_generated') {
-      handlers?.onTitleGenerated?.(data.title);
+
+      // エラーイベント
+      case 'error':
+        setState(prev => ({
+          ...prev,
+          error: data.message,
+        }));
+        handlers?.onError?.(data);
+        break;
+
+      // タイトル生成イベント
+      case 'title_generated':
+        handlers?.onTitleGenerated?.(data.title);
+        break;
+
+      default:
+        console.log('Unknown event type:', eventType, data);
     }
   } catch (e) {
     console.error('Failed to parse event data:', e);

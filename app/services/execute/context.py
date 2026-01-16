@@ -193,6 +193,7 @@ class SDKOptions:
     setting_sources: Optional[list[str]] = None
     resume: Optional[str] = None
     permission_mode: str = "bypassPermissions"  # ファイル操作の権限をバイパス
+    include_partial_messages: bool = True  # リアルタイムストリーミングを有効化
 
     def to_dict(self) -> dict[str, Any]:
         """SDK用の辞書に変換"""
@@ -204,6 +205,7 @@ class SDKOptions:
             "cwd": self.cwd,
             "env": self.env,
             "permission_mode": self.permission_mode,
+            "include_partial_messages": self.include_partial_messages,
         }
 
         if self.setting_sources:

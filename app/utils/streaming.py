@@ -7,15 +7,86 @@ Server-Sent Events形式でのストリーミング送信
 
 イベントタイプ:
 - message: メッセージイベント（type: system/assistant/user_result/result）
+- text_delta: テキストストリーミングイベント（リアルタイム配信）
+- thinking_delta: 思考ストリーミングイベント（リアルタイム配信）
+- heartbeat: ハートビートイベント（接続維持）
 - error: エラーイベント
 - title_generated: タイトル生成イベント
 """
 import json
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Optional
 
 from sse_starlette.sse import ServerSentEvent
 
+
+# =============================================================================
+# 定数
+# =============================================================================
+
+# ハートビート間隔（秒）
+HEARTBEAT_INTERVAL_SECONDS = 15
+
+# SSE再接続間隔（ミリ秒）
+SSE_RETRY_MS = 3000
+
+
+# =============================================================================
+# イベントID生成
+# =============================================================================
+
+@dataclass
+class EventIdGenerator:
+    """
+    イベントID生成器
+
+    会話ごとにシーケンシャルなイベントIDを生成し、
+    Last-Event-IDによる再接続時のイベント復旧を可能にする
+    """
+
+    conversation_id: str
+    sequence: int = field(default=0)
+
+    def next(self) -> str:
+        """
+        次のイベントIDを生成
+
+        Returns:
+            "{conversation_id}:{sequence}" 形式のイベントID
+        """
+        self.sequence += 1
+        return f"{self.conversation_id}:{self.sequence}"
+
+    def current(self) -> str:
+        """
+        現在のイベントIDを取得（インクリメントなし）
+
+        Returns:
+            現在のイベントID
+        """
+        return f"{self.conversation_id}:{self.sequence}"
+
+    @staticmethod
+    def parse(event_id: str) -> tuple[str, int]:
+        """
+        イベントIDをパース
+
+        Args:
+            event_id: "{conversation_id}:{sequence}" 形式のイベントID
+
+        Returns:
+            (conversation_id, sequence) のタプル
+        """
+        parts = event_id.rsplit(":", 1)
+        if len(parts) != 2:
+            raise ValueError(f"Invalid event ID format: {event_id}")
+        return parts[0], int(parts[1])
+
+
+# =============================================================================
+# 基本ユーティリティ
+# =============================================================================
 
 def generate_sse_event(event: str, data: dict[str, Any]) -> ServerSentEvent:
     """
@@ -76,6 +147,196 @@ def _get_timestamp() -> str:
     """現在のタイムスタンプをISO形式で取得"""
     return datetime.utcnow().isoformat()
 
+
+# =============================================================================
+# ハートビート・接続管理イベント
+# =============================================================================
+
+def format_heartbeat_event(
+    status: str = "processing",
+) -> dict:
+    """
+    ハートビートイベントをフォーマット
+
+    接続維持とクライアントへの生存確認用
+
+    Args:
+        status: ステータス ("processing" / "idle")
+
+    Returns:
+        イベントデータ
+    """
+    return {
+        "event": "heartbeat",
+        "data": {
+            "status": status,
+            "timestamp": _get_timestamp(),
+        },
+    }
+
+
+def format_connection_init_event(
+    retry_ms: int = SSE_RETRY_MS,
+) -> dict:
+    """
+    接続初期化イベントをフォーマット
+
+    SSE再接続間隔を指定する
+
+    Args:
+        retry_ms: 再接続間隔（ミリ秒）
+
+    Returns:
+        イベントデータ（retry フィールド付き）
+    """
+    return {
+        "event": "connection_init",
+        "retry": retry_ms,
+        "data": {
+            "status": "connected",
+            "timestamp": _get_timestamp(),
+        },
+    }
+
+
+# =============================================================================
+# リアルタイムストリーミングイベント（Phase 2）
+# =============================================================================
+
+def format_text_delta_streaming_event(
+    text: str,
+    index: int = 0,
+) -> dict:
+    """
+    テキストデルタストリーミングイベントをフォーマット
+
+    トークンレベルのリアルタイムテキスト配信用
+
+    Args:
+        text: テキスト増分
+        index: コンテンツブロックのインデックス
+
+    Returns:
+        イベントデータ
+    """
+    return {
+        "event": "text_delta",
+        "data": {
+            "type": "text_delta",
+            "index": index,
+            "text": text,
+            "timestamp": _get_timestamp(),
+        },
+    }
+
+
+def format_thinking_delta_streaming_event(
+    thinking: str,
+    index: int = 0,
+) -> dict:
+    """
+    思考デルタストリーミングイベントをフォーマット
+
+    Extended Thinkingのリアルタイム配信用
+
+    Args:
+        thinking: 思考内容の増分
+        index: コンテンツブロックのインデックス
+
+    Returns:
+        イベントデータ
+    """
+    return {
+        "event": "thinking_delta",
+        "data": {
+            "type": "thinking_delta",
+            "index": index,
+            "thinking": thinking,
+            "timestamp": _get_timestamp(),
+        },
+    }
+
+
+def format_input_json_delta_event(
+    partial_json: str,
+    tool_use_id: str,
+    index: int = 0,
+) -> dict:
+    """
+    ツール入力JSONデルタイベントをフォーマット
+
+    ツール引数のリアルタイム配信用
+
+    Args:
+        partial_json: 部分的なJSON文字列
+        tool_use_id: ツール使用ID
+        index: コンテンツブロックのインデックス
+
+    Returns:
+        イベントデータ
+    """
+    return {
+        "event": "input_json_delta",
+        "data": {
+            "type": "input_json_delta",
+            "index": index,
+            "tool_use_id": tool_use_id,
+            "partial_json": partial_json,
+            "timestamp": _get_timestamp(),
+        },
+    }
+
+
+def format_content_block_start_event(
+    index: int,
+    content_block: dict[str, Any],
+) -> dict:
+    """
+    コンテンツブロック開始イベントをフォーマット
+
+    Args:
+        index: コンテンツブロックのインデックス
+        content_block: コンテンツブロックの初期データ
+
+    Returns:
+        イベントデータ
+    """
+    return {
+        "event": "content_block_start",
+        "data": {
+            "type": "content_block_start",
+            "index": index,
+            "content_block": content_block,
+            "timestamp": _get_timestamp(),
+        },
+    }
+
+
+def format_content_block_stop_event(
+    index: int,
+) -> dict:
+    """
+    コンテンツブロック終了イベントをフォーマット
+
+    Args:
+        index: コンテンツブロックのインデックス
+
+    Returns:
+        イベントデータ
+    """
+    return {
+        "event": "content_block_stop",
+        "data": {
+            "type": "content_block_stop",
+            "index": index,
+            "timestamp": _get_timestamp(),
+        },
+    }
+
+
+# =============================================================================
+# メッセージイベント（従来形式）
+# =============================================================================
 
 def format_system_message_event(
     subtype: str,
@@ -194,8 +455,9 @@ def format_result_message_event(
     }
 
 
-# 以下は後方互換性のためのエイリアス関数
-# 新しいコードではformat_*_message_event関数を使用してください
+# =============================================================================
+# エイリアス関数（後方互換性）
+# =============================================================================
 
 def format_session_start_event(
     session_id: str,
@@ -232,6 +494,8 @@ def format_session_start_event(
 def format_text_delta_event(text: str) -> dict:
     """
     テキスト増分イベントをフォーマット（messages形式）
+
+    注: リアルタイムストリーミングには format_text_delta_streaming_event を使用
 
     Args:
         text: テキスト増分
@@ -321,6 +585,8 @@ def format_thinking_event(content: str) -> dict:
     """
     思考プロセスイベントをフォーマット（messages形式）
 
+    注: リアルタイムストリーミングには format_thinking_delta_streaming_event を使用
+
     Args:
         content: 思考内容
 
@@ -408,5 +674,3 @@ def format_title_generated_event(title: str) -> dict:
             "timestamp": _get_timestamp(),
         },
     }
-
-
