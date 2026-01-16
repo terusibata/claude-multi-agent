@@ -206,6 +206,7 @@ class ExecuteService:
                 ToolResultBlock,
                 ToolUseBlock,
                 UserMessage,
+                StreamEvent,
             )
             logger.info("Claude Agent SDK インポート成功")
         except ImportError as e:
@@ -244,19 +245,9 @@ class ExecuteService:
             await client.query(context.request.user_input)
 
             async for message in client.receive_response():
-                # デバッグ: 受信したメッセージの型を確認
-                msg_class_name = type(message).__name__
-                msg_type_attr = getattr(message, "type", None)
-                logger.debug(
-                    "SDK メッセージ受信",
-                    class_name=msg_class_name,
-                    type_attr=msg_type_attr,
-                    has_event=hasattr(message, "event"),
-                )
-
                 # ストリーミングイベント（部分メッセージ）の処理
-                # include_partial_messages=True の場合、stream_event が送信される
-                if hasattr(message, "type") and message.type == "stream_event":
+                # include_partial_messages=True の場合、StreamEvent が送信される
+                if isinstance(message, StreamEvent):
                     streaming_event = self._process_stream_event(message, context)
                     if streaming_event:
                         yield streaming_event
@@ -331,18 +322,35 @@ class ExecuteService:
         """
         ストリーミングイベント（部分メッセージ）を処理
 
-        include_partial_messages=True の場合に送信される stream_event を処理し、
+        include_partial_messages=True の場合に送信される StreamEvent を処理し、
         フロントエンドに配信するSSEイベントを生成する
 
         Args:
-            message: SDKから受信したstream_eventメッセージ
+            message: SDKから受信したStreamEventメッセージ
             context: 実行コンテキスト
 
         Returns:
             SSEイベント辞書、またはNone（スキップする場合）
         """
         try:
+            # StreamEventの構造を確認
+            # SDKのStreamEventはevent属性またはtype属性を持つ可能性がある
             event = getattr(message, "event", None)
+            event_type = getattr(message, "type", None)
+
+            # デバッグログ
+            logger.debug(
+                "StreamEvent処理",
+                has_event_attr=event is not None,
+                event_type_attr=event_type,
+                message_attrs=dir(message) if message else [],
+            )
+
+            # eventが直接typeを持つ場合（message.type）
+            if event_type and not event:
+                # messageがeventそのもの
+                event = message
+
             if not event:
                 return None
 
