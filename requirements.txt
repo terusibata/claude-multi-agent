@@ -25,7 +25,6 @@ botocore>=1.42.27
 # ユーティリティ
 python-multipart>=0.0.21
 python-dotenv>=1.2.1
-aiofiles>=25.1.0
 PyYAML>=6.0.3
 
 # ロギング
