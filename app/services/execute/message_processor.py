@@ -130,8 +130,9 @@ class MessageProcessor:
                 text = getattr(content, "text", "") or ""
                 self.context.assistant_text += text
                 log_entry.content_blocks.append({"type": "text", "text": text})
-                # ステータスイベント: テキスト生成中
-                yield format_status_event("generating", "レスポンスを生成中...")
+                # ステータスイベント: テキスト生成中（メインエージェントのみ）
+                if not self.tool_tracker.is_in_subagent:
+                    yield format_status_event("generating", "レスポンスを生成中...")
                 yield format_text_delta_event(text)
 
             # ツール使用ブロック
@@ -145,8 +146,9 @@ class MessageProcessor:
                     "type": "thinking",
                     "text": thinking_text,
                 })
-                # ステータスイベント: 思考中
-                yield format_status_event("thinking", "思考中...")
+                # ステータスイベント: 思考中（メインエージェントのみ）
+                if not self.tool_tracker.is_in_subagent:
+                    yield format_status_event("thinking", "思考中...")
                 yield format_thinking_event(thinking_text)
 
             # ツール結果ブロック
@@ -197,8 +199,9 @@ class MessageProcessor:
         tool_name = getattr(content, "name", None) or "unknown"
         tool_input = getattr(content, "input", {}) or {}
 
-        # ツールトラッカーに登録
-        self.tool_tracker.start_tool(tool_id, tool_name, tool_input)
+        # ツールトラッカーに登録（親ツールIDも自動的に設定される）
+        tool_info = self.tool_tracker.start_tool(tool_id, tool_name, tool_input)
+        parent_tool_id = tool_info.parent_tool_use_id
 
         summary = generate_tool_summary(tool_name, tool_input)
 
@@ -208,10 +211,12 @@ class MessageProcessor:
             "name": tool_name,
             "input": tool_input,
             "summary": summary,
+            "parent_tool_use_id": parent_tool_id,
         })
 
-        # ステータスイベント: ツール実行中
-        yield format_status_event("tool_execution", f"ツール実行中: {tool_name}")
+        # ステータスイベント: ツール実行中（メインエージェントのみ）
+        if not parent_tool_id:
+            yield format_status_event("tool_execution", f"ツール実行中: {tool_name}")
 
         # ツール進捗イベント: pending（受付）
         yield format_tool_progress_event(
@@ -219,6 +224,7 @@ class MessageProcessor:
             tool_name=tool_name,
             status="pending",
             message=summary,
+            parent_tool_use_id=parent_tool_id,
         )
 
         # ツール開始イベント
@@ -232,6 +238,7 @@ class MessageProcessor:
             tool_name=tool_name,
             status="running",
             message=f"{tool_name}を実行中...",
+            parent_tool_use_id=parent_tool_id,
         )
 
         # Taskツールの場合はサブエージェント開始イベントを送信
@@ -265,6 +272,9 @@ class MessageProcessor:
         tool_result = getattr(content, "content", None)
         is_error = getattr(content, "is_error", False) or False
 
+        # 親ツールIDを取得（完了前に取得する必要がある）
+        parent_tool_id = self.tool_tracker.get_parent_tool_id_for_tool(tool_use_id)
+
         # ツールトラッカーで完了処理
         tool_info = self.tool_tracker.complete_tool(tool_use_id, tool_result, is_error)
 
@@ -282,6 +292,7 @@ class MessageProcessor:
             "content": tool_result if isinstance(tool_result, str) else str(tool_result)[:500],
             "is_error": is_error,
             "status": status,
+            "parent_tool_use_id": parent_tool_id,
         })
 
         # 結果サマリー生成
@@ -293,6 +304,7 @@ class MessageProcessor:
             tool_name=tool_name,
             status=status,
             message=result_summary,
+            parent_tool_use_id=parent_tool_id,
         )
 
         # Taskツールの場合はサブエージェント終了イベントを送信

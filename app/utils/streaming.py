@@ -157,19 +157,23 @@ def format_result_message_event(
     num_turns: int,
     duration_ms: int,
     session_id: str | None = None,
+    messages: list[dict[str, Any]] | None = None,
+    model_usage: dict[str, dict[str, Any]] | None = None,
 ) -> dict:
     """
     結果メッセージイベントをフォーマット
 
     Args:
         subtype: サブタイプ (success / error_during_execution)
-        result: 結果テキスト
+        result: 結果テキスト（後方互換性のため残す）
         errors: エラーリスト
-        usage: 使用状況
+        usage: 使用状況（合計）
         cost_usd: コスト（USD）
         num_turns: ターン数
         duration_ms: 実行時間（ミリ秒）
         session_id: セッションID
+        messages: メッセージログ（/messagesと同じ形式）
+        model_usage: モデルごとの使用量
 
     Returns:
         イベントデータ
@@ -178,7 +182,7 @@ def format_result_message_event(
         "type": "result",
         "subtype": subtype,
         "timestamp": _get_timestamp(),
-        "result": result,
+        "result": result,  # 後方互換性のため残す
         "is_error": subtype != "success",
         "errors": errors,
         "usage": usage,
@@ -188,6 +192,10 @@ def format_result_message_event(
     }
     if session_id is not None:
         data["session_id"] = session_id
+    if messages is not None:
+        data["messages"] = messages
+    if model_usage is not None:
+        data["model_usage"] = model_usage
     return {
         "event": "message",
         "data": data,
@@ -341,19 +349,23 @@ def format_result_event(
     num_turns: int,
     duration_ms: int,
     session_id: str | None = None,
+    messages: list[dict[str, Any]] | None = None,
+    model_usage: dict[str, dict[str, Any]] | None = None,
 ) -> dict:
     """
     結果イベントをフォーマット（messages形式）
 
     Args:
         subtype: サブタイプ (success / error_during_execution)
-        result: 結果テキスト
+        result: 結果テキスト（後方互換性のため残す）
         errors: エラーリスト
-        usage: 使用状況
+        usage: 使用状況（合計）
         cost_usd: コスト（USD）
         num_turns: ターン数
         duration_ms: 実行時間（ミリ秒）
         session_id: セッションID
+        messages: メッセージログ（/messagesと同じ形式）
+        model_usage: モデルごとの使用量
 
     Returns:
         イベントデータ
@@ -367,6 +379,8 @@ def format_result_event(
         num_turns=num_turns,
         duration_ms=duration_ms,
         session_id=session_id,
+        messages=messages,
+        model_usage=model_usage,
     )
 
 
@@ -495,6 +509,7 @@ def format_tool_progress_event(
     tool_name: str,
     status: str,
     message: str | None = None,
+    parent_tool_use_id: str | None = None,
 ) -> dict:
     """
     ツール進捗イベントをフォーマット
@@ -506,6 +521,7 @@ def format_tool_progress_event(
         tool_name: ツール名
         status: ステータス (pending / running / completed / error)
         message: 進捗メッセージ（オプション）
+        parent_tool_use_id: 親ツールID（サブエージェント内の場合）
 
     Returns:
         イベントデータ
@@ -514,6 +530,7 @@ def format_tool_progress_event(
         "tool_use_id": tool_use_id,
         "tool_name": tool_name,
         "status": status,
+        "parent_tool_use_id": parent_tool_use_id,
         "timestamp": _get_timestamp(),
     }
     if message:

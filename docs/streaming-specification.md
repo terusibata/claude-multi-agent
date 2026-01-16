@@ -83,7 +83,7 @@ data: {"type": "result", "subtype": "success", ...}
 
 ### 7. tool_progress イベント
 
-ツール実行の進捗を通知します。
+ツール実行の進捗を通知します。`parent_tool_use_id`でサブエージェント内のツールを識別できます。
 
 | status | 説明 |
 |--------|------|
@@ -91,6 +91,8 @@ data: {"type": "result", "subtype": "success", ...}
 | `running` | 実行中 |
 | `completed` | 完了 |
 | `error` | エラー |
+
+**注意**: `status`イベントはメインエージェントのみで送信されます。サブエージェント内では`tool_progress`イベントの`parent_tool_use_id`で親子関係を追跡できます。
 
 ### 8. subagent イベント
 
@@ -208,7 +210,7 @@ Taskツールによるサブエージェントの開始/終了を通知します
 
 ### Result Message (type: "result")
 
-最終結果メッセージ。
+最終結果メッセージ。`messages`には`/api/tenants/{tenant_id}/conversations/{conversation_id}/messages`と同じ形式のメッセージログが含まれます。
 
 ```json
 {
@@ -228,7 +230,35 @@ Taskツールによるサブエージェントの開始/終了を通知します
   "total_cost_usd": 0.0075,
   "num_turns": 3,
   "duration_ms": 5230,
-  "session_id": "session-uuid-from-sdk"
+  "session_id": "session-uuid-from-sdk",
+  "messages": [
+    {
+      "type": "system",
+      "subtype": "init",
+      "timestamp": "2024-01-01T00:00:00.000000",
+      "data": {...}
+    },
+    {
+      "type": "assistant",
+      "subtype": null,
+      "timestamp": "2024-01-01T00:00:01.000000",
+      "content_blocks": [...]
+    }
+  ],
+  "model_usage": {
+    "claude-3-5-sonnet-20241022": {
+      "input_tokens": 1000,
+      "output_tokens": 300,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 100
+    },
+    "claude-3-5-haiku-20241022": {
+      "input_tokens": 500,
+      "output_tokens": 200,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 100
+    }
+  }
 }
 ```
 
@@ -303,6 +333,20 @@ Taskツールによるサブエージェントの開始/終了を通知します
   "tool_name": "Read",
   "status": "running",
   "message": "ファイルを読み取り中...",
+  "parent_tool_use_id": null,
+  "timestamp": "2024-01-01T00:00:00.000000"
+}
+```
+
+サブエージェント内のツールの場合:
+
+```json
+{
+  "tool_use_id": "child-tool-uuid",
+  "tool_name": "Grep",
+  "status": "running",
+  "message": "検索中...",
+  "parent_tool_use_id": "task-tool-uuid",
   "timestamp": "2024-01-01T00:00:00.000000"
 }
 ```
@@ -535,6 +579,13 @@ export interface UserResultMessage {
   content_blocks: ToolResultBlock[];
 }
 
+export interface ModelUsageInfo {
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+}
+
 export interface ResultMessage {
   type: 'result';
   subtype: ResultSubtype;
@@ -547,6 +598,8 @@ export interface ResultMessage {
   num_turns: number;
   duration_ms: number;
   session_id?: string;
+  messages?: StreamingMessage[];
+  model_usage?: Record<string, ModelUsageInfo>;
 }
 
 export type StreamingMessage =
@@ -622,6 +675,7 @@ export interface ToolProgressEvent {
     tool_name: string;
     status: ToolProgressStatus;
     message?: string;
+    parent_tool_use_id: string | null;
     timestamp: string;
   };
 }

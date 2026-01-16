@@ -5,7 +5,7 @@ Claude Agent SDKを使用したエージェント実行とストリーミング�
 import time
 from datetime import datetime
 from decimal import Decimal
-from typing import AsyncGenerator
+from typing import Any, AsyncGenerator
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -304,8 +304,10 @@ class ExecuteService:
                     for event in result_events:
                         yield event
 
-                # メッセージログ保存
-                await self._save_message_log(context, msg_type, message, log_entry)
+                # メッセージログ保存（DB & コンテキスト）
+                saved = await self._save_message_log(context, msg_type, message, log_entry)
+                if saved:
+                    context.message_logs.append(log_entry.to_dict())
 
     async def _wrap_generator(self, gen):
         """同期ジェネレータを非同期で処理"""
@@ -357,6 +359,11 @@ class ExecuteService:
         subtype = message.subtype
         usage_data = message.usage
 
+        # モデル別使用量を取得（SDK 1.0.19+で対応）
+        # model_usage フィールドまたは modelUsage フィールドを試す
+        model_usage_raw = getattr(message, "model_usage", None) or getattr(message, "modelUsage", None)
+        model_usage = self._normalize_model_usage(model_usage_raw)
+
         # ログエントリに詳細を追加
         log_entry.result = message.result
         log_entry.is_error = message.is_error
@@ -378,8 +385,10 @@ class ExecuteService:
         if message.is_error:
             context.errors.append(message.result or "Unknown error")
 
-        # コスト計算
-        if not total_cost:
+        # コスト計算（model_usageがあればそれを使用してより正確に計算）
+        if model_usage and not total_cost:
+            total_cost = self._calculate_cost_from_model_usage(model_usage)
+        elif not total_cost:
             total_cost = float(
                 context.model.calculate_cost(
                     input_tokens, output_tokens, cache_creation, cache_read
@@ -421,6 +430,8 @@ class ExecuteService:
             num_turns=num_turns,
             duration_ms=duration_ms,
             session_id=context.session_id,
+            messages=context.message_logs,
+            model_usage=model_usage,
         )
         events.append(result_event)
 
@@ -457,8 +468,13 @@ class ExecuteService:
         msg_type: str,
         message,
         log_entry: MessageLogEntry,
-    ) -> None:
-        """メッセージログを保存"""
+    ) -> bool:
+        """
+        メッセージログを保存
+
+        Returns:
+            保存された場合はTrue、スキップされた場合はFalse
+        """
         should_save = True
 
         if msg_type == "unknown":
@@ -484,8 +500,10 @@ class ExecuteService:
                 message_subtype=getattr(message, "subtype", None),
                 content=log_entry.to_dict(),
             )
+            return True
         else:
             context.message_seq -= 1
+            return False
 
     def _handle_error(
         self,
@@ -538,6 +556,95 @@ class ExecuteService:
             num_turns=0,
             duration_ms=duration_ms,
         )
+
+    def _normalize_model_usage(
+        self,
+        model_usage_raw: dict | None,
+    ) -> dict[str, dict[str, Any]] | None:
+        """
+        モデル使用量を正規化
+
+        SDKからのmodel_usageフィールドを正規化された形式に変換
+
+        Args:
+            model_usage_raw: SDKからの生のmodel_usage
+
+        Returns:
+            正規化されたmodel_usage（なければNone）
+        """
+        if not model_usage_raw:
+            return None
+
+        # SDKの形式に応じて正規化
+        # 期待される形式:
+        # {
+        #   "claude-3-5-sonnet-20241022": {
+        #     "input_tokens": 1000,
+        #     "output_tokens": 500,
+        #     "cache_creation_input_tokens": 0,
+        #     "cache_read_input_tokens": 0
+        #   },
+        #   "claude-3-5-haiku-20241022": {...}
+        # }
+        normalized = {}
+        for model_id, usage in model_usage_raw.items():
+            if isinstance(usage, dict):
+                normalized[model_id] = {
+                    "input_tokens": usage.get("input_tokens", 0) or usage.get("inputTokens", 0),
+                    "output_tokens": usage.get("output_tokens", 0) or usage.get("outputTokens", 0),
+                    "cache_creation_input_tokens": usage.get("cache_creation_input_tokens", 0) or usage.get("cacheCreationInputTokens", 0),
+                    "cache_read_input_tokens": usage.get("cache_read_input_tokens", 0) or usage.get("cacheReadInputTokens", 0),
+                }
+        return normalized if normalized else None
+
+    def _calculate_cost_from_model_usage(
+        self,
+        model_usage: dict[str, dict[str, Any]],
+    ) -> float:
+        """
+        モデル別使用量からコストを計算
+
+        Args:
+            model_usage: モデル別使用量
+
+        Returns:
+            合計コスト（USD）
+        """
+        # モデルごとの価格設定（1Mトークンあたり/USD）
+        # 注: これは概算。正確な計算には別途価格マスタが必要
+        MODEL_PRICING = {
+            # Sonnet系
+            "claude-3-5-sonnet": {"input": 3.0, "output": 15.0},
+            "claude-3-sonnet": {"input": 3.0, "output": 15.0},
+            # Haiku系（サブエージェントで使用）
+            "claude-3-5-haiku": {"input": 0.8, "output": 4.0},
+            "claude-3-haiku": {"input": 0.25, "output": 1.25},
+            # Opus系
+            "claude-3-opus": {"input": 15.0, "output": 75.0},
+            # デフォルト（Sonnet相当）
+            "default": {"input": 3.0, "output": 15.0},
+        }
+
+        total_cost = 0.0
+
+        for model_id, usage in model_usage.items():
+            # モデルIDからプライシングキーを抽出
+            pricing_key = "default"
+            for key in MODEL_PRICING:
+                if key in model_id.lower():
+                    pricing_key = key
+                    break
+
+            pricing = MODEL_PRICING[pricing_key]
+            input_tokens = usage.get("input_tokens", 0)
+            output_tokens = usage.get("output_tokens", 0)
+
+            # コスト計算（1Mトークンあたりの価格）
+            input_cost = (input_tokens / 1_000_000) * pricing["input"]
+            output_cost = (output_tokens / 1_000_000) * pricing["output"]
+            total_cost += input_cost + output_cost
+
+        return total_cost
 
     async def _sync_workspace_after_execution(
         self,
