@@ -244,10 +244,18 @@ class ExecuteService:
             await client.query(context.request.user_input)
 
             async for message in client.receive_response():
+                # デバッグ: 受信したすべてのメッセージの型を確認（ストリーミング検証用にinfoレベル）
+                msg_class_name = type(message).__name__
+                logger.info(
+                    "SDKメッセージ受信",
+                    class_name=msg_class_name,
+                    message_repr=repr(message)[:200],
+                )
+
                 # ストリーミングイベント（部分メッセージ）の処理
                 # include_partial_messages=True の場合、StreamEvent が送信される
                 # SDKから StreamEvent がエクスポートされていないため、クラス名で判定
-                if type(message).__name__ == "StreamEvent":
+                if msg_class_name == "StreamEvent":
                     streaming_event = self._process_stream_event(message, context)
                     if streaming_event:
                         yield streaming_event
@@ -338,8 +346,8 @@ class ExecuteService:
             event = getattr(message, "event", None)
             event_type = getattr(message, "type", None)
 
-            # デバッグログ
-            logger.debug(
+            # デバッグログ（ストリーミング検証用にinfoレベル）
+            logger.info(
                 "StreamEvent処理",
                 has_event_attr=event is not None,
                 event_type_attr=event_type,
