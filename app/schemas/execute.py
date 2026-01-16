@@ -4,9 +4,8 @@
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, Optional
-from uuid import uuid4
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
 
 class ExecutorInfo(BaseModel):
@@ -18,15 +17,16 @@ class ExecutorInfo(BaseModel):
     employee_id: Optional[str] = Field(None, description="社員番号")
 
 
-class ExecuteRequest(BaseModel):
-    """エージェント実行リクエスト"""
+class StreamRequest(BaseModel):
+    """
+    会話ストリーミングリクエスト
+
+    /conversations/{conversation_id}/stream エンドポイント用。
+    conversation_idはURLパスから取得するため、このスキーマには含まれない。
+    model_id, workspace_enabledは会話レコードから取得する。
+    """
 
     # 必須パラメータ
-    agent_config_id: str = Field(..., description="エージェント実行設定ID")
-    model_id: str = Field(..., description="モデルID")
-    chat_session_id: Optional[str] = Field(
-        None, description="セッションID（省略時は新規作成、指定時は継続）"
-    )
     user_input: str = Field(..., description="ユーザー入力")
     executor: ExecutorInfo = Field(..., description="実行者情報")
 
@@ -36,20 +36,42 @@ class ExecuteRequest(BaseModel):
         description="MCPサーバー用認証情報（例: {'servicenowToken': 'xxx'}）",
     )
 
-    # 任意パラメータ
-    resume_session_id: Optional[str] = Field(
-        None, description="継続するSDKセッションID"
+    # Skill/ツール優先指定
+    preferred_skills: Optional[list[str]] = Field(
+        None,
+        description="優先的に使用するSkill名のリスト",
     )
-    fork_session: bool = Field(default=False, description="セッションをフォークするか")
 
-    @model_validator(mode="after")
-    def ensure_chat_session_id(self) -> "ExecuteRequest":
-        """chat_session_idがNoneまたは空文字列の場合は新しいUUIDを生成"""
-        if not self.chat_session_id or (
-            isinstance(self.chat_session_id, str) and self.chat_session_id.strip() == ""
-        ):
-            self.chat_session_id = str(uuid4())
-        return self
+
+class ExecuteRequest(BaseModel):
+    """
+    エージェント実行リクエスト（内部用）
+
+    APIからExecuteServiceに渡される内部リクエスト。
+    会話から取得した情報を含む。
+    """
+
+    # 会話情報（会話から取得）
+    conversation_id: str = Field(..., description="会話ID")
+    tenant_id: str = Field(..., description="テナントID")
+    model_id: str = Field(..., description="モデルID")
+    workspace_enabled: bool = Field(default=True, description="ワークスペース有効フラグ")
+
+    # リクエスト情報
+    user_input: str = Field(..., description="ユーザー入力")
+    executor: ExecutorInfo = Field(..., description="実行者情報")
+
+    # MCPサーバー用認証情報
+    tokens: Optional[dict[str, str]] = Field(
+        None,
+        description="MCPサーバー用認証情報",
+    )
+
+    # Skill優先指定
+    preferred_skills: Optional[list[str]] = Field(
+        None,
+        description="優先的に使用するSkill名のリスト",
+    )
 
 
 class UsageInfo(BaseModel):
@@ -62,20 +84,12 @@ class UsageInfo(BaseModel):
     total_tokens: int = 0
 
 
-class ToolSummary(BaseModel):
-    """ツール使用サマリー"""
-
-    tool_name: str
-    status: str  # completed / error
-    summary: str
-
-
 class SSEEvent(BaseModel):
     """SSEイベント"""
 
     event: str = Field(
         ...,
-        description="イベントタイプ (session_start / text_delta / tool_start / tool_complete / thinking / result)",
+        description="イベントタイプ (session_start / text_delta / tool_use / tool_result / thinking / result)",
     )
     data: dict[str, Any] = Field(..., description="イベントデータ")
 
@@ -94,16 +108,16 @@ class TextDeltaData(BaseModel):
     text: str
 
 
-class ToolStartData(BaseModel):
-    """ツール開始イベントデータ"""
+class ToolUseData(BaseModel):
+    """ツール使用開始イベントデータ"""
 
     tool_use_id: str
     tool_name: str
     summary: str
 
 
-class ToolCompleteData(BaseModel):
-    """ツール完了イベントデータ"""
+class ToolResultData(BaseModel):
+    """ツール結果イベントデータ"""
 
     tool_use_id: str
     tool_name: str
@@ -127,18 +141,16 @@ class ResultData(BaseModel):
     cost_usd: Decimal
     num_turns: int
     duration_ms: int
-    tools_summary: list[ToolSummary]
 
 
 class ExecuteResponse(BaseModel):
     """エージェント実行レスポンス（非ストリーミング用）"""
 
-    chat_session_id: str
+    conversation_id: str
     session_id: str
     result: Optional[str]
     usage: UsageInfo
     cost_usd: Decimal
     num_turns: int
     duration_ms: int
-    tools_summary: list[ToolSummary]
     created_at: datetime

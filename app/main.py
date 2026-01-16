@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse
 from app import __version__
 from app.api import api_router
 from app.config import get_settings
-from app.database import close_db, init_db
+from app.database import close_db
 
 # 設定読み込み
 settings = get_settings()
@@ -123,15 +123,38 @@ app.add_middleware(
 
 
 # エラーハンドラー
+def _serialize_validation_errors(errors: list) -> list:
+    """バリデーションエラーをJSONシリアライズ可能な形式に変換"""
+    serialized = []
+    for error in errors:
+        serialized_error = {
+            "type": error.get("type"),
+            "loc": error.get("loc"),
+            "msg": error.get("msg"),
+        }
+        # ctxにエラーオブジェクトが含まれる場合は文字列化
+        if "ctx" in error and error["ctx"]:
+            ctx = {}
+            for key, value in error["ctx"].items():
+                if isinstance(value, Exception):
+                    ctx[key] = str(value)
+                else:
+                    ctx[key] = value
+            serialized_error["ctx"] = ctx
+        serialized.append(serialized_error)
+    return serialized
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """バリデーションエラーハンドラー"""
-    logger.warning("バリデーションエラー", errors=exc.errors(), path=request.url.path)
+    serialized_errors = _serialize_validation_errors(exc.errors())
+    logger.warning("バリデーションエラー", errors=serialized_errors, path=request.url.path)
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content={
             "detail": "入力データが不正です",
-            "errors": exc.errors(),
+            "errors": serialized_errors,
         },
     )
 

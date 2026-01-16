@@ -1,4 +1,4 @@
-# AIエージェントバックエンド
+# Claude Multi-Agent Backend
 
 AWS Bedrock + Claude Agent SDKを利用したマルチテナント対応AIエージェントシステム
 
@@ -9,13 +9,40 @@ AWS Bedrock + Claude Agent SDKを利用したマルチテナント対応AIエー
 
 ## 主要機能
 
-- **モデル管理**: AWS Bedrockで利用可能なモデルの定義と料金管理
-- **エージェント実行設定**: テナントごとのエージェント設定管理
-- **Agent Skills管理**: ファイルシステムベースのSkills管理
-- **MCPサーバー管理**: Model Context Protocolサーバーの設定
-- **エージェント実行**: Server-Sent Events (SSE) によるストリーミング実行
-- **セッション管理**: 会話履歴とセッションの管理
-- **使用状況監視**: トークン使用量とコストのレポート
+| 機能 | 説明 |
+|------|------|
+| **テナント管理** | テナントごとの設定（システムプロンプト、デフォルトモデル）管理 |
+| **モデル管理** | AWS Bedrockで利用可能なモデルの定義と料金管理 |
+| **会話管理** | 会話の作成・継続・アーカイブ |
+| **エージェント実行** | Server-Sent Events (SSE) によるストリーミング実行 |
+| **Agent Skills** | ファイルシステムベースのSkills管理 |
+| **MCPサーバー** | Model Context Protocolサーバーとの連携 |
+| **使用状況監視** | トークン使用量とコストのレポート |
+| **S3ワークスペース** | 会話ごとの独立したファイル空間（Amazon S3ベース） |
+
+## アーキテクチャ
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  クライアント (フロントエンド)                                    │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  FastAPI Backend                                                │
+│  ├── /tenants - テナント管理                                     │
+│  ├── /models - モデル管理                                        │
+│  ├── /tenants/{tenant_id}/conversations - 会話管理               │
+│  ├── /tenants/{tenant_id}/skills - スキル管理                    │
+│  └── /tenants/{tenant_id}/mcp-servers - MCPサーバー管理          │
+└─────────────────────────────────────────────────────────────────┘
+          │                    │                    │
+          ▼                    ▼                    ▼
+    ┌──────────┐        ┌──────────┐        ┌──────────┐
+    │PostgreSQL│        │AWS Bedrock│        │ Amazon S3│
+    │(メタデータ)│        │  (LLM)    │        │(ワークスペース)│
+    └──────────┘        └──────────┘        └──────────┘
+```
 
 ## 技術スタック
 
@@ -30,21 +57,31 @@ AWS Bedrock + Claude Agent SDKを利用したマルチテナント対応AIエー
 ## ディレクトリ構成
 
 ```
-backend/
-├── app/
-│   ├── api/              # APIルーター
-│   ├── models/           # SQLAlchemyモデル
-│   ├── schemas/          # Pydanticスキーマ
-│   ├── services/         # ビジネスロジック
-│   ├── utils/            # ユーティリティ
-│   ├── config.py         # 設定管理
-│   ├── database.py       # データベース接続
-│   └── main.py           # メインアプリケーション
-├── alembic/              # DBマイグレーション
-├── tests/                # テスト
-├── Dockerfile
-├── docker-compose.yml
-└── requirements.txt
+app/
+├── api/              # APIルーター
+│   ├── tenants.py    # テナント管理API
+│   ├── conversations.py # 会話・ストリーミングAPI
+│   ├── models.py     # モデル管理API
+│   ├── skills.py     # スキル管理API
+│   ├── mcp_servers.py # MCPサーバー管理API
+│   ├── usage.py      # 使用状況API
+│   └── workspace.py  # ワークスペースAPI
+├── models/           # SQLAlchemyモデル
+│   ├── tenant.py     # テナントモデル
+│   ├── conversation.py # 会話モデル
+│   ├── model.py      # モデル定義
+│   └── ...
+├── schemas/          # Pydanticスキーマ
+├── services/         # ビジネスロジック
+│   ├── execute_service.py # エージェント実行
+│   ├── tenant_service.py  # テナント管理
+│   └── ...
+├── utils/            # ユーティリティ
+├── config.py         # 設定管理
+├── database.py       # データベース接続
+└── main.py           # メインアプリケーション
+alembic/              # DBマイグレーション
+tests/                # テスト
 ```
 
 ## セットアップ
@@ -52,14 +89,14 @@ backend/
 ### 前提条件
 
 - Docker & Docker Compose
-- AWS認証情報（Bedrock用）
+- AWS認証情報（Bedrock + S3用）
+- S3バケット（ワークスペース用、パブリックアクセスブロック推奨）
 
 ### 開発環境の起動
 
 1. 環境変数を設定
 
 ```bash
-cd backend
 cp .env.example .env
 # .envファイルを編集してAWS認証情報を設定
 ```
@@ -82,44 +119,67 @@ http://localhost:8000/docs
 
 ### ローカル開発（Dockerなし）
 
-1. 仮想環境を作成
-
 ```bash
-cd backend
+# 仮想環境を作成
 python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
-```
 
-2. PostgreSQLを起動（別途必要）
+# PostgreSQLを起動（別途必要）
 
-3. アプリケーション起動
-
-```bash
+# アプリケーション起動
 uvicorn app.main:app --reload
 ```
 
 ## API概要
 
-### 管理系API
+### テナント管理
 
-- `GET /api/models` - モデル一覧取得
-- `POST /api/models` - モデル定義作成
-- `GET /api/tenants/{tenant_id}/agent-configs` - エージェント設定一覧
-- `POST /api/tenants/{tenant_id}/agent-configs` - エージェント設定作成
-- `GET /api/tenants/{tenant_id}/skills` - Skills一覧
-- `POST /api/tenants/{tenant_id}/skills` - Skillアップロード
-- `GET /api/tenants/{tenant_id}/mcp-servers` - MCPサーバー一覧
+| メソッド | パス | 説明 |
+|---------|------|------|
+| GET | `/api/tenants` | テナント一覧取得 |
+| POST | `/api/tenants` | テナント作成 |
+| GET | `/api/tenants/{tenant_id}` | テナント取得 |
+| PUT | `/api/tenants/{tenant_id}` | テナント更新 |
+| DELETE | `/api/tenants/{tenant_id}` | テナント削除 |
 
-### 実行系API
+### 会話管理・実行
 
-- `POST /api/tenants/{tenant_id}/execute` - エージェント実行（SSE）
+| メソッド | パス | 説明 |
+|---------|------|------|
+| GET | `/api/tenants/{tenant_id}/conversations` | 会話一覧取得 |
+| POST | `/api/tenants/{tenant_id}/conversations` | 会話作成 |
+| GET | `/api/tenants/{tenant_id}/conversations/{id}` | 会話詳細取得 |
+| POST | `/api/tenants/{tenant_id}/conversations/{id}/stream` | ストリーミング実行 |
+| DELETE | `/api/tenants/{tenant_id}/conversations/{id}` | 会話削除 |
 
-### 履歴API
+### 基本フロー
 
-- `GET /api/tenants/{tenant_id}/sessions` - セッション一覧
-- `GET /api/tenants/{tenant_id}/sessions/{id}/display` - 表示用キャッシュ
-- `GET /api/tenants/{tenant_id}/usage` - 使用状況
+```
+1. POST /tenants - テナントを作成
+2. POST /models - モデルを登録
+3. POST /tenants/{tenant_id}/conversations - 会話を作成
+4. POST /conversations/{conversation_id}/stream - ストリーミング実行
+```
+
+## 主要な概念
+
+### テナント
+
+テナントはマルチテナント環境における組織単位です。テナントごとに以下を設定できます：
+- システムプロンプト（AIの基本的な振る舞い）
+- デフォルトモデル
+
+### 会話
+
+会話はユーザーとAIの対話の単位です。会話には以下が含まれます：
+- 使用するモデル
+- ワークスペースの有効/無効
+- メッセージ履歴
+
+### ワークスペース
+
+会話ごとに独立したファイル空間を提供します。ファイルはAmazon S3に保存されます。
 
 ## 環境変数
 
@@ -130,8 +190,53 @@ uvicorn app.main:app --reload
 | AWS_REGION | AWSリージョン | us-west-2 |
 | AWS_ACCESS_KEY_ID | AWSアクセスキー | - |
 | AWS_SECRET_ACCESS_KEY | AWSシークレットキー | - |
+| S3_BUCKET_NAME | ワークスペース用S3バケット名 | - |
+| S3_WORKSPACE_PREFIX | S3内のプレフィックス | workspaces/ |
 | APP_ENV | 環境 | development |
 | SKILLS_BASE_PATH | Skills保存パス | /skills |
+
+### AWS IAMポリシー要件
+
+AWS認証情報には **Bedrock** と **S3** の両方の権限が必要です：
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:DeleteObject",
+        "s3:ListBucket",
+        "s3:HeadObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::your-bucket-name",
+        "arn:aws:s3:::your-bucket-name/*"
+      ]
+    }
+  ]
+}
+```
+
+## ドキュメント
+
+詳細なドキュメントは `docs/` ディレクトリを参照してください：
+
+- [API仕様書](docs/api-specification.md) - エンドポイントの詳細仕様
+- [ストリーミング仕様書](docs/streaming-specification.md) - SSEイベントの詳細
+- [使い方ガイド](docs/usage-guide.md) - 基本的な使い方
+- [ワークスペース機能](docs/workspace.md) - S3ワークスペースの詳細
 
 ## ライセンス
 

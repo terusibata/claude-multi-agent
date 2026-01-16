@@ -2,24 +2,20 @@
 Pydanticスキーマ
 APIリクエスト/レスポンスのバリデーションとシリアライズ
 """
-from app.schemas.agent_config import (
-    AgentConfigCreate,
-    AgentConfigResponse,
-    AgentConfigUpdate,
+from app.schemas.conversation import (
+    ConversationCreateRequest,
+    ConversationResponse,
+    MessageLogResponse,
 )
-from app.schemas.execute import ExecuteRequest, ExecuteResponse, SSEEvent
+from app.schemas.execute import ExecuteRequest, ExecuteResponse, SSEEvent, StreamRequest
 from app.schemas.mcp_server import (
     McpServerCreate,
     McpServerResponse,
     McpServerUpdate,
 )
 from app.schemas.model import ModelCreate, ModelResponse, ModelUpdate
-from app.schemas.session import (
-    ChatSessionResponse,
-    DisplayCacheResponse,
-    MessageLogResponse,
-)
 from app.schemas.skill import SkillCreate, SkillResponse, SkillUpdate
+from app.schemas.tenant import TenantCreateRequest, TenantResponse, TenantUpdateRequest
 from app.schemas.usage import CostReportResponse, UsageLogResponse, UsageSummary
 
 __all__ = [
@@ -27,10 +23,10 @@ __all__ = [
     "ModelCreate",
     "ModelUpdate",
     "ModelResponse",
-    # エージェント設定
-    "AgentConfigCreate",
-    "AgentConfigUpdate",
-    "AgentConfigResponse",
+    # テナント
+    "TenantCreateRequest",
+    "TenantUpdateRequest",
+    "TenantResponse",
     # スキル
     "SkillCreate",
     "SkillUpdate",
@@ -43,10 +39,11 @@ __all__ = [
     "ExecuteRequest",
     "ExecuteResponse",
     "SSEEvent",
-    # セッション
-    "ChatSessionResponse",
+    "StreamRequest",
+    # 会話
+    "ConversationCreateRequest",
+    "ConversationResponse",
     "MessageLogResponse",
-    "DisplayCacheResponse",
     # 使用状況
     "UsageLogResponse",
     "UsageSummary",

@@ -23,12 +23,18 @@ RUN pip install --no-cache-dir -r requirements.txt
 # アプリケーションコードのコピー
 COPY . .
 
+# エントリーポイントスクリプトに実行権限を付与
+RUN chmod +x /app/entrypoint.sh
+
 # Skills ディレクトリの作成
 RUN mkdir -p /skills
 
+# ワークスペース用ディレクトリの作成
+RUN mkdir -p /var/lib/aiagent/workspaces
+
 # 非rootユーザーの作成
 RUN useradd -m -u 1000 appuser && \
-    chown -R appuser:appuser /app /skills
+    chown -R appuser:appuser /app /skills /var/lib/aiagent
 USER appuser
 
 # 環境変数の設定
@@ -41,6 +47,9 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 
 # ポート公開
 EXPOSE 8000
+
+# エントリーポイント（マイグレーション自動実行）
+ENTRYPOINT ["/app/entrypoint.sh"]
 
 # アプリケーション起動
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -7,7 +7,7 @@ services:
     environment:
       POSTGRES_USER: ${DB_USER:-aiagent}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-aiagent_password}
-      POSTGRES_DB: ${DB_NAME:-aiagent_db}
+      POSTGRES_DB: ${DB_NAME:-aiagent}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./init-db:/docker-entrypoint-initdb.d
@@ -25,20 +25,22 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: ai-agent-backend
+    container_name: claude-multi-agent
     env_file:
       - .env
     environment:
       # データベース設定
-      DATABASE_URL: postgresql+asyncpg://${DB_USER:-aiagent}:${DB_PASSWORD:-aiagent_password}@db:5432/${DB_NAME:-aiagent_db}
+      DATABASE_URL: postgresql+asyncpg://${DB_USER:-aiagent}:${DB_PASSWORD:-aiagent_password}@db:5432/${DB_NAME:-aiagent}
 
       # アプリケーション設定
       APP_ENV: ${APP_ENV:-development}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       SKILLS_BASE_PATH: /skills
+      WORKSPACE_TEMP_DIR: /var/lib/aiagent/workspaces
     volumes:
       - ./app:/app/app
       - skills_data:/skills
+      - workspaces_data:/var/lib/aiagent/workspaces
     ports:
       - "${APP_PORT:-8000}:8000"
     depends_on:
@@ -52,18 +54,20 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: ai-agent-backend-prod
+    container_name: claude-multi-agent-prod
     profiles:
       - production
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://${DB_USER:-aiagent}:${DB_PASSWORD:-aiagent_password}@db:5432/${DB_NAME:-aiagent_db}
+      DATABASE_URL: postgresql+asyncpg://${DB_USER:-aiagent}:${DB_PASSWORD:-aiagent_password}@db:5432/${DB_NAME:-aiagent}
       APP_ENV: production
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       SKILLS_BASE_PATH: /skills
+      WORKSPACE_TEMP_DIR: /var/lib/aiagent/workspaces
     volumes:
       - skills_data:/skills
+      - workspaces_data:/var/lib/aiagent/workspaces
     ports:
       - "${APP_PORT:-8000}:8000"
     depends_on:
@@ -80,4 +84,6 @@ volumes:
   postgres_data:
     driver: local
   skills_data:
+    driver: local
+  workspaces_data:
     driver: local

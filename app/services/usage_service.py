@@ -41,9 +41,8 @@ class UsageService:
         cache_creation_tokens: int = 0,
         cache_read_tokens: int = 0,
         cost_usd: Decimal = Decimal("0"),
-        agent_config_id: Optional[str] = None,
         session_id: Optional[str] = None,
-        chat_session_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
     ) -> UsageLog:
         """
         使用状況ログを保存
@@ -57,9 +56,8 @@ class UsageService:
             cache_creation_tokens: キャッシュ作成トークン数
             cache_read_tokens: キャッシュ読み込みトークン数
             cost_usd: コスト（USD）
-            agent_config_id: エージェント設定ID
             session_id: SDKセッションID
-            chat_session_id: チャットセッションID
+            conversation_id: 会話ID
 
         Returns:
             保存された使用状況ログ
@@ -72,10 +70,9 @@ class UsageService:
             usage_log_id=str(uuid4()),
             tenant_id=tenant_id,
             user_id=user_id,
-            agent_config_id=agent_config_id,
             model_id=model_id,
             session_id=session_id,
-            chat_session_id=chat_session_id,
+            conversation_id=conversation_id,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cache_creation_tokens=cache_creation_tokens,
@@ -285,7 +282,7 @@ class UsageService:
         tool_output: Optional[dict] = None,
         status: str = "success",
         execution_time_ms: Optional[int] = None,
-        chat_session_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
     ) -> ToolExecutionLog:
         """
         ツール実行ログを保存
@@ -298,7 +295,7 @@ class UsageService:
             tool_output: ツール出力
             status: ステータス
             execution_time_ms: 実行時間（ミリ秒）
-            chat_session_id: チャットセッションID
+            conversation_id: 会話ID
 
         Returns:
             保存されたツール実行ログ
@@ -306,7 +303,7 @@ class UsageService:
         log = ToolExecutionLog(
             tool_log_id=str(uuid4()),
             session_id=session_id,
-            chat_session_id=chat_session_id,
+            conversation_id=conversation_id,
             tool_name=tool_name,
             tool_use_id=tool_use_id,
             tool_input=tool_input,

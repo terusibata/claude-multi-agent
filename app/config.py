@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     # ============================================
     # データベース設定
     # ============================================
-    database_url: str = "postgresql+asyncpg://aiagent:aiagent_password@localhost:5432/aiagent_db"
+    database_url: str = "postgresql+asyncpg://aiagent:aiagent_password@localhost:5432/aiagent"
 
     # ============================================
     # AWS Bedrock設定
@@ -44,6 +44,16 @@ class Settings(BaseSettings):
 
     # Skills保存ベースパス
     skills_base_path: str = "/skills"
+
+    # ============================================
+    # S3ワークスペース設定
+    # ============================================
+    s3_bucket_name: str = ""
+    s3_workspace_prefix: str = "workspaces/"
+
+    # ローカルワークスペース一時ディレクトリ
+    # セキュリティ向上のため、アプリケーション専用ディレクトリを使用
+    workspace_temp_dir: str = "/var/lib/aiagent/workspaces"
 
     # ============================================
     # セキュリティ設定

@@ -26,10 +26,10 @@ class MessageLog(Base):
         UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4())
     )
 
-    # チャットセッションID
-    chat_session_id: Mapped[str] = mapped_column(
+    # 会話ID
+    conversation_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
-        ForeignKey("chat_sessions.chat_session_id"),
+        ForeignKey("conversations.conversation_id"),
         nullable=False,
         index=True,
     )
@@ -38,7 +38,7 @@ class MessageLog(Base):
     message_seq: Mapped[int] = mapped_column(Integer, nullable=False)
 
     # メッセージタイプ
-    # system / assistant / user / result / stream_event / tool_result
+    # system / assistant / user_result / result / user
     message_type: Mapped[str] = mapped_column(String(50), nullable=False)
 
     # メッセージサブタイプ

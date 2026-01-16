@@ -35,7 +35,9 @@ class McpServer(Base):
     # 表示名
     display_name: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
 
-    # タイプ: http / sse / stdio
+    # タイプ: http / sse / stdio / builtin / openapi
+    # builtinはアプリケーション組み込みのMCPサーバー
+    # openapiはOpenAPI仕様からツールを動的生成するタイプ
     type: Mapped[str] = mapped_column(String(20), nullable=False)
 
     # サーバーURL（http/sseの場合）
@@ -58,8 +60,19 @@ class McpServer(Base):
     # 例: ["mcp__servicenow__create_ticket", "mcp__servicenow__get_ticket"]
     allowed_tools: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
 
+    # ツール定義（JSON配列）- builtinタイプの場合に使用
+    # 例: [{"name": "present_files", "description": "...", "input_schema": {...}}]
+    tools: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+
     # 説明
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # OpenAPI仕様（JSON）- openapiタイプの場合に使用
+    openapi_spec: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+
+    # OpenAPI APIのベースURL（openapiタイプの場合）
+    # 仕様のserversセクションを上書き
+    openapi_base_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
     # ステータス (active / inactive)
     status: Mapped[str] = mapped_column(
