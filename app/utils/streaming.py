@@ -410,3 +410,153 @@ def format_title_generated_event(title: str) -> dict:
     }
 
 
+# =============================================================================
+# リアルタイム進捗イベント
+# =============================================================================
+
+
+def format_status_event(
+    state: str,
+    message: str,
+) -> dict:
+    """
+    ステータスイベントをフォーマット
+
+    現在の処理状態をクライアントに通知します。
+
+    Args:
+        state: 状態 (thinking / generating / tool_execution / waiting)
+        message: 状態の説明メッセージ
+
+    Returns:
+        イベントデータ
+    """
+    return {
+        "event": "status",
+        "data": {
+            "state": state,
+            "message": message,
+            "timestamp": _get_timestamp(),
+        },
+    }
+
+
+def format_heartbeat_event(
+    elapsed_ms: int,
+) -> dict:
+    """
+    ハートビートイベントをフォーマット
+
+    接続維持とタイムアウト防止のために定期的に送信されます。
+
+    Args:
+        elapsed_ms: 経過時間（ミリ秒）
+
+    Returns:
+        イベントデータ
+    """
+    return {
+        "event": "heartbeat",
+        "data": {
+            "timestamp": _get_timestamp(),
+            "elapsed_ms": elapsed_ms,
+        },
+    }
+
+
+def format_turn_progress_event(
+    current_turn: int,
+    max_turns: int | None = None,
+) -> dict:
+    """
+    ターン進捗イベントをフォーマット
+
+    現在のターン番号を通知します。
+
+    Args:
+        current_turn: 現在のターン番号
+        max_turns: 最大ターン数（設定されている場合）
+
+    Returns:
+        イベントデータ
+    """
+    return {
+        "event": "turn_progress",
+        "data": {
+            "current_turn": current_turn,
+            "max_turns": max_turns,
+            "timestamp": _get_timestamp(),
+        },
+    }
+
+
+def format_tool_progress_event(
+    tool_use_id: str,
+    tool_name: str,
+    status: str,
+    message: str | None = None,
+) -> dict:
+    """
+    ツール進捗イベントをフォーマット
+
+    ツール実行の状態を通知します。
+
+    Args:
+        tool_use_id: ツール使用ID
+        tool_name: ツール名
+        status: ステータス (pending / running / completed / error)
+        message: 進捗メッセージ（オプション）
+
+    Returns:
+        イベントデータ
+    """
+    data = {
+        "tool_use_id": tool_use_id,
+        "tool_name": tool_name,
+        "status": status,
+        "timestamp": _get_timestamp(),
+    }
+    if message:
+        data["message"] = message
+    return {
+        "event": "tool_progress",
+        "data": data,
+    }
+
+
+def format_subagent_event(
+    action: str,
+    agent_type: str,
+    description: str,
+    parent_tool_use_id: str,
+    result: str | None = None,
+) -> dict:
+    """
+    サブエージェントイベントをフォーマット
+
+    Taskツールによるサブエージェントの開始/終了を通知します。
+
+    Args:
+        action: アクション (start / stop)
+        agent_type: エージェントタイプ
+        description: 説明
+        parent_tool_use_id: 親ツール使用ID
+        result: 結果（終了時のみ）
+
+    Returns:
+        イベントデータ
+    """
+    data = {
+        "action": action,
+        "agent_type": agent_type,
+        "description": description,
+        "parent_tool_use_id": parent_tool_use_id,
+        "timestamp": _get_timestamp(),
+    }
+    if result:
+        data["result"] = result
+    return {
+        "event": "subagent",
+        "data": data,
+    }
+

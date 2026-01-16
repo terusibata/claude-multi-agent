@@ -37,6 +37,7 @@ from app.utils.streaming import (
     format_error_event,
     format_result_event,
     format_title_generated_event,
+    format_turn_progress_event,
 )
 
 settings = get_settings()
@@ -235,6 +236,10 @@ class ExecuteService:
             user_input=context.request.user_input[:100],
         )
 
+        # ターン番号追跡（SDKのターン）
+        sdk_turn_number = 0
+        max_turns = options.get("max_turns")
+
         async with ClaudeSDKClient(options=sdk_options) as client:
             await client.query(context.request.user_input)
 
@@ -265,6 +270,13 @@ class ExecuteService:
                         await self._update_session_id(context)
 
                 elif isinstance(message, AssistantMessage):
+                    # ターン進捗イベントを送信
+                    sdk_turn_number += 1
+                    yield format_turn_progress_event(
+                        current_turn=sdk_turn_number,
+                        max_turns=max_turns,
+                    )
+
                     async for event in self._wrap_generator(
                         message_processor.process_assistant_message(
                             message, log_entry,

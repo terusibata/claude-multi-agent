@@ -39,6 +39,7 @@ data: {"type": "result", "subtype": "success", ...}
 - **タイムアウト**: 300秒
 - **バックグラウンド実行**: クライアント切断後も処理は継続
 - **メッセージ順序**: 保証される
+- **ハートビート**: 10秒間隔で送信
 
 ## イベントタイプ
 
@@ -60,6 +61,40 @@ data: {"type": "result", "subtype": "success", ...}
 ### 3. title_generated イベント
 
 初回実行時、タイトルが自動生成された際に送信されます。
+
+### 4. status イベント（リアルタイム進捗）
+
+現在の処理状態を通知します。UIでの進捗表示に使用します。
+
+| state | 説明 |
+|-------|------|
+| `thinking` | 思考中 |
+| `generating` | レスポンス生成中 |
+| `tool_execution` | ツール実行中 |
+| `waiting` | 待機中 |
+
+### 5. heartbeat イベント
+
+接続維持のために定期的に送信されます。10秒間隔で送信されます。
+
+### 6. turn_progress イベント
+
+ターン進捗を通知します。AssistantMessageごとに送信されます。
+
+### 7. tool_progress イベント
+
+ツール実行の進捗を通知します。
+
+| status | 説明 |
+|--------|------|
+| `pending` | 受付済み |
+| `running` | 実行中 |
+| `completed` | 完了 |
+| `error` | エラー |
+
+### 8. subagent イベント
+
+Taskツールによるサブエージェントの開始/終了を通知します。
 
 ## メッセージ形式
 
@@ -223,6 +258,82 @@ data: {"type": "result", "subtype": "success", ...}
 }
 ```
 
+### Status Event（リアルタイム進捗）
+
+現在の処理状態を通知します。
+
+```json
+{
+  "state": "thinking",
+  "message": "思考中...",
+  "timestamp": "2024-01-01T00:00:00.000000"
+}
+```
+
+### Heartbeat Event
+
+接続維持のために定期的に送信されます。
+
+```json
+{
+  "timestamp": "2024-01-01T00:00:00.000000",
+  "elapsed_ms": 15000
+}
+```
+
+### Turn Progress Event
+
+ターン進捗を通知します。
+
+```json
+{
+  "current_turn": 2,
+  "max_turns": 10,
+  "timestamp": "2024-01-01T00:00:00.000000"
+}
+```
+
+### Tool Progress Event
+
+ツール実行の進捗を通知します。
+
+```json
+{
+  "tool_use_id": "tool-use-uuid",
+  "tool_name": "Read",
+  "status": "running",
+  "message": "ファイルを読み取り中...",
+  "timestamp": "2024-01-01T00:00:00.000000"
+}
+```
+
+### Subagent Event
+
+Taskツールによるサブエージェントの開始/終了を通知します。
+
+```json
+{
+  "action": "start",
+  "agent_type": "Explore",
+  "description": "コードベースを探索中",
+  "parent_tool_use_id": "task-tool-uuid",
+  "timestamp": "2024-01-01T00:00:00.000000"
+}
+```
+
+終了時:
+
+```json
+{
+  "action": "stop",
+  "agent_type": "Explore",
+  "description": "コードベースを探索中",
+  "parent_tool_use_id": "task-tool-uuid",
+  "result": "ファイルが見つかりました",
+  "timestamp": "2024-01-01T00:00:00.000000"
+}
+```
+
 ## フロー図
 
 ```
@@ -235,16 +346,64 @@ Client                          Server
   |  data: {type: "system", subtype: "init", ...}
   |<------------------------------|
   |                               |
+  |  event: turn_progress         |
+  |  data: {current_turn: 1, ...} |
+  |<------------------------------|
+  |                               |
+  |  event: status                |
+  |  data: {state: "thinking", ...}
+  |<------------------------------|
+  |                               |
+  |  event: message (thinking)    |
+  |  data: {type: "assistant", content_blocks: [{type: "thinking", ...}]}
+  |<------------------------------|
+  |                               |
+  |  event: status                |
+  |  data: {state: "generating", ...}
+  |<------------------------------|
+  |                               |
   |  event: message               |
   |  data: {type: "assistant", content_blocks: [{type: "text", ...}]}
+  |<------------------------------|
+  |                               |
+  |  event: heartbeat             |
+  |  data: {elapsed_ms: 10000, ...}
+  |<------------------------------|
+  |                               |
+  |  event: status                |
+  |  data: {state: "tool_execution", ...}
+  |<------------------------------|
+  |                               |
+  |  event: tool_progress         |
+  |  data: {status: "pending", tool_name: "Read", ...}
   |<------------------------------|
   |                               |
   |  event: message               |
   |  data: {type: "assistant", content_blocks: [{type: "tool_use", ...}]}
   |<------------------------------|
   |                               |
+  |  event: tool_progress         |
+  |  data: {status: "running", ...}
+  |<------------------------------|
+  |                               |
+  |  event: tool_progress         |
+  |  data: {status: "completed", ...}
+  |<------------------------------|
+  |                               |
   |  event: message               |
   |  data: {type: "user_result", content_blocks: [{type: "tool_result", ...}]}
+  |<------------------------------|
+  |                               |
+  |  event: heartbeat             |
+  |  data: {elapsed_ms: 20000, ...}
+  |<------------------------------|
+  |                               |
+  |  event: turn_progress         |
+  |  data: {current_turn: 2, ...} |
+  |<------------------------------|
+  |                               |
+  |  event: status                |
+  |  data: {state: "generating", ...}
   |<------------------------------|
   |                               |
   |  event: message               |
@@ -422,7 +581,74 @@ export interface TitleGeneratedEvent {
   };
 }
 
-export type StreamingEvent = MessageEvent | ErrorEvent | TitleGeneratedEvent;
+// ==========================================
+// リアルタイム進捗イベント型
+// ==========================================
+
+export type StatusState = 'thinking' | 'generating' | 'tool_execution' | 'waiting';
+
+export interface StatusEvent {
+  event: 'status';
+  data: {
+    state: StatusState;
+    message: string;
+    timestamp: string;
+  };
+}
+
+export interface HeartbeatEvent {
+  event: 'heartbeat';
+  data: {
+    timestamp: string;
+    elapsed_ms: number;
+  };
+}
+
+export interface TurnProgressEvent {
+  event: 'turn_progress';
+  data: {
+    current_turn: number;
+    max_turns: number | null;
+    timestamp: string;
+  };
+}
+
+export type ToolProgressStatus = 'pending' | 'running' | 'completed' | 'error';
+
+export interface ToolProgressEvent {
+  event: 'tool_progress';
+  data: {
+    tool_use_id: string;
+    tool_name: string;
+    status: ToolProgressStatus;
+    message?: string;
+    timestamp: string;
+  };
+}
+
+export type SubagentAction = 'start' | 'stop';
+
+export interface SubagentEvent {
+  event: 'subagent';
+  data: {
+    action: SubagentAction;
+    agent_type: string;
+    description: string;
+    parent_tool_use_id: string;
+    result?: string;
+    timestamp: string;
+  };
+}
+
+export type StreamingEvent =
+  | MessageEvent
+  | ErrorEvent
+  | TitleGeneratedEvent
+  | StatusEvent
+  | HeartbeatEvent
+  | TurnProgressEvent
+  | ToolProgressEvent
+  | SubagentEvent;
 
 // ==========================================
 // リクエスト型

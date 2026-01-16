@@ -11,10 +11,13 @@ from app.services.execute.context import ExecutionContext, MessageLogEntry
 from app.services.execute.tool_tracker import ToolTracker
 from app.utils.streaming import (
     format_session_start_event,
+    format_status_event,
+    format_subagent_event,
     format_text_delta_event,
-    format_tool_start_event,
-    format_tool_complete_event,
     format_thinking_event,
+    format_tool_complete_event,
+    format_tool_progress_event,
+    format_tool_start_event,
 )
 from app.utils.tool_summary import generate_tool_summary
 
@@ -127,6 +130,8 @@ class MessageProcessor:
                 text = getattr(content, "text", "") or ""
                 self.context.assistant_text += text
                 log_entry.content_blocks.append({"type": "text", "text": text})
+                # ステータスイベント: テキスト生成中
+                yield format_status_event("generating", "レスポンスを生成中...")
                 yield format_text_delta_event(text)
 
             # ツール使用ブロック
@@ -140,6 +145,8 @@ class MessageProcessor:
                     "type": "thinking",
                     "text": thinking_text,
                 })
+                # ステータスイベント: 思考中
+                yield format_status_event("thinking", "思考中...")
                 yield format_thinking_event(thinking_text)
 
             # ツール結果ブロック
@@ -203,9 +210,40 @@ class MessageProcessor:
             "summary": summary,
         })
 
+        # ステータスイベント: ツール実行中
+        yield format_status_event("tool_execution", f"ツール実行中: {tool_name}")
+
+        # ツール進捗イベント: pending（受付）
+        yield format_tool_progress_event(
+            tool_use_id=tool_id,
+            tool_name=tool_name,
+            status="pending",
+            message=summary,
+        )
+
+        # ツール開始イベント
         yield format_tool_start_event(
             tool_id, tool_name, summary, tool_input=tool_input
         )
+
+        # ツール進捗イベント: running（実行中）
+        yield format_tool_progress_event(
+            tool_use_id=tool_id,
+            tool_name=tool_name,
+            status="running",
+            message=f"{tool_name}を実行中...",
+        )
+
+        # Taskツールの場合はサブエージェント開始イベントを送信
+        if tool_name == "Task":
+            subagent_type = tool_input.get("subagent_type", "unknown")
+            description = tool_input.get("description", "サブエージェント実行")
+            yield format_subagent_event(
+                action="start",
+                agent_type=subagent_type,
+                description=description,
+                parent_tool_use_id=tool_id,
+            )
 
     def _process_tool_result(
         self,
@@ -231,6 +269,7 @@ class MessageProcessor:
         tool_info = self.tool_tracker.complete_tool(tool_use_id, tool_result, is_error)
 
         tool_name = tool_info.tool_name if tool_info else "unknown"
+        tool_input = tool_info.tool_input if tool_info else {}
 
         # ステータス決定
         status = "error" if is_error else "completed"
@@ -247,6 +286,26 @@ class MessageProcessor:
 
         # 結果サマリー生成
         result_summary = self.tool_tracker.generate_result_summary(tool_result)
+
+        # ツール進捗イベント: completed / error
+        yield format_tool_progress_event(
+            tool_use_id=tool_use_id,
+            tool_name=tool_name,
+            status=status,
+            message=result_summary,
+        )
+
+        # Taskツールの場合はサブエージェント終了イベントを送信
+        if tool_name == "Task":
+            subagent_type = tool_input.get("subagent_type", "unknown")
+            description = tool_input.get("description", "サブエージェント完了")
+            yield format_subagent_event(
+                action="stop",
+                agent_type=subagent_type,
+                description=description,
+                parent_tool_use_id=tool_use_id,
+                result=result_summary[:200] if result_summary else None,
+            )
 
         # tool_resultイベントを送信
         yield format_tool_complete_event(
