@@ -206,7 +206,6 @@ class ExecuteService:
                 ToolResultBlock,
                 ToolUseBlock,
                 UserMessage,
-                StreamEvent,
             )
             logger.info("Claude Agent SDK インポート成功")
         except ImportError as e:
@@ -247,7 +246,8 @@ class ExecuteService:
             async for message in client.receive_response():
                 # ストリーミングイベント（部分メッセージ）の処理
                 # include_partial_messages=True の場合、StreamEvent が送信される
-                if isinstance(message, StreamEvent):
+                # SDKから StreamEvent がエクスポートされていないため、クラス名で判定
+                if type(message).__name__ == "StreamEvent":
                     streaming_event = self._process_stream_event(message, context)
                     if streaming_event:
                         yield streaming_event
