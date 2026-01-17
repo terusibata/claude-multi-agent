@@ -61,8 +61,8 @@ async def create_model(
 
     - **model_id**: 内部管理ID（重複不可）
     - **bedrock_model_id**: AWS BedrockのモデルID
-    - **input_token_price**: 入力トークン単価（USD/1Mトークン）
-    - **output_token_price**: 出力トークン単価（USD/1Mトークン）
+    - **input_token_price**: 入力トークン単価（USD/1Kトークン、AWS Bedrock公式価格形式）
+    - **output_token_price**: 出力トークン単価（USD/1Kトークン、AWS Bedrock公式価格形式）
     """
     service = ModelService(db)
 

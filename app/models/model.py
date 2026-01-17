@@ -39,29 +39,29 @@ class Model(Base):
     # モデルのデプロイリージョン（オプション）
     model_region: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
 
-    # 入力トークン単価 (USD/1Mトークン)
+    # 入力トークン単価 (USD/1Kトークン) - AWS Bedrock公式価格形式
     input_token_price: Mapped[Decimal] = mapped_column(
         DECIMAL(10, 6), nullable=False, default=Decimal("0")
     )
 
-    # 出力トークン単価 (USD/1Mトークン)
+    # 出力トークン単価 (USD/1Kトークン) - AWS Bedrock公式価格形式
     output_token_price: Mapped[Decimal] = mapped_column(
         DECIMAL(10, 6), nullable=False, default=Decimal("0")
     )
 
-    # 5分キャッシュ作成単価 (USD/1Mトークン)
+    # 5分キャッシュ作成単価 (USD/1Kトークン) - AWS Bedrock公式価格形式
     # 通常は入力トークン価格の1.25倍
     cache_creation_5m_price: Mapped[Decimal] = mapped_column(
         DECIMAL(10, 6), nullable=False, default=Decimal("0")
     )
 
-    # 1時間キャッシュ作成単価 (USD/1Mトークン)
+    # 1時間キャッシュ作成単価 (USD/1Kトークン) - AWS Bedrock公式価格形式
     # 通常は入力トークン価格の2.0倍
     cache_creation_1h_price: Mapped[Decimal] = mapped_column(
         DECIMAL(10, 6), nullable=False, default=Decimal("0")
     )
 
-    # キャッシュ読込単価 (USD/1Mトークン)
+    # キャッシュ読込単価 (USD/1Kトークン) - AWS Bedrock公式価格形式
     # 通常は入力トークン価格の0.1倍（5分/1時間共通）
     cache_read_price: Mapped[Decimal] = mapped_column(
         DECIMAL(10, 6), nullable=False, default=Decimal("0")
@@ -101,14 +101,15 @@ class Model(Base):
         Returns:
             コスト（USD）
         """
-        million = Decimal("1000000")
+        # AWS Bedrockは USD/1Kトークン で価格設定されている
+        thousand = Decimal("1000")
 
-        # 1Mトークンあたりの単価から計算
-        input_cost = (Decimal(input_tokens) / million) * self.input_token_price
-        output_cost = (Decimal(output_tokens) / million) * self.output_token_price
-        cache_5m_cost = (Decimal(cache_creation_5m_tokens) / million) * self.cache_creation_5m_price
-        cache_1h_cost = (Decimal(cache_creation_1h_tokens) / million) * self.cache_creation_1h_price
-        cache_read_cost = (Decimal(cache_read_tokens) / million) * self.cache_read_price
+        # 1Kトークンあたりの単価から計算
+        input_cost = (Decimal(input_tokens) / thousand) * self.input_token_price
+        output_cost = (Decimal(output_tokens) / thousand) * self.output_token_price
+        cache_5m_cost = (Decimal(cache_creation_5m_tokens) / thousand) * self.cache_creation_5m_price
+        cache_1h_cost = (Decimal(cache_creation_1h_tokens) / thousand) * self.cache_creation_1h_price
+        cache_read_cost = (Decimal(cache_read_tokens) / thousand) * self.cache_read_price
 
         return input_cost + output_cost + cache_5m_cost + cache_1h_cost + cache_read_cost
 
