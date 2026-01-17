@@ -107,12 +107,17 @@ class ToolTracker:
         並列実行の場合、最後に開始されたサブエージェントのIDを返す
         メインエージェントの場合はNoneを返す
 
+        注意: 並列サブエージェント実行時の制限事項
+        SDKからはどのサブエージェントに子ツールが属するかの情報が得られないため、
+        最後に開始されたサブエージェントを親として割り当てます。
+        これはベストエフォートの実装であり、並列実行時には不正確になる可能性があります。
+
         Returns:
             親ツールID（メインエージェントの場合はNone）
         """
         if not self._active_subagents:
             return None
-        # 最後に開始されたサブエージェントを返す
+        # 最後に開始されたサブエージェントを返す（ベストエフォート）
         return list(self._active_subagents.keys())[-1]
 
     def get_parent_tool_id_for_tool(self, tool_use_id: str) -> Optional[str]:

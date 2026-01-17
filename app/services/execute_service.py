@@ -319,18 +319,24 @@ class ExecuteService:
         context.message_seq += 1
         user_message_timestamp = datetime.utcnow()
 
+        user_message_content = {
+            "type": "user",
+            "subtype": None,
+            "timestamp": user_message_timestamp.isoformat(),
+            "text": context.request.user_input,
+        }
+
         await self.conversation_service.save_message_log(
             conversation_id=context.conversation_id,
             message_seq=context.message_seq,
             message_type="user",
             message_subtype=None,
-            content={
-                "type": "user",
-                "subtype": None,
-                "timestamp": user_message_timestamp.isoformat(),
-                "text": context.request.user_input,
-            },
+            content=user_message_content,
         )
+
+        # message_logsにも追加（result用）
+        context.message_logs.append(user_message_content)
+
         logger.info("ユーザーメッセージ保存完了", message_seq=context.message_seq)
 
     async def _update_session_id(self, context: ExecutionContext) -> None:
