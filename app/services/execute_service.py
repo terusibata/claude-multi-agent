@@ -415,11 +415,8 @@ class ExecuteService:
                 main_cache_read=cache_read,
             )
 
-        # コスト計算（DBの価格設定から計算、SDKのtotal_cost_usdは使用しない）
-        # メインエージェントのみのコスト（全体からサブエージェント分は引かない）
-        total_cost_decimal = context.model.calculate_cost(
-            input_tokens, output_tokens, cache_creation, cache_read
-        )
+        # コスト計算（model_usageの全cost_usdを合計）
+        total_cost_decimal = self._calculate_total_cost_from_model_usage(model_usage)
 
         # 使用状況ログを保存（Decimalで保存）
         await self.usage_service.save_usage_log(
@@ -458,8 +455,11 @@ class ExecuteService:
                     "ephemeral_5m_input_tokens": cache_creation_detail.get("ephemeral_5m_input_tokens", 0) or 0,
                 }
 
-        # 結果イベントを追加（コストはフォーマット済み文字列で渡す）
+        # 結果イベントを追加
+        # JSON出力用にコストをフォーマット（科学的記数法を避ける）
         total_cost_formatted = self._format_cost_for_json(total_cost_decimal)
+        model_usage_formatted = self._format_model_usage_for_json(model_usage)
+
         result_event = format_result_event(
             subtype=subtype,
             result=context.assistant_text if subtype == "success" else None,
@@ -470,7 +470,7 @@ class ExecuteService:
             duration_ms=duration_ms,
             session_id=context.session_id,
             messages=context.message_logs,
-            model_usage=model_usage,
+            model_usage=model_usage_formatted,
         )
         events.append(result_event)
 
@@ -708,6 +708,36 @@ class ExecuteService:
         formatted = f"{cost:.10f}".rstrip("0").rstrip(".")
         return formatted if formatted else "0"
 
+    def _format_model_usage_for_json(
+        self,
+        model_usage: dict[str, dict[str, Any]],
+    ) -> dict[str, dict[str, Any]]:
+        """
+        model_usageをJSON出力用にフォーマット
+
+        cost_usd（Decimal）を科学的記数法を避けた文字列に変換する
+
+        Args:
+            model_usage: モデル別使用量（cost_usdはDecimal）
+
+        Returns:
+            フォーマット済みのmodel_usage（cost_usdは文字列）
+        """
+        formatted: dict[str, dict[str, Any]] = {}
+        for model_id, usage in model_usage.items():
+            cost = usage.get("cost_usd", Decimal("0"))
+            if not isinstance(cost, Decimal):
+                cost = Decimal(str(cost))
+
+            formatted[model_id] = {
+                "input_tokens": usage["input_tokens"],
+                "output_tokens": usage["output_tokens"],
+                "cache_creation_input_tokens": usage.get("cache_creation_input_tokens", 0),
+                "cache_read_input_tokens": usage.get("cache_read_input_tokens", 0),
+                "cost_usd": self._format_cost_for_json(cost),
+            }
+        return formatted
+
     async def _build_model_usage(
         self,
         context: ExecutionContext,
@@ -727,13 +757,13 @@ class ExecuteService:
         Args:
             context: 実行コンテキスト
             tool_tracker: ツールトラッカー
-            main_input_tokens: メイン全体の入力トークン数
-            main_output_tokens: メイン全体の出力トークン数
+            main_input_tokens: SDK全体の入力トークン数（メイン+サブエージェント）
+            main_output_tokens: SDK全体の出力トークン数（メイン+サブエージェント）
             main_cache_creation: キャッシュ作成トークン数
             main_cache_read: キャッシュ読み込みトークン数
 
         Returns:
-            モデルID別の使用量辞書（cost_usdはJSON用にフォーマットされた文字列）
+            モデルID別の使用量辞書（cost_usdはDecimal型）
         """
         # サブエージェントの使用量を取得（cost_usdはDecimal）
         subagent_model_usage = tool_tracker.get_aggregated_model_usage()
@@ -808,28 +838,17 @@ class ExecuteService:
                     "output_tokens": usage["output_tokens"],
                     "cache_creation_input_tokens": usage.get("cache_creation_input_tokens", 0),
                     "cache_read_input_tokens": usage.get("cache_read_input_tokens", 0),
-                    "cost_usd": subagent_cost,
+                    "cost_usd": subagent_cost,  # Decimal
                 }
-
-        # JSON出力用にcost_usdをフォーマット（科学的記数法を避ける）
-        formatted_usage: dict[str, dict[str, Any]] = {}
-        for model_id, usage in model_usage.items():
-            formatted_usage[model_id] = {
-                "input_tokens": usage["input_tokens"],
-                "output_tokens": usage["output_tokens"],
-                "cache_creation_input_tokens": usage["cache_creation_input_tokens"],
-                "cache_read_input_tokens": usage["cache_read_input_tokens"],
-                "cost_usd": self._format_cost_for_json(usage["cost_usd"]),
-            }
 
         logger.info(
             "モデル別使用量を構築",
             main_model_id=main_model_id,
             subagent_count=len(subagent_model_usage),
-            model_usage=formatted_usage,
+            total_models=len(model_usage),
         )
 
-        return formatted_usage
+        return model_usage
 
     async def _validate_subagent_models(self) -> str | None:
         """
