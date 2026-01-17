@@ -26,11 +26,14 @@ class ModelBase(BaseModel):
     output_token_price: Decimal = Field(
         default=Decimal("0"), description="出力トークン単価 (USD/1Mトークン)"
     )
-    cache_creation_price: Decimal = Field(
-        default=Decimal("0"), description="キャッシュ作成単価 (USD/1Mトークン)"
+    cache_creation_5m_price: Decimal = Field(
+        default=Decimal("0"), description="5分キャッシュ作成単価 (USD/1Mトークン、通常は入力価格×1.25)"
+    )
+    cache_creation_1h_price: Decimal = Field(
+        default=Decimal("0"), description="1時間キャッシュ作成単価 (USD/1Mトークン、通常は入力価格×2.0)"
     )
     cache_read_price: Decimal = Field(
-        default=Decimal("0"), description="キャッシュ読込単価 (USD/1Mトークン)"
+        default=Decimal("0"), description="キャッシュ読込単価 (USD/1Mトークン、通常は入力価格×0.1)"
     )
 
 
@@ -50,7 +53,8 @@ class ModelUpdate(BaseModel):
     model_region: Optional[str] = Field(None, max_length=50)
     input_token_price: Optional[Decimal] = None
     output_token_price: Optional[Decimal] = None
-    cache_creation_price: Optional[Decimal] = None
+    cache_creation_5m_price: Optional[Decimal] = None
+    cache_creation_1h_price: Optional[Decimal] = None
     cache_read_price: Optional[Decimal] = None
     status: Optional[str] = Field(None, pattern="^(active|deprecated)$")
 
