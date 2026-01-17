@@ -223,9 +223,13 @@ Taskツールによるサブエージェントの開始/終了を通知します
   "usage": {
     "input_tokens": 1500,
     "output_tokens": 500,
-    "cache_creation_tokens": 0,
+    "cache_creation_tokens": 15000,
     "cache_read_tokens": 200,
-    "total_tokens": 2000
+    "total_tokens": 2000,
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 0,
+      "ephemeral_5m_input_tokens": 15000
+    }
   },
   "total_cost_usd": 0.0075,
   "num_turns": 3,
@@ -245,22 +249,31 @@ Taskツールによるサブエージェントの開始/終了を通知します
       "content_blocks": [...]
     }
   ],
-  "model_usage": {
-    "claude-3-5-sonnet-20241022": {
-      "input_tokens": 1000,
-      "output_tokens": 300,
-      "cache_creation_input_tokens": 0,
-      "cache_read_input_tokens": 100
-    },
-    "claude-3-5-haiku-20241022": {
-      "input_tokens": 500,
-      "output_tokens": 200,
-      "cache_creation_input_tokens": 0,
-      "cache_read_input_tokens": 100
-    }
-  }
+  "model_usage": null
 }
 ```
+
+#### usage フィールド
+
+| フィールド | 型 | 説明 |
+|-----------|-----|------|
+| `input_tokens` | number | 入力トークン数 |
+| `output_tokens` | number | 出力トークン数 |
+| `cache_creation_tokens` | number | キャッシュ作成トークン合計 |
+| `cache_read_tokens` | number | キャッシュ読み込みトークン |
+| `total_tokens` | number | 合計トークン数（入力+出力） |
+| `cache_creation` | object | ephemeralキャッシュの内訳（オプション） |
+
+#### cache_creation 内訳（ephemeral cache）
+
+| フィールド | 説明 |
+|-----------|------|
+| `ephemeral_1h_input_tokens` | 1時間キャッシュのトークン数 |
+| `ephemeral_5m_input_tokens` | 5分キャッシュのトークン数 |
+
+#### model_usage について
+
+**注意**: `model_usage`フィールドはTypeScript SDKでのみ利用可能です。Python SDKでは常に`null`が返されます。サブエージェント（Task）が使用するモデル別のトークン使用量を追跡するには、TypeScript SDKの使用を検討してください。
 
 #### subtype の種類
 
@@ -520,12 +533,18 @@ export type ContentBlock = TextBlock | ToolUseBlock | ThinkingBlock | ToolResult
 // 使用状況
 // ==========================================
 
+export interface CacheCreationInfo {
+  ephemeral_1h_input_tokens: number;
+  ephemeral_5m_input_tokens: number;
+}
+
 export interface UsageInfo {
   input_tokens: number;
   output_tokens: number;
   cache_creation_tokens: number;
   cache_read_tokens: number;
   total_tokens: number;
+  cache_creation?: CacheCreationInfo;  // ephemeralキャッシュの内訳
 }
 
 // ==========================================

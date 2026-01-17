@@ -381,7 +381,9 @@ class ExecuteService:
         # 使用状況の取得
         input_tokens = usage_data.get("input_tokens", 0) if usage_data else 0
         output_tokens = usage_data.get("output_tokens", 0) if usage_data else 0
-        cache_creation = usage_data.get("cache_creation_input_tokens", 0) if usage_data else 0
+
+        # キャッシュトークン取得（新旧両方の形式に対応）
+        cache_creation = self._get_cache_creation_tokens(usage_data) if usage_data else 0
         cache_read = usage_data.get("cache_read_input_tokens", 0) if usage_data else 0
         total_cost = message.total_cost_usd or 0
         num_turns = message.num_turns
@@ -420,24 +422,37 @@ class ExecuteService:
             title_event = await self._generate_and_update_title(context)
             events.append(title_event)
 
+        # 使用量オブジェクトを構築（ephemeral cache内訳を含む）
+        usage_obj = {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cache_creation_tokens": cache_creation,
+            "cache_read_tokens": cache_read,
+            "total_tokens": input_tokens + output_tokens,
+        }
+
+        # ephemeral cacheの内訳があれば追加
+        if usage_data:
+            cache_creation_detail = usage_data.get("cache_creation")
+            if isinstance(cache_creation_detail, dict):
+                usage_obj["cache_creation"] = {
+                    "ephemeral_1h_input_tokens": cache_creation_detail.get("ephemeral_1h_input_tokens", 0) or 0,
+                    "ephemeral_5m_input_tokens": cache_creation_detail.get("ephemeral_5m_input_tokens", 0) or 0,
+                }
+
         # 結果イベントを追加
+        # 注: model_usageはPython SDKでは利用不可（TypeScript SDKのみ）
         result_event = format_result_event(
             subtype=subtype,
             result=context.assistant_text if subtype == "success" else None,
             errors=context.errors if context.errors else None,
-            usage={
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "cache_creation_tokens": cache_creation,
-                "cache_read_tokens": cache_read,
-                "total_tokens": input_tokens + output_tokens,
-            },
+            usage=usage_obj,
             cost_usd=total_cost,
             num_turns=num_turns,
             duration_ms=duration_ms,
             session_id=context.session_id,
             messages=context.message_logs,
-            model_usage=model_usage,
+            model_usage=model_usage,  # Python SDKでは常にNone
         )
         events.append(result_event)
 
@@ -562,6 +577,33 @@ class ExecuteService:
             num_turns=0,
             duration_ms=duration_ms,
         )
+
+    def _get_cache_creation_tokens(self, usage_data: dict) -> int:
+        """
+        キャッシュ作成トークン数を取得
+
+        新旧両方のSDK形式に対応:
+        - 旧形式: cache_creation_input_tokens (int)
+        - 新形式: cache_creation.ephemeral_1h_input_tokens + ephemeral_5m_input_tokens
+
+        Args:
+            usage_data: SDKからの使用量データ
+
+        Returns:
+            キャッシュ作成トークン数の合計
+        """
+        # 旧形式をチェック
+        if "cache_creation_input_tokens" in usage_data:
+            return usage_data.get("cache_creation_input_tokens", 0) or 0
+
+        # 新形式をチェック
+        cache_creation = usage_data.get("cache_creation")
+        if isinstance(cache_creation, dict):
+            ephemeral_1h = cache_creation.get("ephemeral_1h_input_tokens", 0) or 0
+            ephemeral_5m = cache_creation.get("ephemeral_5m_input_tokens", 0) or 0
+            return ephemeral_1h + ephemeral_5m
+
+        return 0
 
     def _normalize_model_usage(
         self,
