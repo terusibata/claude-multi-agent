@@ -20,9 +20,11 @@ from app.services.execute import (
     MessageLogEntry,
     MessageProcessor,
     OptionsBuilder,
+    SubagentModelMapping,
     TitleGenerator,
     ToolTracker,
 )
+from app.services.model_service import ModelService
 from app.services.mcp_server_service import McpServerService
 from app.services.conversation_service import ConversationService
 from app.services.skill_service import SkillService
@@ -210,6 +212,13 @@ class ExecuteService:
                 "sdk_not_installed",
             )
             yield self._create_error_result(context, [str(e)])
+            return
+
+        # サブエージェント用モデルのバリデーション
+        validation_error = await self._validate_subagent_models()
+        if validation_error:
+            yield format_error_event(validation_error, "model_validation_error")
+            yield self._create_error_result(context, [validation_error])
             return
 
         # オプション構築
@@ -785,6 +794,43 @@ class ExecuteService:
         )
 
         return model_usage
+
+    async def _validate_subagent_models(self) -> str | None:
+        """
+        サブエージェント用モデルがDBに存在するか確認
+
+        エージェント実行前にサブエージェントで使用するモデルが
+        modelsテーブルに登録されているか検証する
+
+        Returns:
+            エラーメッセージ（問題がなければNone）
+        """
+        required_ids = SubagentModelMapping.get_required_model_ids(settings)
+
+        model_service = ModelService(self.db)
+        missing_models = []
+
+        for model_id in required_ids:
+            model = await model_service.get_by_id(model_id)
+            if not model:
+                missing_models.append(model_id)
+
+        if missing_models:
+            error_msg = (
+                f"サブエージェント用モデルがDBに存在しません: {missing_models}. "
+                "models テーブルに登録してください。"
+            )
+            logger.error(
+                "モデルバリデーションエラー",
+                missing_models=missing_models,
+            )
+            return error_msg
+
+        logger.debug(
+            "サブエージェント用モデルバリデーション完了",
+            required_models=list(required_ids),
+        )
+        return None
 
     async def _sync_workspace_after_execution(
         self,
