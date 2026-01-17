@@ -3,11 +3,12 @@
 SDKからのメッセージを処理してSSEイベントに変換
 """
 from datetime import datetime
-from typing import Any, Generator, Optional
+from typing import TYPE_CHECKING, Any, Generator, Optional
 
 import structlog
 
 from app.services.execute.context import ExecutionContext, MessageLogEntry
+from app.services.execute.model_mapping import SubagentModelMapping
 from app.services.execute.tool_tracker import ToolTracker
 from app.utils.streaming import (
     format_session_start_event,
@@ -20,6 +21,9 @@ from app.utils.streaming import (
     format_tool_start_event,
 )
 from app.utils.tool_summary import generate_tool_summary
+
+if TYPE_CHECKING:
+    from app.config import Settings
 
 logger = structlog.get_logger(__name__)
 
@@ -35,6 +39,7 @@ class MessageProcessor:
         self,
         context: ExecutionContext,
         tool_tracker: ToolTracker,
+        settings: "Settings",
     ):
         """
         初期化
@@ -42,9 +47,11 @@ class MessageProcessor:
         Args:
             context: 実行コンテキスト
             tool_tracker: ツールトラッカー
+            settings: アプリケーション設定
         """
         self.context = context
         self.tool_tracker = tool_tracker
+        self.settings = settings
 
     def process_system_message(
         self,
@@ -199,8 +206,23 @@ class MessageProcessor:
         tool_name = getattr(content, "name", None) or "unknown"
         tool_input = getattr(content, "input", {}) or {}
 
+        # Task toolの場合、モデル情報を取得・解決
+        model_alias = None
+        model_id = None
+        if tool_name == "Task":
+            model_alias = tool_input.get("model")  # "haiku", "sonnet" など
+            model_id = SubagentModelMapping.resolve_model_id(
+                model_alias, self.settings
+            )
+
         # ツールトラッカーに登録（親ツールIDも自動的に設定される）
-        tool_info = self.tool_tracker.start_tool(tool_id, tool_name, tool_input)
+        tool_info = self.tool_tracker.start_tool(
+            tool_id,
+            tool_name,
+            tool_input,
+            model_alias=model_alias,
+            model_id=model_id,
+        )
         parent_tool_id = tool_info.parent_tool_use_id
 
         summary = generate_tool_summary(tool_name, tool_input)
@@ -275,11 +297,38 @@ class MessageProcessor:
         # 親ツールIDを取得（完了前に取得する必要がある）
         parent_tool_id = self.tool_tracker.get_parent_tool_id_for_tool(tool_use_id)
 
-        # ツールトラッカーで完了処理
-        tool_info = self.tool_tracker.complete_tool(tool_use_id, tool_result, is_error)
-
+        # ツール情報を取得（完了前に取得）
+        tool_info = self.tool_tracker.get_tool_info(tool_use_id)
         tool_name = tool_info.tool_name if tool_info else "unknown"
         tool_input = tool_info.tool_input if tool_info else {}
+
+        # Task toolの場合、usage情報を抽出してサブエージェント使用量を記録
+        if tool_name == "Task":
+            usage_data = None
+            total_cost_usd = None
+            duration_ms = None
+
+            # tool_resultから使用量情報を抽出（辞書形式の場合）
+            if isinstance(tool_result, dict):
+                usage_data = tool_result.get("usage")
+                total_cost_usd = tool_result.get("total_cost_usd")
+                duration_ms = tool_result.get("duration_ms")
+            elif hasattr(tool_result, "usage"):
+                # オブジェクト形式の場合
+                usage_data = getattr(tool_result, "usage", None)
+                total_cost_usd = getattr(tool_result, "total_cost_usd", None)
+                duration_ms = getattr(tool_result, "duration_ms", None)
+
+            # サブエージェント使用量を記録
+            self.tool_tracker.complete_subagent_with_usage(
+                tool_use_id=tool_use_id,
+                usage=usage_data,
+                total_cost_usd=total_cost_usd,
+                duration_ms=duration_ms,
+            )
+
+        # ツールトラッカーで完了処理（Task以外の場合も含む）
+        self.tool_tracker.complete_tool(tool_use_id, tool_result, is_error)
 
         # ステータス決定
         status = "error" if is_error else "completed"

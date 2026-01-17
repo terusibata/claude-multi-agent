@@ -228,7 +228,7 @@ class ExecuteService:
         await self._save_user_message(context)
 
         # メッセージプロセッサを初期化
-        message_processor = MessageProcessor(context, tool_tracker)
+        message_processor = MessageProcessor(context, tool_tracker, settings)
 
         # SDK実行
         logger.info(
@@ -365,8 +365,9 @@ class ExecuteService:
         subtype = message.subtype
         usage_data = message.usage
 
-        # モデル別使用量を取得（SDK 1.0.19+で対応）
-        # model_usage フィールドまたは modelUsage フィールドを試す
+        # モデル別使用量を取得
+        # SDKからmodel_usageが取得できる場合はそれを使用
+        # 取得できない場合（Python SDKなど）はサブエージェントの追跡データから構築
         model_usage_raw = getattr(message, "model_usage", None) or getattr(message, "modelUsage", None)
         model_usage = self._normalize_model_usage(model_usage_raw)
 
@@ -392,6 +393,17 @@ class ExecuteService:
         # エラーチェック
         if message.is_error:
             context.errors.append(message.result or "Unknown error")
+
+        # モデル別使用量を構築（SDKからmodel_usageが取得できない場合）
+        if not model_usage:
+            model_usage = self._build_model_usage(
+                context=context,
+                tool_tracker=tool_tracker,
+                main_input_tokens=input_tokens,
+                main_output_tokens=output_tokens,
+                main_cache_creation=cache_creation,
+                main_cache_read=cache_read,
+            )
 
         # コスト計算（model_usageがあればそれを使用してより正確に計算）
         if model_usage and not total_cost:
@@ -441,7 +453,6 @@ class ExecuteService:
                 }
 
         # 結果イベントを追加
-        # 注: model_usageはPython SDKでは利用不可（TypeScript SDKのみ）
         result_event = format_result_event(
             subtype=subtype,
             result=context.assistant_text if subtype == "success" else None,
@@ -452,7 +463,7 @@ class ExecuteService:
             duration_ms=duration_ms,
             session_id=context.session_id,
             messages=context.message_logs,
-            model_usage=model_usage,  # Python SDKでは常にNone
+            model_usage=model_usage,
         )
         events.append(result_event)
 
@@ -693,6 +704,87 @@ class ExecuteService:
             total_cost += input_cost + output_cost
 
         return total_cost
+
+    def _build_model_usage(
+        self,
+        context: ExecutionContext,
+        tool_tracker: ToolTracker,
+        main_input_tokens: int,
+        main_output_tokens: int,
+        main_cache_creation: int,
+        main_cache_read: int,
+    ) -> dict[str, dict[str, Any]]:
+        """
+        モデル別使用量を構築
+
+        SDKからmodel_usageが取得できない場合（Python SDKなど）、
+        サブエージェントの追跡データから構築する
+
+        Args:
+            context: 実行コンテキスト
+            tool_tracker: ツールトラッカー
+            main_input_tokens: メイン全体の入力トークン数
+            main_output_tokens: メイン全体の出力トークン数
+            main_cache_creation: キャッシュ作成トークン数
+            main_cache_read: キャッシュ読み込みトークン数
+
+        Returns:
+            モデルID別の使用量辞書
+        """
+        # サブエージェントの使用量を取得
+        subagent_model_usage = tool_tracker.get_aggregated_model_usage()
+
+        # サブエージェントの合計トークン数を計算
+        subagent_total_input = sum(
+            u["input_tokens"] for u in subagent_model_usage.values()
+        )
+        subagent_total_output = sum(
+            u["output_tokens"] for u in subagent_model_usage.values()
+        )
+
+        # メインエージェントの使用量（全体からサブエージェント分を引く）
+        main_model_id = context.model.model_id
+        main_actual_input = max(0, main_input_tokens - subagent_total_input)
+        main_actual_output = max(0, main_output_tokens - subagent_total_output)
+
+        # メインエージェントのコストを計算
+        main_cost = float(context.model.calculate_cost(
+            main_actual_input,
+            main_actual_output,
+            main_cache_creation,
+            main_cache_read,
+        ))
+
+        model_usage: dict[str, dict[str, Any]] = {
+            main_model_id: {
+                "input_tokens": main_actual_input,
+                "output_tokens": main_actual_output,
+                "cache_creation_input_tokens": main_cache_creation,
+                "cache_read_input_tokens": main_cache_read,
+                "cost_usd": main_cost,
+            }
+        }
+
+        # サブエージェントの使用量をマージ
+        for model_id, usage in subagent_model_usage.items():
+            if model_id == main_model_id:
+                # 同じモデルの場合はマージ
+                model_usage[model_id]["input_tokens"] += usage["input_tokens"]
+                model_usage[model_id]["output_tokens"] += usage["output_tokens"]
+                model_usage[model_id]["cache_creation_input_tokens"] += usage.get("cache_creation_input_tokens", 0)
+                model_usage[model_id]["cache_read_input_tokens"] += usage.get("cache_read_input_tokens", 0)
+                model_usage[model_id]["cost_usd"] += usage.get("cost_usd", 0)
+            else:
+                model_usage[model_id] = usage
+
+        logger.info(
+            "モデル別使用量を構築",
+            main_model_id=main_model_id,
+            subagent_count=len(subagent_model_usage),
+            model_usage=model_usage,
+        )
+
+        return model_usage
 
     async def _sync_workspace_after_execution(
         self,

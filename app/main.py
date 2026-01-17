@@ -16,7 +16,9 @@ from fastapi.responses import JSONResponse
 from app import __version__
 from app.api import api_router
 from app.config import get_settings
-from app.database import close_db
+from app.database import async_session_maker, close_db
+from app.services.execute.model_mapping import SubagentModelMapping
+from app.services.model_service import ModelService
 
 # 設定読み込み
 settings = get_settings()
@@ -50,6 +52,41 @@ structlog.configure(
 logger = structlog.get_logger()
 
 
+async def validate_required_models():
+    """
+    起動時に必要なモデルがDBに存在するか確認
+
+    環境変数で設定されたモデルID（ANTHROPIC_DEFAULT_MODEL, ANTHROPIC_DEFAULT_HAIKU_MODEL）
+    がmodelsテーブルに存在するか検証する
+
+    Raises:
+        RuntimeError: 必要なモデルがDBに存在しない場合
+    """
+    required_ids = SubagentModelMapping.get_required_model_ids(settings)
+
+    async with async_session_maker() as session:
+        model_service = ModelService(session)
+
+        missing_models = []
+        for model_id in required_ids:
+            model = await model_service.get_by_id(model_id)
+            if not model:
+                missing_models.append(model_id)
+
+        if missing_models:
+            error_msg = (
+                f"必要なモデルがDBに存在しません: {missing_models}\n"
+                "models テーブルに登録してください。"
+            )
+            logger.error(error_msg, missing_models=missing_models)
+            raise RuntimeError(error_msg)
+
+    logger.info(
+        "モデルバリデーション完了",
+        required_models=list(required_ids),
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -72,6 +109,9 @@ async def lifespan(app: FastAPI):
     # 開発環境でも本番環境でも、マイグレーションを使用することで一貫性を保つ
     # 起動前に `alembic upgrade head` を実行してください
     logger.info("データベースマイグレーションは alembic upgrade head で実行してください")
+
+    # 必要なモデルがDBに存在するか確認
+    await validate_required_models()
 
     logger.info("アプリケーション起動完了", environment=settings.app_env)
 
