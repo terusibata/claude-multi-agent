@@ -305,25 +305,23 @@ class MessageProcessor:
         # Task toolの場合、usage情報を抽出してサブエージェント使用量を記録
         if tool_name == "Task":
             usage_data = None
-            total_cost_usd = None
             duration_ms = None
 
             # tool_resultから使用量情報を抽出（辞書形式の場合）
+            # 注: SDKのtotal_cost_usdは使用しない。コストはDBの価格設定から計算する
             if isinstance(tool_result, dict):
                 usage_data = tool_result.get("usage")
-                total_cost_usd = tool_result.get("total_cost_usd")
                 duration_ms = tool_result.get("duration_ms")
             elif hasattr(tool_result, "usage"):
                 # オブジェクト形式の場合
                 usage_data = getattr(tool_result, "usage", None)
-                total_cost_usd = getattr(tool_result, "total_cost_usd", None)
                 duration_ms = getattr(tool_result, "duration_ms", None)
 
-            # サブエージェント使用量を記録
+            # サブエージェント使用量を記録（コストはNone - 後でDBから計算）
             self.tool_tracker.complete_subagent_with_usage(
                 tool_use_id=tool_use_id,
                 usage=usage_data,
-                total_cost_usd=total_cost_usd,
+                total_cost_usd=None,  # コストはDBから計算するためNone
                 duration_ms=duration_ms,
             )
 

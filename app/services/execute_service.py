@@ -404,8 +404,9 @@ class ExecuteService:
             context.errors.append(message.result or "Unknown error")
 
         # モデル別使用量を構築（SDKからmodel_usageが取得できない場合）
+        # 注: SDKのtotal_cost_usdは使用せず、DBの価格設定から計算する
         if not model_usage:
-            model_usage = self._build_model_usage(
+            model_usage = await self._build_model_usage(
                 context=context,
                 tool_tracker=tool_tracker,
                 main_input_tokens=input_tokens,
@@ -414,17 +415,13 @@ class ExecuteService:
                 main_cache_read=cache_read,
             )
 
-        # コスト計算（model_usageがあればそれを使用してより正確に計算）
-        if model_usage and not total_cost:
-            total_cost = self._calculate_cost_from_model_usage(model_usage)
-        elif not total_cost:
-            total_cost = float(
-                context.model.calculate_cost(
-                    input_tokens, output_tokens, cache_creation, cache_read
-                )
-            )
+        # コスト計算（DBの価格設定から計算、SDKのtotal_cost_usdは使用しない）
+        # メインエージェントのみのコスト（全体からサブエージェント分は引かない）
+        total_cost_decimal = context.model.calculate_cost(
+            input_tokens, output_tokens, cache_creation, cache_read
+        )
 
-        # 使用状況ログを保存
+        # 使用状況ログを保存（Decimalで保存）
         await self.usage_service.save_usage_log(
             tenant_id=context.tenant_id,
             user_id=context.request.executor.user_id,
@@ -433,7 +430,7 @@ class ExecuteService:
             output_tokens=output_tokens,
             cache_creation_tokens=cache_creation,
             cache_read_tokens=cache_read,
-            cost_usd=Decimal(str(total_cost)),
+            cost_usd=total_cost_decimal,
             session_id=context.session_id,
             conversation_id=context.conversation_id,
         )
@@ -461,13 +458,14 @@ class ExecuteService:
                     "ephemeral_5m_input_tokens": cache_creation_detail.get("ephemeral_5m_input_tokens", 0) or 0,
                 }
 
-        # 結果イベントを追加
+        # 結果イベントを追加（コストはフォーマット済み文字列で渡す）
+        total_cost_formatted = self._format_cost_for_json(total_cost_decimal)
         result_event = format_result_event(
             subtype=subtype,
             result=context.assistant_text if subtype == "success" else None,
             errors=context.errors if context.errors else None,
             usage=usage_obj,
-            cost_usd=total_cost,
+            cost_usd=total_cost_formatted,
             num_turns=num_turns,
             duration_ms=duration_ms,
             session_id=context.session_id,
@@ -665,56 +663,52 @@ class ExecuteService:
                 }
         return normalized if normalized else None
 
-    def _calculate_cost_from_model_usage(
+    def _calculate_total_cost_from_model_usage(
         self,
         model_usage: dict[str, dict[str, Any]],
-    ) -> float:
+    ) -> Decimal:
         """
-        モデル別使用量からコストを計算
+        モデル別使用量から合計コストを計算
+
+        各モデルの使用量に含まれるcost_usd（Decimal）を集計する
 
         Args:
-            model_usage: モデル別使用量
+            model_usage: モデル別使用量（各エントリにcost_usdが含まれる）
 
         Returns:
-            合計コスト（USD）
+            合計コスト（USD）- Decimal型
         """
-        # モデルごとの価格設定（1Mトークンあたり/USD）
-        # 注: これは概算。正確な計算には別途価格マスタが必要
-        MODEL_PRICING = {
-            # Sonnet系
-            "claude-3-5-sonnet": {"input": 3.0, "output": 15.0},
-            "claude-3-sonnet": {"input": 3.0, "output": 15.0},
-            # Haiku系（サブエージェントで使用）
-            "claude-3-5-haiku": {"input": 0.8, "output": 4.0},
-            "claude-3-haiku": {"input": 0.25, "output": 1.25},
-            # Opus系
-            "claude-3-opus": {"input": 15.0, "output": 75.0},
-            # デフォルト（Sonnet相当）
-            "default": {"input": 3.0, "output": 15.0},
-        }
-
-        total_cost = 0.0
+        total_cost = Decimal("0")
 
         for model_id, usage in model_usage.items():
-            # モデルIDからプライシングキーを抽出
-            pricing_key = "default"
-            for key in MODEL_PRICING:
-                if key in model_id.lower():
-                    pricing_key = key
-                    break
-
-            pricing = MODEL_PRICING[pricing_key]
-            input_tokens = usage.get("input_tokens", 0)
-            output_tokens = usage.get("output_tokens", 0)
-
-            # コスト計算（1Mトークンあたりの価格）
-            input_cost = (input_tokens / 1_000_000) * pricing["input"]
-            output_cost = (output_tokens / 1_000_000) * pricing["output"]
-            total_cost += input_cost + output_cost
+            cost = usage.get("cost_usd", Decimal("0"))
+            if isinstance(cost, Decimal):
+                total_cost += cost
+            else:
+                # float/intの場合はDecimalに変換
+                total_cost += Decimal(str(cost))
 
         return total_cost
 
-    def _build_model_usage(
+    @staticmethod
+    def _format_cost_for_json(cost: Decimal) -> str:
+        """
+        コストを適切な精度でJSON用にフォーマット
+
+        科学的記数法を避け、適切な小数点以下の桁数で表示する
+
+        Args:
+            cost: コスト（Decimal）
+
+        Returns:
+            フォーマットされたコスト文字列
+        """
+        # 小数点以下10桁まで表示（0は除去）
+        # 例: Decimal("0.0000576360") -> "0.000057636"
+        formatted = f"{cost:.10f}".rstrip("0").rstrip(".")
+        return formatted if formatted else "0"
+
+    async def _build_model_usage(
         self,
         context: ExecutionContext,
         tool_tracker: ToolTracker,
@@ -727,7 +721,8 @@ class ExecuteService:
         モデル別使用量を構築
 
         SDKからmodel_usageが取得できない場合（Python SDKなど）、
-        サブエージェントの追跡データから構築する
+        サブエージェントの追跡データから構築する。
+        コストはDBのmodelsテーブルの価格設定から計算する。
 
         Args:
             context: 実行コンテキスト
@@ -738,9 +733,9 @@ class ExecuteService:
             main_cache_read: キャッシュ読み込みトークン数
 
         Returns:
-            モデルID別の使用量辞書
+            モデルID別の使用量辞書（cost_usdはJSON用にフォーマットされた文字列）
         """
-        # サブエージェントの使用量を取得
+        # サブエージェントの使用量を取得（cost_usdはDecimal）
         subagent_model_usage = tool_tracker.get_aggregated_model_usage()
 
         # サブエージェントの合計トークン数を計算
@@ -756,13 +751,13 @@ class ExecuteService:
         main_actual_input = max(0, main_input_tokens - subagent_total_input)
         main_actual_output = max(0, main_output_tokens - subagent_total_output)
 
-        # メインエージェントのコストを計算
-        main_cost = float(context.model.calculate_cost(
+        # メインエージェントのコストをDBから計算（Decimal）
+        main_cost: Decimal = context.model.calculate_cost(
             main_actual_input,
             main_actual_output,
             main_cache_creation,
             main_cache_read,
-        ))
+        )
 
         model_usage: dict[str, dict[str, Any]] = {
             main_model_id: {
@@ -770,30 +765,71 @@ class ExecuteService:
                 "output_tokens": main_actual_output,
                 "cache_creation_input_tokens": main_cache_creation,
                 "cache_read_input_tokens": main_cache_read,
-                "cost_usd": main_cost,
+                "cost_usd": main_cost,  # Decimal
             }
         }
 
         # サブエージェントの使用量をマージ
+        # サブエージェントのcost_usdはDBから計算する必要がある
+        model_service = ModelService(self.db)
+
         for model_id, usage in subagent_model_usage.items():
+            # サブエージェントのモデル情報をDBから取得
+            subagent_model = await model_service.get_by_id(model_id)
+
+            if subagent_model:
+                # DBから価格を取得してコスト計算
+                subagent_cost: Decimal = subagent_model.calculate_cost(
+                    usage["input_tokens"],
+                    usage["output_tokens"],
+                    usage.get("cache_creation_input_tokens", 0),
+                    usage.get("cache_read_input_tokens", 0),
+                )
+            else:
+                # モデルがDBにない場合は記録されたcost_usdを使用（ただし0の可能性）
+                subagent_cost = usage.get("cost_usd", Decimal("0"))
+                logger.warning(
+                    "サブエージェントモデルがDBに存在しません",
+                    model_id=model_id,
+                )
+
             if model_id == main_model_id:
                 # 同じモデルの場合はマージ
                 model_usage[model_id]["input_tokens"] += usage["input_tokens"]
                 model_usage[model_id]["output_tokens"] += usage["output_tokens"]
                 model_usage[model_id]["cache_creation_input_tokens"] += usage.get("cache_creation_input_tokens", 0)
                 model_usage[model_id]["cache_read_input_tokens"] += usage.get("cache_read_input_tokens", 0)
-                model_usage[model_id]["cost_usd"] += usage.get("cost_usd", 0)
+                # コストはDecimal同士で加算
+                model_usage[model_id]["cost_usd"] += subagent_cost
             else:
-                model_usage[model_id] = usage
+                # 異なるモデルの場合は新規エントリ
+                model_usage[model_id] = {
+                    "input_tokens": usage["input_tokens"],
+                    "output_tokens": usage["output_tokens"],
+                    "cache_creation_input_tokens": usage.get("cache_creation_input_tokens", 0),
+                    "cache_read_input_tokens": usage.get("cache_read_input_tokens", 0),
+                    "cost_usd": subagent_cost,
+                }
+
+        # JSON出力用にcost_usdをフォーマット（科学的記数法を避ける）
+        formatted_usage: dict[str, dict[str, Any]] = {}
+        for model_id, usage in model_usage.items():
+            formatted_usage[model_id] = {
+                "input_tokens": usage["input_tokens"],
+                "output_tokens": usage["output_tokens"],
+                "cache_creation_input_tokens": usage["cache_creation_input_tokens"],
+                "cache_read_input_tokens": usage["cache_read_input_tokens"],
+                "cost_usd": self._format_cost_for_json(usage["cost_usd"]),
+            }
 
         logger.info(
             "モデル別使用量を構築",
             main_model_id=main_model_id,
             subagent_count=len(subagent_model_usage),
-            model_usage=model_usage,
+            model_usage=formatted_usage,
         )
 
-        return model_usage
+        return formatted_usage
 
     async def _validate_subagent_models(self) -> str | None:
         """

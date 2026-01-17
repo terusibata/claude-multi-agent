@@ -4,6 +4,7 @@
 """
 from dataclasses import dataclass, field
 from datetime import datetime
+from decimal import Decimal
 from typing import Any, Optional
 
 import structlog
@@ -30,7 +31,7 @@ class SubagentUsageInfo:
     output_tokens: int = 0
     cache_creation_tokens: int = 0
     cache_read_tokens: int = 0
-    total_cost_usd: float = 0.0
+    total_cost_usd: Decimal = field(default_factory=lambda: Decimal("0"))
     duration_ms: int = 0
 
 
@@ -136,7 +137,7 @@ class ToolTracker:
         self,
         tool_use_id: str,
         usage: dict[str, Any] | None,
-        total_cost_usd: float | None,
+        total_cost_usd: Decimal | None,
         duration_ms: int | None,
     ) -> SubagentUsageInfo | None:
         """
@@ -147,7 +148,7 @@ class ToolTracker:
         Args:
             tool_use_id: TaskツールのID
             usage: SDK tool_resultからの使用量データ
-            total_cost_usd: コスト（USD）
+            total_cost_usd: コスト（USD）- DBから計算された値
             duration_ms: 実行時間（ミリ秒）
 
         Returns:
@@ -173,7 +174,7 @@ class ToolTracker:
             output_tokens=usage.get("output_tokens", 0) if usage else 0,
             cache_creation_tokens=usage.get("cache_creation_input_tokens", 0) if usage else 0,
             cache_read_tokens=usage.get("cache_read_input_tokens", 0) if usage else 0,
-            total_cost_usd=total_cost_usd or 0.0,
+            total_cost_usd=total_cost_usd or Decimal("0"),
             duration_ms=duration_ms or 0,
         )
 
@@ -186,7 +187,7 @@ class ToolTracker:
             model_id=usage_info.model_id,
             input_tokens=usage_info.input_tokens,
             output_tokens=usage_info.output_tokens,
-            total_cost_usd=usage_info.total_cost_usd,
+            total_cost_usd=str(usage_info.total_cost_usd),
         )
 
         return usage_info
@@ -376,7 +377,7 @@ class ToolTracker:
                     "output_tokens": 1000,
                     "cache_creation_input_tokens": 0,
                     "cache_read_input_tokens": 0,
-                    "cost_usd": 0.015,
+                    "cost_usd": Decimal("0.015"),
                     "subagent_count": 2,
                 },
                 ...
@@ -393,7 +394,7 @@ class ToolTracker:
                     "output_tokens": 0,
                     "cache_creation_input_tokens": 0,
                     "cache_read_input_tokens": 0,
-                    "cost_usd": 0.0,
+                    "cost_usd": Decimal("0"),
                     "subagent_count": 0,
                 }
 
