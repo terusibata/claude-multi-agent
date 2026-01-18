@@ -99,9 +99,9 @@ class AWSConfig:
             "AWS_REGION": self.region,
             # モデルエイリアス定義
             # Claude Code SDK で "sonnet", "haiku" エイリアスが使用された際の解決先
-            "ANTHROPIC_MODEL": settings.anthropic_default_model,
-            "ANTHROPIC_DEFAULT_SONNET_MODEL": settings.anthropic_default_model,
-            "ANTHROPIC_DEFAULT_HAIKU_MODEL": settings.anthropic_default_haiku_model,
+            "ANTHROPIC_MODEL": settings.anthropic_sonnet_model,
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": settings.anthropic_sonnet_model,
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": settings.anthropic_haiku_model,
         }
 
         # AWS認証情報を追加（設定されている場合のみ）

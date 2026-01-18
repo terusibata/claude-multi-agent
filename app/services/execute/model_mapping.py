@@ -22,8 +22,8 @@ class SubagentModelMapping:
 
     # エイリアス → Settings属性名のマッピング
     ALIAS_MAP = {
-        "haiku": "anthropic_default_haiku_model",
-        "sonnet": "anthropic_default_model",
+        "haiku": "anthropic_haiku_model",
+        "sonnet": "anthropic_sonnet_model",
         # "opus": 将来的に追加可能
     }
 
@@ -70,8 +70,8 @@ class SubagentModelMapping:
             検証が必要なモデルIDのセット
         """
         return {
-            settings.anthropic_default_model,
-            settings.anthropic_default_haiku_model,
+            settings.anthropic_sonnet_model,
+            settings.anthropic_haiku_model,
         }
 
     @classmethod
