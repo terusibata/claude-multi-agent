@@ -107,7 +107,8 @@ async def sample_model(client: AsyncClient) -> dict:
         "model_region": "us-west-2",
         "input_token_price": "3.0",
         "output_token_price": "15.0",
-        "cache_creation_price": "3.75",
+        "cache_creation_5m_price": "3.75",
+        "cache_creation_1h_price": "6.0",
         "cache_read_price": "0.30",
     }
     response = await client.post("/api/models", json=model_data)

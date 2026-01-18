@@ -39,22 +39,30 @@ class Model(Base):
     # モデルのデプロイリージョン（オプション）
     model_region: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
 
-    # 入力トークン単価 (USD/1Mトークン)
+    # 入力トークン単価 (USD/1Kトークン) - AWS Bedrock公式価格形式
     input_token_price: Mapped[Decimal] = mapped_column(
         DECIMAL(10, 6), nullable=False, default=Decimal("0")
     )
 
-    # 出力トークン単価 (USD/1Mトークン)
+    # 出力トークン単価 (USD/1Kトークン) - AWS Bedrock公式価格形式
     output_token_price: Mapped[Decimal] = mapped_column(
         DECIMAL(10, 6), nullable=False, default=Decimal("0")
     )
 
-    # キャッシュ作成単価 (USD/1Mトークン)
-    cache_creation_price: Mapped[Decimal] = mapped_column(
+    # 5分キャッシュ作成単価 (USD/1Kトークン) - AWS Bedrock公式価格形式
+    # 通常は入力トークン価格の1.25倍
+    cache_creation_5m_price: Mapped[Decimal] = mapped_column(
         DECIMAL(10, 6), nullable=False, default=Decimal("0")
     )
 
-    # キャッシュ読込単価 (USD/1Mトークン)
+    # 1時間キャッシュ作成単価 (USD/1Kトークン) - AWS Bedrock公式価格形式
+    # 通常は入力トークン価格の2.0倍
+    cache_creation_1h_price: Mapped[Decimal] = mapped_column(
+        DECIMAL(10, 6), nullable=False, default=Decimal("0")
+    )
+
+    # キャッシュ読込単価 (USD/1Kトークン) - AWS Bedrock公式価格形式
+    # 通常は入力トークン価格の0.1倍（5分/1時間共通）
     cache_read_price: Mapped[Decimal] = mapped_column(
         DECIMAL(10, 6), nullable=False, default=Decimal("0")
     )
@@ -76,7 +84,8 @@ class Model(Base):
         self,
         input_tokens: int,
         output_tokens: int,
-        cache_creation_tokens: int = 0,
+        cache_creation_5m_tokens: int = 0,
+        cache_creation_1h_tokens: int = 0,
         cache_read_tokens: int = 0,
     ) -> Decimal:
         """
@@ -85,23 +94,24 @@ class Model(Base):
         Args:
             input_tokens: 入力トークン数
             output_tokens: 出力トークン数
-            cache_creation_tokens: キャッシュ作成トークン数
+            cache_creation_5m_tokens: 5分キャッシュ作成トークン数
+            cache_creation_1h_tokens: 1時間キャッシュ作成トークン数
             cache_read_tokens: キャッシュ読み込みトークン数
 
         Returns:
             コスト（USD）
         """
-        # 1Mトークンあたりの単価から計算
-        input_cost = (Decimal(input_tokens) / Decimal("1000000")) * self.input_token_price
-        output_cost = (Decimal(output_tokens) / Decimal("1000000")) * self.output_token_price
-        cache_creation_cost = (
-            Decimal(cache_creation_tokens) / Decimal("1000000")
-        ) * self.cache_creation_price
-        cache_read_cost = (
-            Decimal(cache_read_tokens) / Decimal("1000000")
-        ) * self.cache_read_price
+        # AWS Bedrockは USD/1Kトークン で価格設定されている
+        thousand = Decimal("1000")
 
-        return input_cost + output_cost + cache_creation_cost + cache_read_cost
+        # 1Kトークンあたりの単価から計算
+        input_cost = (Decimal(input_tokens) / thousand) * self.input_token_price
+        output_cost = (Decimal(output_tokens) / thousand) * self.output_token_price
+        cache_5m_cost = (Decimal(cache_creation_5m_tokens) / thousand) * self.cache_creation_5m_price
+        cache_1h_cost = (Decimal(cache_creation_1h_tokens) / thousand) * self.cache_creation_1h_price
+        cache_read_cost = (Decimal(cache_read_tokens) / thousand) * self.cache_read_price
+
+        return input_cost + output_cost + cache_5m_cost + cache_1h_cost + cache_read_cost
 
     def __repr__(self) -> str:
         return f"<Model(model_id={self.model_id}, display_name={self.display_name})>"

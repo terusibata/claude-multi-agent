@@ -38,7 +38,8 @@ class UsageService:
         model_id: str,
         input_tokens: int,
         output_tokens: int,
-        cache_creation_tokens: int = 0,
+        cache_creation_5m_tokens: int = 0,
+        cache_creation_1h_tokens: int = 0,
         cache_read_tokens: int = 0,
         cost_usd: Decimal = Decimal("0"),
         session_id: Optional[str] = None,
@@ -53,7 +54,8 @@ class UsageService:
             model_id: モデルID
             input_tokens: 入力トークン数
             output_tokens: 出力トークン数
-            cache_creation_tokens: キャッシュ作成トークン数
+            cache_creation_5m_tokens: 5分キャッシュ作成トークン数
+            cache_creation_1h_tokens: 1時間キャッシュ作成トークン数
             cache_read_tokens: キャッシュ読み込みトークン数
             cost_usd: コスト（USD）
             session_id: SDKセッションID
@@ -63,7 +65,9 @@ class UsageService:
             保存された使用状況ログ
         """
         total_tokens = (
-            input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens
+            input_tokens + output_tokens
+            + cache_creation_5m_tokens + cache_creation_1h_tokens
+            + cache_read_tokens
         )
 
         log = UsageLog(
@@ -75,7 +79,8 @@ class UsageService:
             conversation_id=conversation_id,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
-            cache_creation_tokens=cache_creation_tokens,
+            cache_creation_5m_tokens=cache_creation_5m_tokens,
+            cache_creation_1h_tokens=cache_creation_1h_tokens,
             cache_read_tokens=cache_read_tokens,
             total_tokens=total_tokens,
             cost_usd=cost_usd,
@@ -155,7 +160,8 @@ class UsageService:
             func.sum(UsageLog.total_tokens).label("total_tokens"),
             func.sum(UsageLog.input_tokens).label("input_tokens"),
             func.sum(UsageLog.output_tokens).label("output_tokens"),
-            func.sum(UsageLog.cache_creation_tokens).label("cache_creation_tokens"),
+            func.sum(UsageLog.cache_creation_5m_tokens).label("cache_creation_5m_tokens"),
+            func.sum(UsageLog.cache_creation_1h_tokens).label("cache_creation_1h_tokens"),
             func.sum(UsageLog.cache_read_tokens).label("cache_read_tokens"),
             func.sum(UsageLog.cost_usd).label("total_cost_usd"),
             func.count(UsageLog.usage_log_id).label("execution_count"),
@@ -177,7 +183,8 @@ class UsageService:
                 "total_tokens": row.total_tokens or 0,
                 "input_tokens": row.input_tokens or 0,
                 "output_tokens": row.output_tokens or 0,
-                "cache_creation_tokens": row.cache_creation_tokens or 0,
+                "cache_creation_5m_tokens": row.cache_creation_5m_tokens or 0,
+                "cache_creation_1h_tokens": row.cache_creation_1h_tokens or 0,
                 "cache_read_tokens": row.cache_read_tokens or 0,
                 "total_cost_usd": float(row.total_cost_usd or 0),
                 "execution_count": row.execution_count or 0,
@@ -212,7 +219,8 @@ class UsageService:
             func.sum(UsageLog.total_tokens).label("total_tokens"),
             func.sum(UsageLog.input_tokens).label("input_tokens"),
             func.sum(UsageLog.output_tokens).label("output_tokens"),
-            func.sum(UsageLog.cache_creation_tokens).label("cache_creation_tokens"),
+            func.sum(UsageLog.cache_creation_5m_tokens).label("cache_creation_5m_tokens"),
+            func.sum(UsageLog.cache_creation_1h_tokens).label("cache_creation_1h_tokens"),
             func.sum(UsageLog.cache_read_tokens).label("cache_read_tokens"),
             func.sum(UsageLog.cost_usd).label("cost_usd"),
             func.count(UsageLog.usage_log_id).label("execution_count"),
@@ -246,7 +254,8 @@ class UsageService:
                 "total_tokens": row.total_tokens or 0,
                 "input_tokens": row.input_tokens or 0,
                 "output_tokens": row.output_tokens or 0,
-                "cache_creation_tokens": row.cache_creation_tokens or 0,
+                "cache_creation_5m_tokens": row.cache_creation_5m_tokens or 0,
+                "cache_creation_1h_tokens": row.cache_creation_1h_tokens or 0,
                 "cache_read_tokens": row.cache_read_tokens or 0,
                 "cost_usd": float(row.cost_usd or 0),
                 "execution_count": row.execution_count or 0,

@@ -4,6 +4,7 @@
 import asyncio
 import json
 import logging
+import time
 from datetime import datetime
 from typing import AsyncIterator, Optional
 from uuid import uuid4
@@ -38,7 +39,7 @@ from app.services.conversation_service import ConversationService
 from app.services.execute_service import ExecuteService
 from app.services.tenant_service import TenantService
 from app.services.workspace_service import WorkspaceService
-from app.utils.streaming import format_error_event
+from app.utils.streaming import format_error_event, format_heartbeat_event
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -46,6 +47,7 @@ logger = logging.getLogger(__name__)
 # タイムアウト関連の定数
 EVENT_TIMEOUT_SECONDS = 300  # イベント待機タイムアウト（秒）
 MAX_CONSECUTIVE_TIMEOUTS = 3  # 連続タイムアウトの最大回数
+HEARTBEAT_INTERVAL_SECONDS = 10  # ハートビート送信間隔（秒）
 
 
 # =============================================================================
@@ -339,6 +341,7 @@ async def _event_generator(
     """
     SSEイベントジェネレータ
     クライアントが切断しても、バックグラウンド処理は継続します。
+    定期的にハートビートを送信して接続を維持します。
 
     Args:
         execute_service: 実行サービス
@@ -350,7 +353,9 @@ async def _event_generator(
         SSEイベント
     """
     event_queue: asyncio.Queue = asyncio.Queue()
-    consecutive_timeouts = 0
+    start_time = time.time()
+    last_event_time = start_time  # 最後に実イベントを受け取った時刻
+    last_heartbeat_time = start_time
 
     background_task = asyncio.create_task(
         _background_execution(
@@ -365,11 +370,11 @@ async def _event_generator(
     try:
         while True:
             try:
+                # ハートビート間隔でタイムアウトを設定
                 event = await asyncio.wait_for(
                     event_queue.get(),
-                    timeout=EVENT_TIMEOUT_SECONDS,
+                    timeout=HEARTBEAT_INTERVAL_SECONDS,
                 )
-                consecutive_timeouts = 0
 
                 if event is None:
                     break
@@ -378,13 +383,32 @@ async def _event_generator(
                     "event": event["event"],
                     "data": json.dumps(event["data"], ensure_ascii=False, default=str),
                 }
+
+                # 実イベント受信時刻とハートビート時刻を更新
+                current_time = time.time()
+                last_event_time = current_time
+                last_heartbeat_time = current_time
+
             except asyncio.TimeoutError:
-                consecutive_timeouts += 1
-                logger.warning(
-                    f"Event queue timeout ({consecutive_timeouts}/{MAX_CONSECUTIVE_TIMEOUTS})",
-                    extra={"conversation_id": request.conversation_id},
+                current_time = time.time()
+
+                # ハートビート送信
+                elapsed_ms = int((current_time - start_time) * 1000)
+                heartbeat_event = format_heartbeat_event(elapsed_ms)
+                yield {
+                    "event": heartbeat_event["event"],
+                    "data": json.dumps(heartbeat_event["data"], ensure_ascii=False, default=str),
+                }
+                last_heartbeat_time = current_time
+                logger.debug(
+                    "Heartbeat sent",
+                    extra={
+                        "conversation_id": request.conversation_id,
+                        "elapsed_ms": elapsed_ms,
+                    },
                 )
 
+                # バックグラウンドタスクの完了確認
                 if background_task.done():
                     try:
                         await background_task
@@ -406,9 +430,11 @@ async def _event_generator(
                         )
                     break
 
-                if consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS:
+                # 最後の実イベントからの経過時間でタイムアウト判定
+                time_since_last_event = current_time - last_event_time
+                if time_since_last_event >= EVENT_TIMEOUT_SECONDS:
                     logger.error(
-                        f"Max consecutive timeouts reached, terminating",
+                        f"Event timeout reached ({time_since_last_event:.1f}s since last event)",
                         extra={"conversation_id": request.conversation_id},
                     )
                     error_event = format_error_event(

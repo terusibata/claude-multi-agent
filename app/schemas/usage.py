@@ -19,7 +19,8 @@ class UsageLogResponse(BaseModel):
     conversation_id: Optional[str] = None
     input_tokens: int
     output_tokens: int
-    cache_creation_tokens: int
+    cache_creation_5m_tokens: int
+    cache_creation_1h_tokens: int
     cache_read_tokens: int
     total_tokens: int
     cost_usd: Decimal
@@ -36,7 +37,8 @@ class UsageSummary(BaseModel):
     total_tokens: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
-    cache_creation_tokens: int = 0
+    cache_creation_5m_tokens: int = 0
+    cache_creation_1h_tokens: int = 0
     cache_read_tokens: int = 0
     total_cost_usd: Decimal = Decimal("0")
     execution_count: int = 0
@@ -58,7 +60,8 @@ class CostReportItem(BaseModel):
     total_tokens: int
     input_tokens: int
     output_tokens: int
-    cache_creation_tokens: int
+    cache_creation_5m_tokens: int
+    cache_creation_1h_tokens: int
     cache_read_tokens: int
     cost_usd: Decimal
     execution_count: int

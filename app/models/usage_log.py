@@ -60,8 +60,11 @@ class UsageLog(Base):
     # 出力トークン数
     output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
-    # キャッシュ作成トークン数
-    cache_creation_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # 5分キャッシュ作成トークン数
+    cache_creation_5m_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # 1時間キャッシュ作成トークン数
+    cache_creation_1h_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     # キャッシュ読み込みトークン数
     cache_read_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

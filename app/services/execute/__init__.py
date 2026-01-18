@@ -9,8 +9,9 @@ from app.services.execute.context import (
     ToolExecutionInfo,
 )
 from app.services.execute.message_processor import MessageProcessor
+from app.services.execute.model_mapping import SubagentModelMapping
 from app.services.execute.options_builder import OptionsBuilder
-from app.services.execute.tool_tracker import ToolTracker
+from app.services.execute.tool_tracker import SubagentUsageInfo, ToolTracker
 
 __all__ = [
     # AWS
@@ -21,8 +22,12 @@ __all__ = [
     "MessageLogEntry",
     "SDKOptions",
     "ToolExecutionInfo",
+    # Model mapping
+    "SubagentModelMapping",
     # Processors
     "MessageProcessor",
     "OptionsBuilder",
+    # Tool tracker
+    "SubagentUsageInfo",
     "ToolTracker",
 ]

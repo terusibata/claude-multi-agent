@@ -31,9 +31,13 @@ class Settings(BaseSettings):
     aws_secret_access_key: Optional[str] = None
     aws_session_token: Optional[str] = None
 
-    # デフォルトモデル
-    anthropic_model: str = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
-    anthropic_small_fast_model: str = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    # モデル設定（global.プレフィックス = クロスリージョン推論）
+    # Sonnetモデル（メインエージェント用）
+    anthropic_sonnet_model: str = "global.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    # Haikuモデル（サブエージェント用）
+    anthropic_haiku_model: str = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+    # SDKが使用するサブエージェントのデフォルトモデルエイリアス
+    claude_code_subagent_model: str = "haiku"
 
     # ============================================
     # アプリケーション設定

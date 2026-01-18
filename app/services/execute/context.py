@@ -41,6 +41,7 @@ class ExecutionContext:
     # 結果集約用
     assistant_text: str = ""
     errors: list[str] = field(default_factory=list)
+    message_logs: list[dict[str, Any]] = field(default_factory=list)  # メッセージログ（result用）
 
     def __post_init__(self):
         """初期化後の処理"""
@@ -75,6 +76,7 @@ class ToolExecutionInfo:
     completed_at: Optional[datetime] = None
     result_preview: str = ""
     is_error: bool = False
+    parent_tool_use_id: Optional[str] = None  # サブエージェント内の場合、親TaskツールのID
 
     def __post_init__(self):
         """初期化後の処理"""
@@ -106,7 +108,7 @@ class ToolExecutionInfo:
 
     def to_dict(self) -> dict[str, Any]:
         """辞書形式に変換"""
-        return {
+        result = {
             "tool_use_id": self.tool_use_id,
             "tool_name": self.tool_name,
             "tool_input": self.tool_input,
@@ -114,6 +116,9 @@ class ToolExecutionInfo:
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "result_preview": self.result_preview,
         }
+        if self.parent_tool_use_id:
+            result["parent_tool_use_id"] = self.parent_tool_use_id
+        return result
 
 
 @dataclass

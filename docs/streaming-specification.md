@@ -39,6 +39,7 @@ data: {"type": "result", "subtype": "success", ...}
 - **タイムアウト**: 300秒
 - **バックグラウンド実行**: クライアント切断後も処理は継続
 - **メッセージ順序**: 保証される
+- **ハートビート**: 10秒間隔で送信
 
 ## イベントタイプ
 
@@ -60,6 +61,42 @@ data: {"type": "result", "subtype": "success", ...}
 ### 3. title_generated イベント
 
 初回実行時、タイトルが自動生成された際に送信されます。
+
+### 4. status イベント（リアルタイム進捗）
+
+現在の処理状態を通知します。UIでの進捗表示に使用します。
+
+| state | 説明 |
+|-------|------|
+| `thinking` | 思考中 |
+| `generating` | レスポンス生成中 |
+| `tool_execution` | ツール実行中 |
+| `waiting` | 待機中 |
+
+### 5. heartbeat イベント
+
+接続維持のために定期的に送信されます。10秒間隔で送信されます。
+
+### 6. turn_progress イベント
+
+ターン進捗を通知します。AssistantMessageごとに送信されます。
+
+### 7. tool_progress イベント
+
+ツール実行の進捗を通知します。`parent_tool_use_id`でサブエージェント内のツールを識別できます。
+
+| status | 説明 |
+|--------|------|
+| `pending` | 受付済み |
+| `running` | 実行中 |
+| `completed` | 完了 |
+| `error` | エラー |
+
+**注意**: `status`イベントはメインエージェントのみで送信されます。サブエージェント内では`tool_progress`イベントの`parent_tool_use_id`で親子関係を追跡できます。
+
+### 8. subagent イベント
+
+Taskツールによるサブエージェントの開始/終了を通知します。
 
 ## メッセージ形式
 
@@ -173,7 +210,7 @@ data: {"type": "result", "subtype": "success", ...}
 
 ### Result Message (type: "result")
 
-最終結果メッセージ。
+最終結果メッセージ。`messages`には`/api/tenants/{tenant_id}/conversations/{conversation_id}/messages`と同じ形式のメッセージログが含まれます。
 
 ```json
 {
@@ -186,16 +223,57 @@ data: {"type": "result", "subtype": "success", ...}
   "usage": {
     "input_tokens": 1500,
     "output_tokens": 500,
-    "cache_creation_tokens": 0,
+    "cache_creation_tokens": 15000,
     "cache_read_tokens": 200,
-    "total_tokens": 2000
+    "total_tokens": 2000,
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 0,
+      "ephemeral_5m_input_tokens": 15000
+    }
   },
   "total_cost_usd": 0.0075,
   "num_turns": 3,
   "duration_ms": 5230,
-  "session_id": "session-uuid-from-sdk"
+  "session_id": "session-uuid-from-sdk",
+  "messages": [
+    {
+      "type": "system",
+      "subtype": "init",
+      "timestamp": "2024-01-01T00:00:00.000000",
+      "data": {...}
+    },
+    {
+      "type": "assistant",
+      "subtype": null,
+      "timestamp": "2024-01-01T00:00:01.000000",
+      "content_blocks": [...]
+    }
+  ],
+  "model_usage": null
 }
 ```
+
+#### usage フィールド
+
+| フィールド | 型 | 説明 |
+|-----------|-----|------|
+| `input_tokens` | number | 入力トークン数 |
+| `output_tokens` | number | 出力トークン数 |
+| `cache_creation_tokens` | number | キャッシュ作成トークン合計 |
+| `cache_read_tokens` | number | キャッシュ読み込みトークン |
+| `total_tokens` | number | 合計トークン数（入力+出力） |
+| `cache_creation` | object | ephemeralキャッシュの内訳（オプション） |
+
+#### cache_creation 内訳（ephemeral cache）
+
+| フィールド | 説明 |
+|-----------|------|
+| `ephemeral_1h_input_tokens` | 1時間キャッシュのトークン数 |
+| `ephemeral_5m_input_tokens` | 5分キャッシュのトークン数 |
+
+#### model_usage について
+
+**注意**: `model_usage`フィールドはTypeScript SDKでのみ利用可能です。Python SDKでは常に`null`が返されます。サブエージェント（Task）が使用するモデル別のトークン使用量を追跡するには、TypeScript SDKの使用を検討してください。
 
 #### subtype の種類
 
@@ -223,6 +301,96 @@ data: {"type": "result", "subtype": "success", ...}
 }
 ```
 
+### Status Event（リアルタイム進捗）
+
+現在の処理状態を通知します。
+
+```json
+{
+  "state": "thinking",
+  "message": "思考中...",
+  "timestamp": "2024-01-01T00:00:00.000000"
+}
+```
+
+### Heartbeat Event
+
+接続維持のために定期的に送信されます。
+
+```json
+{
+  "timestamp": "2024-01-01T00:00:00.000000",
+  "elapsed_ms": 15000
+}
+```
+
+### Turn Progress Event
+
+ターン進捗を通知します。
+
+```json
+{
+  "current_turn": 2,
+  "max_turns": 10,
+  "timestamp": "2024-01-01T00:00:00.000000"
+}
+```
+
+### Tool Progress Event
+
+ツール実行の進捗を通知します。
+
+```json
+{
+  "tool_use_id": "tool-use-uuid",
+  "tool_name": "Read",
+  "status": "running",
+  "message": "ファイルを読み取り中...",
+  "parent_tool_use_id": null,
+  "timestamp": "2024-01-01T00:00:00.000000"
+}
+```
+
+サブエージェント内のツールの場合:
+
+```json
+{
+  "tool_use_id": "child-tool-uuid",
+  "tool_name": "Grep",
+  "status": "running",
+  "message": "検索中...",
+  "parent_tool_use_id": "task-tool-uuid",
+  "timestamp": "2024-01-01T00:00:00.000000"
+}
+```
+
+### Subagent Event
+
+Taskツールによるサブエージェントの開始/終了を通知します。
+
+```json
+{
+  "action": "start",
+  "agent_type": "Explore",
+  "description": "コードベースを探索中",
+  "parent_tool_use_id": "task-tool-uuid",
+  "timestamp": "2024-01-01T00:00:00.000000"
+}
+```
+
+終了時:
+
+```json
+{
+  "action": "stop",
+  "agent_type": "Explore",
+  "description": "コードベースを探索中",
+  "parent_tool_use_id": "task-tool-uuid",
+  "result": "ファイルが見つかりました",
+  "timestamp": "2024-01-01T00:00:00.000000"
+}
+```
+
 ## フロー図
 
 ```
@@ -235,16 +403,64 @@ Client                          Server
   |  data: {type: "system", subtype: "init", ...}
   |<------------------------------|
   |                               |
+  |  event: turn_progress         |
+  |  data: {current_turn: 1, ...} |
+  |<------------------------------|
+  |                               |
+  |  event: status                |
+  |  data: {state: "thinking", ...}
+  |<------------------------------|
+  |                               |
+  |  event: message (thinking)    |
+  |  data: {type: "assistant", content_blocks: [{type: "thinking", ...}]}
+  |<------------------------------|
+  |                               |
+  |  event: status                |
+  |  data: {state: "generating", ...}
+  |<------------------------------|
+  |                               |
   |  event: message               |
   |  data: {type: "assistant", content_blocks: [{type: "text", ...}]}
+  |<------------------------------|
+  |                               |
+  |  event: heartbeat             |
+  |  data: {elapsed_ms: 10000, ...}
+  |<------------------------------|
+  |                               |
+  |  event: status                |
+  |  data: {state: "tool_execution", ...}
+  |<------------------------------|
+  |                               |
+  |  event: tool_progress         |
+  |  data: {status: "pending", tool_name: "Read", ...}
   |<------------------------------|
   |                               |
   |  event: message               |
   |  data: {type: "assistant", content_blocks: [{type: "tool_use", ...}]}
   |<------------------------------|
   |                               |
+  |  event: tool_progress         |
+  |  data: {status: "running", ...}
+  |<------------------------------|
+  |                               |
+  |  event: tool_progress         |
+  |  data: {status: "completed", ...}
+  |<------------------------------|
+  |                               |
   |  event: message               |
   |  data: {type: "user_result", content_blocks: [{type: "tool_result", ...}]}
+  |<------------------------------|
+  |                               |
+  |  event: heartbeat             |
+  |  data: {elapsed_ms: 20000, ...}
+  |<------------------------------|
+  |                               |
+  |  event: turn_progress         |
+  |  data: {current_turn: 2, ...} |
+  |<------------------------------|
+  |                               |
+  |  event: status                |
+  |  data: {state: "generating", ...}
   |<------------------------------|
   |                               |
   |  event: message               |
@@ -317,12 +533,18 @@ export type ContentBlock = TextBlock | ToolUseBlock | ThinkingBlock | ToolResult
 // 使用状況
 // ==========================================
 
+export interface CacheCreationInfo {
+  ephemeral_1h_input_tokens: number;
+  ephemeral_5m_input_tokens: number;
+}
+
 export interface UsageInfo {
   input_tokens: number;
   output_tokens: number;
   cache_creation_tokens: number;
   cache_read_tokens: number;
   total_tokens: number;
+  cache_creation?: CacheCreationInfo;  // ephemeralキャッシュの内訳
 }
 
 // ==========================================
@@ -376,6 +598,13 @@ export interface UserResultMessage {
   content_blocks: ToolResultBlock[];
 }
 
+export interface ModelUsageInfo {
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+}
+
 export interface ResultMessage {
   type: 'result';
   subtype: ResultSubtype;
@@ -388,6 +617,8 @@ export interface ResultMessage {
   num_turns: number;
   duration_ms: number;
   session_id?: string;
+  messages?: StreamingMessage[];
+  model_usage?: Record<string, ModelUsageInfo>;
 }
 
 export type StreamingMessage =
@@ -422,7 +653,75 @@ export interface TitleGeneratedEvent {
   };
 }
 
-export type StreamingEvent = MessageEvent | ErrorEvent | TitleGeneratedEvent;
+// ==========================================
+// リアルタイム進捗イベント型
+// ==========================================
+
+export type StatusState = 'thinking' | 'generating' | 'tool_execution' | 'waiting';
+
+export interface StatusEvent {
+  event: 'status';
+  data: {
+    state: StatusState;
+    message: string;
+    timestamp: string;
+  };
+}
+
+export interface HeartbeatEvent {
+  event: 'heartbeat';
+  data: {
+    timestamp: string;
+    elapsed_ms: number;
+  };
+}
+
+export interface TurnProgressEvent {
+  event: 'turn_progress';
+  data: {
+    current_turn: number;
+    max_turns: number | null;
+    timestamp: string;
+  };
+}
+
+export type ToolProgressStatus = 'pending' | 'running' | 'completed' | 'error';
+
+export interface ToolProgressEvent {
+  event: 'tool_progress';
+  data: {
+    tool_use_id: string;
+    tool_name: string;
+    status: ToolProgressStatus;
+    message?: string;
+    parent_tool_use_id: string | null;
+    timestamp: string;
+  };
+}
+
+export type SubagentAction = 'start' | 'stop';
+
+export interface SubagentEvent {
+  event: 'subagent';
+  data: {
+    action: SubagentAction;
+    agent_type: string;
+    description: string;
+    parent_tool_use_id: string;
+    result?: string;
+    timestamp: string;
+  };
+}
+
+export type StreamingEvent =
+  | MessageEvent
+  | ErrorEvent
+  | TitleGeneratedEvent
+  | StatusEvent
+  | HeartbeatEvent
+  | TurnProgressEvent
+  | ToolProgressEvent
+  | SubagentEvent;
 
 // ==========================================
 // リクエスト型

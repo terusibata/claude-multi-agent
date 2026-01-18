@@ -5,7 +5,7 @@ Claude Agent SDKを使用したエージェント実行とストリーミング�
 import time
 from datetime import datetime
 from decimal import Decimal
-from typing import AsyncGenerator
+from typing import Any, AsyncGenerator
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,9 +20,11 @@ from app.services.execute import (
     MessageLogEntry,
     MessageProcessor,
     OptionsBuilder,
+    SubagentModelMapping,
     TitleGenerator,
     ToolTracker,
 )
+from app.services.model_service import ModelService
 from app.services.mcp_server_service import McpServerService
 from app.services.conversation_service import ConversationService
 from app.services.skill_service import SkillService
@@ -37,6 +39,7 @@ from app.utils.streaming import (
     format_error_event,
     format_result_event,
     format_title_generated_event,
+    format_turn_progress_event,
 )
 
 settings = get_settings()
@@ -211,6 +214,13 @@ class ExecuteService:
             yield self._create_error_result(context, [str(e)])
             return
 
+        # サブエージェント用モデルのバリデーション
+        validation_error = await self._validate_subagent_models()
+        if validation_error:
+            yield format_error_event(validation_error, "model_validation_error")
+            yield self._create_error_result(context, [validation_error])
+            return
+
         # オプション構築
         try:
             sdk_options = ClaudeAgentOptions(**options)
@@ -227,13 +237,17 @@ class ExecuteService:
         await self._save_user_message(context)
 
         # メッセージプロセッサを初期化
-        message_processor = MessageProcessor(context, tool_tracker)
+        message_processor = MessageProcessor(context, tool_tracker, settings)
 
         # SDK実行
         logger.info(
             "ClaudeSDKClient実行開始",
             user_input=context.request.user_input[:100],
         )
+
+        # ターン番号追跡（SDKのターン）
+        sdk_turn_number = 0
+        max_turns = options.get("max_turns")
 
         async with ClaudeSDKClient(options=sdk_options) as client:
             await client.query(context.request.user_input)
@@ -265,6 +279,13 @@ class ExecuteService:
                         await self._update_session_id(context)
 
                 elif isinstance(message, AssistantMessage):
+                    # ターン進捗イベントを送信
+                    sdk_turn_number += 1
+                    yield format_turn_progress_event(
+                        current_turn=sdk_turn_number,
+                        max_turns=max_turns,
+                    )
+
                     async for event in self._wrap_generator(
                         message_processor.process_assistant_message(
                             message, log_entry,
@@ -292,8 +313,10 @@ class ExecuteService:
                     for event in result_events:
                         yield event
 
-                # メッセージログ保存
-                await self._save_message_log(context, msg_type, message, log_entry)
+                # メッセージログ保存（DB & コンテキスト）
+                saved = await self._save_message_log(context, msg_type, message, log_entry)
+                if saved:
+                    context.message_logs.append(log_entry.to_dict())
 
     async def _wrap_generator(self, gen):
         """同期ジェネレータを非同期で処理"""
@@ -305,18 +328,24 @@ class ExecuteService:
         context.message_seq += 1
         user_message_timestamp = datetime.utcnow()
 
+        user_message_content = {
+            "type": "user",
+            "subtype": None,
+            "timestamp": user_message_timestamp.isoformat(),
+            "text": context.request.user_input,
+        }
+
         await self.conversation_service.save_message_log(
             conversation_id=context.conversation_id,
             message_seq=context.message_seq,
             message_type="user",
             message_subtype=None,
-            content={
-                "type": "user",
-                "subtype": None,
-                "timestamp": user_message_timestamp.isoformat(),
-                "text": context.request.user_input,
-            },
+            content=user_message_content,
         )
+
+        # message_logsにも追加（result用）
+        context.message_logs.append(user_message_content)
+
         logger.info("ユーザーメッセージ保存完了", message_seq=context.message_seq)
 
     async def _update_session_id(self, context: ExecutionContext) -> None:
@@ -345,6 +374,12 @@ class ExecuteService:
         subtype = message.subtype
         usage_data = message.usage
 
+        # モデル別使用量を取得
+        # SDKからmodel_usageが取得できる場合はそれを使用
+        # 取得できない場合（Python SDKなど）はサブエージェントの追跡データから構築
+        model_usage_raw = getattr(message, "model_usage", None) or getattr(message, "modelUsage", None)
+        model_usage = self._normalize_model_usage(model_usage_raw)
+
         # ログエントリに詳細を追加
         log_entry.result = message.result
         log_entry.is_error = message.is_error
@@ -356,7 +391,9 @@ class ExecuteService:
         # 使用状況の取得
         input_tokens = usage_data.get("input_tokens", 0) if usage_data else 0
         output_tokens = usage_data.get("output_tokens", 0) if usage_data else 0
-        cache_creation = usage_data.get("cache_creation_input_tokens", 0) if usage_data else 0
+
+        # キャッシュトークン取得（新旧両方の形式に対応、5分/1時間を分離）
+        cache_5m, cache_1h = self._get_cache_creation_tokens(usage_data) if usage_data else (0, 0)
         cache_read = usage_data.get("cache_read_input_tokens", 0) if usage_data else 0
         total_cost = message.total_cost_usd or 0
         num_turns = message.num_turns
@@ -366,24 +403,33 @@ class ExecuteService:
         if message.is_error:
             context.errors.append(message.result or "Unknown error")
 
-        # コスト計算
-        if not total_cost:
-            total_cost = float(
-                context.model.calculate_cost(
-                    input_tokens, output_tokens, cache_creation, cache_read
-                )
+        # モデル別使用量を構築（SDKからmodel_usageが取得できない場合）
+        # 注: SDKのtotal_cost_usdは使用せず、DBの価格設定から計算する
+        if not model_usage:
+            model_usage = await self._build_model_usage(
+                context=context,
+                tool_tracker=tool_tracker,
+                main_input_tokens=input_tokens,
+                main_output_tokens=output_tokens,
+                main_cache_creation_5m=cache_5m,
+                main_cache_creation_1h=cache_1h,
+                main_cache_read=cache_read,
             )
 
-        # 使用状況ログを保存
+        # コスト計算（model_usageの全cost_usdを合計）
+        total_cost_decimal = self._calculate_total_cost_from_model_usage(model_usage)
+
+        # 使用状況ログを保存（Decimalで保存）
         await self.usage_service.save_usage_log(
             tenant_id=context.tenant_id,
             user_id=context.request.executor.user_id,
             model_id=context.request.model_id,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
-            cache_creation_tokens=cache_creation,
+            cache_creation_5m_tokens=cache_5m,
+            cache_creation_1h_tokens=cache_1h,
             cache_read_tokens=cache_read,
-            cost_usd=Decimal(str(total_cost)),
+            cost_usd=total_cost_decimal,
             session_id=context.session_id,
             conversation_id=context.conversation_id,
         )
@@ -393,22 +439,32 @@ class ExecuteService:
             title_event = await self._generate_and_update_title(context)
             events.append(title_event)
 
+        # 使用量オブジェクトを構築（5分/1時間キャッシュを分離）
+        usage_obj = {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cache_creation_5m_tokens": cache_5m,
+            "cache_creation_1h_tokens": cache_1h,
+            "cache_read_tokens": cache_read,
+            "total_tokens": input_tokens + output_tokens,
+        }
+
         # 結果イベントを追加
+        # JSON出力用にコストをフォーマット（科学的記数法を避ける）
+        total_cost_formatted = self._format_cost_for_json(total_cost_decimal)
+        model_usage_formatted = self._format_model_usage_for_json(model_usage)
+
         result_event = format_result_event(
             subtype=subtype,
             result=context.assistant_text if subtype == "success" else None,
             errors=context.errors if context.errors else None,
-            usage={
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "cache_creation_tokens": cache_creation,
-                "cache_read_tokens": cache_read,
-                "total_tokens": input_tokens + output_tokens,
-            },
-            cost_usd=total_cost,
+            usage=usage_obj,
+            cost_usd=total_cost_formatted,
             num_turns=num_turns,
             duration_ms=duration_ms,
             session_id=context.session_id,
+            messages=context.message_logs,
+            model_usage=model_usage_formatted,
         )
         events.append(result_event)
 
@@ -445,8 +501,13 @@ class ExecuteService:
         msg_type: str,
         message,
         log_entry: MessageLogEntry,
-    ) -> None:
-        """メッセージログを保存"""
+    ) -> bool:
+        """
+        メッセージログを保存
+
+        Returns:
+            保存された場合はTrue、スキップされた場合はFalse
+        """
         should_save = True
 
         if msg_type == "unknown":
@@ -472,8 +533,10 @@ class ExecuteService:
                 message_subtype=getattr(message, "subtype", None),
                 content=log_entry.to_dict(),
             )
+            return True
         else:
             context.message_seq -= 1
+            return False
 
     def _handle_error(
         self,
@@ -518,7 +581,8 @@ class ExecuteService:
             usage={
                 "input_tokens": 0,
                 "output_tokens": 0,
-                "cache_creation_tokens": 0,
+                "cache_creation_5m_tokens": 0,
+                "cache_creation_1h_tokens": 0,
                 "cache_read_tokens": 0,
                 "total_tokens": 0,
             },
@@ -526,6 +590,306 @@ class ExecuteService:
             num_turns=0,
             duration_ms=duration_ms,
         )
+
+    def _get_cache_creation_tokens(self, usage_data: dict) -> tuple[int, int]:
+        """
+        キャッシュ作成トークン数を取得（5分/1時間を分離）
+
+        新旧両方のSDK形式に対応:
+        - 旧形式: cache_creation_input_tokens (int) → 全て5分キャッシュとして扱う
+        - 新形式: cache_creation.ephemeral_5m_input_tokens, ephemeral_1h_input_tokens
+
+        Args:
+            usage_data: SDKからの使用量データ
+
+        Returns:
+            (cache_5m_tokens, cache_1h_tokens)
+        """
+        if not usage_data:
+            return 0, 0
+
+        # 新形式をチェック
+        cache_creation = usage_data.get("cache_creation")
+        if isinstance(cache_creation, dict):
+            ephemeral_5m = cache_creation.get("ephemeral_5m_input_tokens", 0) or 0
+            ephemeral_1h = cache_creation.get("ephemeral_1h_input_tokens", 0) or 0
+            return ephemeral_5m, ephemeral_1h
+
+        # 旧形式の場合は全て5分キャッシュとして扱う
+        old_format = usage_data.get("cache_creation_input_tokens", 0) or 0
+        return old_format, 0
+
+    def _normalize_model_usage(
+        self,
+        model_usage_raw: dict | None,
+    ) -> dict[str, dict[str, Any]] | None:
+        """
+        モデル使用量を正規化
+
+        SDKからのmodel_usageフィールドを正規化された形式に変換
+
+        Args:
+            model_usage_raw: SDKからの生のmodel_usage
+
+        Returns:
+            正規化されたmodel_usage（なければNone）
+        """
+        if not model_usage_raw:
+            return None
+
+        # SDKの形式に応じて正規化
+        # 期待される形式:
+        # {
+        #   "claude-3-5-sonnet-20241022": {
+        #     "input_tokens": 1000,
+        #     "output_tokens": 500,
+        #     "cache_creation_input_tokens": 0,
+        #     "cache_read_input_tokens": 0
+        #   },
+        #   "claude-3-5-haiku-20241022": {...}
+        # }
+        normalized = {}
+        for model_id, usage in model_usage_raw.items():
+            if isinstance(usage, dict):
+                normalized[model_id] = {
+                    "input_tokens": usage.get("input_tokens", 0) or usage.get("inputTokens", 0),
+                    "output_tokens": usage.get("output_tokens", 0) or usage.get("outputTokens", 0),
+                    "cache_creation_input_tokens": usage.get("cache_creation_input_tokens", 0) or usage.get("cacheCreationInputTokens", 0),
+                    "cache_read_input_tokens": usage.get("cache_read_input_tokens", 0) or usage.get("cacheReadInputTokens", 0),
+                }
+        return normalized if normalized else None
+
+    def _calculate_total_cost_from_model_usage(
+        self,
+        model_usage: dict[str, dict[str, Any]],
+    ) -> Decimal:
+        """
+        モデル別使用量から合計コストを計算
+
+        各モデルの使用量に含まれるcost_usd（Decimal）を集計する
+
+        Args:
+            model_usage: モデル別使用量（各エントリにcost_usdが含まれる）
+
+        Returns:
+            合計コスト（USD）- Decimal型
+        """
+        total_cost = Decimal("0")
+
+        for model_id, usage in model_usage.items():
+            cost = usage.get("cost_usd", Decimal("0"))
+            if isinstance(cost, Decimal):
+                total_cost += cost
+            else:
+                # float/intの場合はDecimalに変換
+                total_cost += Decimal(str(cost))
+
+        return total_cost
+
+    @staticmethod
+    def _format_cost_for_json(cost: Decimal) -> str:
+        """
+        コストを適切な精度でJSON用にフォーマット
+
+        科学的記数法を避け、適切な小数点以下の桁数で表示する
+
+        Args:
+            cost: コスト（Decimal）
+
+        Returns:
+            フォーマットされたコスト文字列
+        """
+        # 小数点以下10桁まで表示（0は除去）
+        # 例: Decimal("0.0000576360") -> "0.000057636"
+        formatted = f"{cost:.10f}".rstrip("0").rstrip(".")
+        return formatted if formatted else "0"
+
+    def _format_model_usage_for_json(
+        self,
+        model_usage: dict[str, dict[str, Any]],
+    ) -> dict[str, dict[str, Any]]:
+        """
+        model_usageをJSON出力用にフォーマット
+
+        cost_usd（Decimal）を科学的記数法を避けた文字列に変換する
+
+        Args:
+            model_usage: モデル別使用量（cost_usdはDecimal）
+
+        Returns:
+            フォーマット済みのmodel_usage（cost_usdは文字列）
+        """
+        formatted: dict[str, dict[str, Any]] = {}
+        for model_id, usage in model_usage.items():
+            cost = usage.get("cost_usd", Decimal("0"))
+            if not isinstance(cost, Decimal):
+                cost = Decimal(str(cost))
+
+            formatted[model_id] = {
+                "input_tokens": usage["input_tokens"],
+                "output_tokens": usage["output_tokens"],
+                "cache_creation_5m_input_tokens": usage.get("cache_creation_5m_input_tokens", 0),
+                "cache_creation_1h_input_tokens": usage.get("cache_creation_1h_input_tokens", 0),
+                "cache_read_input_tokens": usage.get("cache_read_input_tokens", 0),
+                "cost_usd": self._format_cost_for_json(cost),
+            }
+        return formatted
+
+    async def _build_model_usage(
+        self,
+        context: ExecutionContext,
+        tool_tracker: ToolTracker,
+        main_input_tokens: int,
+        main_output_tokens: int,
+        main_cache_creation_5m: int,
+        main_cache_creation_1h: int,
+        main_cache_read: int,
+    ) -> dict[str, dict[str, Any]]:
+        """
+        モデル別使用量を構築
+
+        SDKからmodel_usageが取得できない場合（Python SDKなど）、
+        サブエージェントの追跡データから構築する。
+        コストはDBのmodelsテーブルの価格設定から計算する。
+
+        Args:
+            context: 実行コンテキスト
+            tool_tracker: ツールトラッカー
+            main_input_tokens: SDK全体の入力トークン数（メイン+サブエージェント）
+            main_output_tokens: SDK全体の出力トークン数（メイン+サブエージェント）
+            main_cache_creation_5m: 5分キャッシュ作成トークン数
+            main_cache_creation_1h: 1時間キャッシュ作成トークン数
+            main_cache_read: キャッシュ読み込みトークン数
+
+        Returns:
+            モデルID別の使用量辞書（cost_usdはDecimal型）
+        """
+        # サブエージェントの使用量を取得（cost_usdはDecimal）
+        subagent_model_usage = tool_tracker.get_aggregated_model_usage()
+
+        # サブエージェントの合計トークン数を計算
+        subagent_total_input = sum(
+            u["input_tokens"] for u in subagent_model_usage.values()
+        )
+        subagent_total_output = sum(
+            u["output_tokens"] for u in subagent_model_usage.values()
+        )
+
+        # メインエージェントの使用量（全体からサブエージェント分を引く）
+        main_model_id = context.model.model_id
+        main_actual_input = max(0, main_input_tokens - subagent_total_input)
+        main_actual_output = max(0, main_output_tokens - subagent_total_output)
+
+        # メインエージェントのコストをDBから計算（Decimal）
+        main_cost: Decimal = context.model.calculate_cost(
+            main_actual_input,
+            main_actual_output,
+            main_cache_creation_5m,
+            main_cache_creation_1h,
+            main_cache_read,
+        )
+
+        model_usage: dict[str, dict[str, Any]] = {
+            main_model_id: {
+                "input_tokens": main_actual_input,
+                "output_tokens": main_actual_output,
+                "cache_creation_5m_input_tokens": main_cache_creation_5m,
+                "cache_creation_1h_input_tokens": main_cache_creation_1h,
+                "cache_read_input_tokens": main_cache_read,
+                "cost_usd": main_cost,  # Decimal
+            }
+        }
+
+        # サブエージェントの使用量をマージ
+        # サブエージェントのcost_usdはDBから計算する必要がある
+        model_service = ModelService(self.db)
+
+        for model_id, usage in subagent_model_usage.items():
+            # サブエージェントのモデル情報をDBから取得
+            subagent_model = await model_service.get_by_id(model_id)
+
+            if subagent_model:
+                # DBから価格を取得してコスト計算
+                subagent_cost: Decimal = subagent_model.calculate_cost(
+                    usage["input_tokens"],
+                    usage["output_tokens"],
+                    usage.get("cache_creation_5m_input_tokens", 0),
+                    usage.get("cache_creation_1h_input_tokens", 0),
+                    usage.get("cache_read_input_tokens", 0),
+                )
+            else:
+                # モデルがDBにない場合は記録されたcost_usdを使用（ただし0の可能性）
+                subagent_cost = usage.get("cost_usd", Decimal("0"))
+                logger.warning(
+                    "サブエージェントモデルがDBに存在しません",
+                    model_id=model_id,
+                )
+
+            if model_id == main_model_id:
+                # 同じモデルの場合はマージ
+                model_usage[model_id]["input_tokens"] += usage["input_tokens"]
+                model_usage[model_id]["output_tokens"] += usage["output_tokens"]
+                model_usage[model_id]["cache_creation_5m_input_tokens"] += usage.get("cache_creation_5m_input_tokens", 0)
+                model_usage[model_id]["cache_creation_1h_input_tokens"] += usage.get("cache_creation_1h_input_tokens", 0)
+                model_usage[model_id]["cache_read_input_tokens"] += usage.get("cache_read_input_tokens", 0)
+                # コストはDecimal同士で加算
+                model_usage[model_id]["cost_usd"] += subagent_cost
+            else:
+                # 異なるモデルの場合は新規エントリ
+                model_usage[model_id] = {
+                    "input_tokens": usage["input_tokens"],
+                    "output_tokens": usage["output_tokens"],
+                    "cache_creation_5m_input_tokens": usage.get("cache_creation_5m_input_tokens", 0),
+                    "cache_creation_1h_input_tokens": usage.get("cache_creation_1h_input_tokens", 0),
+                    "cache_read_input_tokens": usage.get("cache_read_input_tokens", 0),
+                    "cost_usd": subagent_cost,  # Decimal
+                }
+
+        logger.info(
+            "モデル別使用量を構築",
+            main_model_id=main_model_id,
+            subagent_count=len(subagent_model_usage),
+            total_models=len(model_usage),
+        )
+
+        return model_usage
+
+    async def _validate_subagent_models(self) -> str | None:
+        """
+        サブエージェント用モデルがDBに存在するか確認
+
+        エージェント実行前にサブエージェントで使用するモデルが
+        modelsテーブルに登録されているか検証する
+
+        Returns:
+            エラーメッセージ（問題がなければNone）
+        """
+        required_ids = SubagentModelMapping.get_required_model_ids(settings)
+
+        model_service = ModelService(self.db)
+        missing_models = []
+
+        for model_id in required_ids:
+            model = await model_service.get_by_id(model_id)
+            if not model:
+                missing_models.append(model_id)
+
+        if missing_models:
+            error_msg = (
+                f"サブエージェント用モデルがDBに存在しません: {missing_models}. "
+                "models テーブルに登録してください。"
+            )
+            logger.error(
+                "モデルバリデーションエラー",
+                missing_models=missing_models,
+            )
+            return error_msg
+
+        logger.debug(
+            "サブエージェント用モデルバリデーション完了",
+            required_models=list(required_ids),
+        )
+        return None
 
     async def _sync_workspace_after_execution(
         self,

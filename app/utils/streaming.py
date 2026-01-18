@@ -153,23 +153,27 @@ def format_result_message_event(
     result: str | None,
     errors: list[str] | None,
     usage: dict,
-    cost_usd: float,
+    cost_usd: float | str,
     num_turns: int,
     duration_ms: int,
     session_id: str | None = None,
+    messages: list[dict[str, Any]] | None = None,
+    model_usage: dict[str, dict[str, Any]] | None = None,
 ) -> dict:
     """
     結果メッセージイベントをフォーマット
 
     Args:
         subtype: サブタイプ (success / error_during_execution)
-        result: 結果テキスト
+        result: 結果テキスト（後方互換性のため残す）
         errors: エラーリスト
-        usage: 使用状況
+        usage: 使用状況（合計）
         cost_usd: コスト（USD）
         num_turns: ターン数
         duration_ms: 実行時間（ミリ秒）
         session_id: セッションID
+        messages: メッセージログ（/messagesと同じ形式）
+        model_usage: モデルごとの使用量
 
     Returns:
         イベントデータ
@@ -178,7 +182,7 @@ def format_result_message_event(
         "type": "result",
         "subtype": subtype,
         "timestamp": _get_timestamp(),
-        "result": result,
+        "result": result,  # 後方互換性のため残す
         "is_error": subtype != "success",
         "errors": errors,
         "usage": usage,
@@ -188,6 +192,10 @@ def format_result_message_event(
     }
     if session_id is not None:
         data["session_id"] = session_id
+    if messages is not None:
+        data["messages"] = messages
+    if model_usage is not None:
+        data["model_usage"] = model_usage
     return {
         "event": "message",
         "data": data,
@@ -337,23 +345,27 @@ def format_result_event(
     result: str | None,
     errors: list[str] | None,
     usage: dict,
-    cost_usd: float,
+    cost_usd: float | str,
     num_turns: int,
     duration_ms: int,
     session_id: str | None = None,
+    messages: list[dict[str, Any]] | None = None,
+    model_usage: dict[str, dict[str, Any]] | None = None,
 ) -> dict:
     """
     結果イベントをフォーマット（messages形式）
 
     Args:
         subtype: サブタイプ (success / error_during_execution)
-        result: 結果テキスト
+        result: 結果テキスト（後方互換性のため残す）
         errors: エラーリスト
-        usage: 使用状況
+        usage: 使用状況（合計）
         cost_usd: コスト（USD）
         num_turns: ターン数
         duration_ms: 実行時間（ミリ秒）
         session_id: セッションID
+        messages: メッセージログ（/messagesと同じ形式）
+        model_usage: モデルごとの使用量
 
     Returns:
         イベントデータ
@@ -367,6 +379,8 @@ def format_result_event(
         num_turns=num_turns,
         duration_ms=duration_ms,
         session_id=session_id,
+        messages=messages,
+        model_usage=model_usage,
     )
 
 
@@ -409,4 +423,157 @@ def format_title_generated_event(title: str) -> dict:
         },
     }
 
+
+# =============================================================================
+# リアルタイム進捗イベント
+# =============================================================================
+
+
+def format_status_event(
+    state: str,
+    message: str,
+) -> dict:
+    """
+    ステータスイベントをフォーマット
+
+    現在の処理状態をクライアントに通知します。
+
+    Args:
+        state: 状態 (thinking / generating / tool_execution / waiting)
+        message: 状態の説明メッセージ
+
+    Returns:
+        イベントデータ
+    """
+    return {
+        "event": "status",
+        "data": {
+            "state": state,
+            "message": message,
+            "timestamp": _get_timestamp(),
+        },
+    }
+
+
+def format_heartbeat_event(
+    elapsed_ms: int,
+) -> dict:
+    """
+    ハートビートイベントをフォーマット
+
+    接続維持とタイムアウト防止のために定期的に送信されます。
+
+    Args:
+        elapsed_ms: 経過時間（ミリ秒）
+
+    Returns:
+        イベントデータ
+    """
+    return {
+        "event": "heartbeat",
+        "data": {
+            "timestamp": _get_timestamp(),
+            "elapsed_ms": elapsed_ms,
+        },
+    }
+
+
+def format_turn_progress_event(
+    current_turn: int,
+    max_turns: int | None = None,
+) -> dict:
+    """
+    ターン進捗イベントをフォーマット
+
+    現在のターン番号を通知します。
+
+    Args:
+        current_turn: 現在のターン番号
+        max_turns: 最大ターン数（設定されている場合）
+
+    Returns:
+        イベントデータ
+    """
+    return {
+        "event": "turn_progress",
+        "data": {
+            "current_turn": current_turn,
+            "max_turns": max_turns,
+            "timestamp": _get_timestamp(),
+        },
+    }
+
+
+def format_tool_progress_event(
+    tool_use_id: str,
+    tool_name: str,
+    status: str,
+    message: str | None = None,
+    parent_tool_use_id: str | None = None,
+) -> dict:
+    """
+    ツール進捗イベントをフォーマット
+
+    ツール実行の状態を通知します。
+
+    Args:
+        tool_use_id: ツール使用ID
+        tool_name: ツール名
+        status: ステータス (pending / running / completed / error)
+        message: 進捗メッセージ（オプション）
+        parent_tool_use_id: 親ツールID（サブエージェント内の場合）
+
+    Returns:
+        イベントデータ
+    """
+    data = {
+        "tool_use_id": tool_use_id,
+        "tool_name": tool_name,
+        "status": status,
+        "parent_tool_use_id": parent_tool_use_id,
+        "timestamp": _get_timestamp(),
+    }
+    if message:
+        data["message"] = message
+    return {
+        "event": "tool_progress",
+        "data": data,
+    }
+
+
+def format_subagent_event(
+    action: str,
+    agent_type: str,
+    description: str,
+    parent_tool_use_id: str,
+    result: str | None = None,
+) -> dict:
+    """
+    サブエージェントイベントをフォーマット
+
+    Taskツールによるサブエージェントの開始/終了を通知します。
+
+    Args:
+        action: アクション (start / stop)
+        agent_type: エージェントタイプ
+        description: 説明
+        parent_tool_use_id: 親ツール使用ID
+        result: 結果（終了時のみ）
+
+    Returns:
+        イベントデータ
+    """
+    data = {
+        "action": action,
+        "agent_type": agent_type,
+        "description": description,
+        "parent_tool_use_id": parent_tool_use_id,
+        "timestamp": _get_timestamp(),
+    }
+    if result:
+        data["result"] = result
+    return {
+        "event": "subagent",
+        "data": data,
+    }
 
