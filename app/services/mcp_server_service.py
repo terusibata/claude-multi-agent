@@ -32,6 +32,14 @@ BUILTIN_MCP_SERVERS = {
         "tools": ["present_files"],
         "allowed_tools": ["mcp__file-presentation__present_files"],
     },
+    "form": {
+        "name": "form",
+        "display_name": "フォームリクエストサーバー",
+        "type": "builtin",
+        "description": "ユーザーにフォーム入力を要求するためのMCPサーバー。JSON Schemaベースでフォームを定義し、テキスト入力、日付選択、ファイルアップロード、動的検索など柔軟なフォームを作成可能。",
+        "tools": ["request_form"],
+        "allowed_tools": ["mcp__form__request_form"],
+    },
 }
 
 
