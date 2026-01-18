@@ -501,3 +501,40 @@ FORM_REQUEST_PROMPT = """
 2. テキスト入力には`suggestions`で入力例を提示
 3. 長いフォームは`divider`/`heading`でセクション分け
 """
+
+
+# ビルトインSkillの定義（全テナント共通で利用可能）
+BUILTIN_SKILLS = {
+    "form-request-guide": {
+        "skill_id": "builtin__form-request-guide",
+        "name": "form-request-guide",
+        "display_name": "フォームリクエストガイド",
+        "description": "mcp__form__request_formツールの詳細な使い方とフィールドタイプの仕様",
+        "content": FORM_REQUEST_PROMPT,
+        "status": "active",
+        "is_builtin": True,
+    },
+}
+
+
+def get_builtin_skill(skill_name: str) -> dict[str, Any] | None:
+    """
+    ビルトインSkillの定義を取得
+
+    Args:
+        skill_name: Skill名
+
+    Returns:
+        Skill定義（存在しない場合はNone）
+    """
+    return BUILTIN_SKILLS.get(skill_name)
+
+
+def get_all_builtin_skills() -> list[dict[str, Any]]:
+    """
+    全ビルトインSkillの定義を取得
+
+    Returns:
+        Skill定義のリスト
+    """
+    return list(BUILTIN_SKILLS.values())
