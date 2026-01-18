@@ -59,6 +59,9 @@ class Settings(BaseSettings):
     # セキュリティ向上のため、アプリケーション専用ディレクトリを使用
     workspace_temp_dir: str = "/var/lib/aiagent/workspaces"
 
+    # ファイルアップロード制限
+    max_upload_file_size: int = 100 * 1024 * 1024  # 100MB
+
     # ============================================
     # セキュリティ設定
     # ============================================

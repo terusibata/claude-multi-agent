@@ -74,7 +74,9 @@ async def create_model(
             detail=f"モデル '{model_data.model_id}' は既に存在します",
         )
 
-    return await service.create(model_data)
+    model = await service.create(model_data)
+    await db.commit()
+    return model
 
 
 @router.put("/{model_id}", response_model=ModelResponse, summary="モデル定義更新")
@@ -93,6 +95,7 @@ async def update_model(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"モデル '{model_id}' が見つかりません",
         )
+    await db.commit()
     return model
 
 
@@ -115,6 +118,7 @@ async def update_model_status(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"モデル '{model_id}' が見つかりません",
         )
+    await db.commit()
     return model
 
 
@@ -144,6 +148,7 @@ async def delete_model(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"モデル '{model_id}' が見つかりません",
             )
+        await db.commit()
     except ModelInUseError as e:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

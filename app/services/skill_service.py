@@ -80,10 +80,12 @@ class SkillService:
         tenant_skills_path = self._get_tenant_skills_path(tenant_id)
         skill_path = tenant_skills_path / skill_name
 
-        # パストラバーサル検証
+        # パストラバーサル検証（is_relative_to使用）
         resolved_path = skill_path.resolve()
         base_resolved = self.base_path.resolve()
-        if not str(resolved_path).startswith(str(base_resolved) + "/"):
+        try:
+            resolved_path.relative_to(base_resolved)
+        except ValueError:
             raise PathTraversalError(skill_name)
 
         return skill_path

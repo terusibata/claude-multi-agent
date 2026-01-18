@@ -137,6 +137,23 @@ class FileSizeError(AppError):
         )
 
 
+class FileSizeExceededError(AppError):
+    """ファイルアップロードサイズ超過エラー"""
+
+    def __init__(self, filename: str, size: int, max_size: int):
+        max_size_mb = max_size // (1024 * 1024)
+        size_mb = size / (1024 * 1024)
+        super().__init__(
+            message=f"ファイル '{filename}' ({size_mb:.1f}MB) が制限サイズ ({max_size_mb}MB) を超えています",
+            error_code="FILE_SIZE_EXCEEDED",
+            details={
+                "filename": filename,
+                "size": size,
+                "max_size": max_size,
+            },
+        )
+
+
 class SDKError(AppError):
     """SDK関連エラー"""
 

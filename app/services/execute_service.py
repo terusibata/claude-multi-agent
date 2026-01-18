@@ -320,8 +320,12 @@ class ExecuteService:
 
     async def _wrap_generator(self, gen):
         """同期ジェネレータを非同期で処理"""
-        for item in gen:
-            yield item
+        try:
+            for item in gen:
+                yield item
+        except Exception as e:
+            logger.error("ジェネレータ処理中にエラー発生", error=str(e), exc_info=True)
+            raise
 
     async def _save_user_message(self, context: ExecutionContext) -> None:
         """ユーザーメッセージを保存"""
@@ -651,11 +655,12 @@ class ExecuteService:
         normalized = {}
         for model_id, usage in model_usage_raw.items():
             if isinstance(usage, dict):
+                # キー存在チェックで正規化（0の場合も正しく取得）
                 normalized[model_id] = {
-                    "input_tokens": usage.get("input_tokens", 0) or usage.get("inputTokens", 0),
-                    "output_tokens": usage.get("output_tokens", 0) or usage.get("outputTokens", 0),
-                    "cache_creation_input_tokens": usage.get("cache_creation_input_tokens", 0) or usage.get("cacheCreationInputTokens", 0),
-                    "cache_read_input_tokens": usage.get("cache_read_input_tokens", 0) or usage.get("cacheReadInputTokens", 0),
+                    "input_tokens": usage.get("input_tokens") if "input_tokens" in usage else usage.get("inputTokens", 0),
+                    "output_tokens": usage.get("output_tokens") if "output_tokens" in usage else usage.get("outputTokens", 0),
+                    "cache_creation_input_tokens": usage.get("cache_creation_input_tokens") if "cache_creation_input_tokens" in usage else usage.get("cacheCreationInputTokens", 0),
+                    "cache_read_input_tokens": usage.get("cache_read_input_tokens") if "cache_read_input_tokens" in usage else usage.get("cacheReadInputTokens", 0),
                 }
         return normalized if normalized else None
 

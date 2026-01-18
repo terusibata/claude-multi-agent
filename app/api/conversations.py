@@ -423,6 +423,15 @@ async def _event_generator(
                             exc_info=True,
                             extra={"conversation_id": request.conversation_id},
                         )
+                        # クライアントにエラーを通知
+                        error_event = format_error_event(
+                            f"バックグラウンドタスクエラー: {str(task_error)}",
+                            "background_task_error",
+                        )
+                        yield {
+                            "event": error_event["event"],
+                            "data": json.dumps(error_event["data"], ensure_ascii=False, default=str),
+                        }
                     else:
                         logger.info(
                             "Background task completed during timeout",
