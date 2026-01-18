@@ -37,14 +37,88 @@ BUILTIN_TOOL_DEFINITIONS = {
     "request_form": {
         "name": "request_form",
         "description": """ユーザーにフォーム入力を要求する。JSON Schemaベースでフォームを定義し、フロントエンドで表示される。
-ユーザーの入力結果は次のメッセージとして送信される。
+ユーザーの入力結果は次のメッセージとしてJSON形式で送信される。
 
-使用シーン:
-- 複数の情報を一度に収集する必要がある場合
-- テキスト入力、日付選択、ファイルアップロード等の複雑な入力が必要な場合
-- 動的な検索・選択（autocomplete）が必要な場合
+【フィールドタイプ一覧】
 
-注意: 単純な選択のみの場合はAskUserQuestionツールを使用してください。""",
+■ テキスト入力
+- text: 単一行テキスト
+  プロパティ: name(必須), label, placeholder, required, minLength, maxLength, pattern, patternError, default, suggestions(string[])
+  例: {"name": "project_name", "type": "text", "label": "プロジェクト名", "required": true, "pattern": "^[a-z0-9-]+$", "suggestions": ["my-app", "api-server"]}
+
+- textarea: 複数行テキスト
+  プロパティ: name(必須), label, placeholder, rows, maxLength, suggestions(string[])
+  例: {"name": "description", "type": "textarea", "label": "説明", "rows": 3}
+
+■ 選択系
+- select: 単一選択（ドロップダウン）
+  プロパティ: name(必須), label, options(必須: [{value, label}]), default, required
+  例: {"name": "language", "type": "select", "label": "言語", "options": [{"value": "python", "label": "Python"}, {"value": "typescript", "label": "TypeScript"}], "default": "python"}
+
+- multiselect: 複数選択
+  プロパティ: name(必須), label, options(必須), minSelect, maxSelect
+  例: {"name": "features", "type": "multiselect", "label": "機能", "options": [{"value": "auth", "label": "認証"}, {"value": "api", "label": "API"}]}
+
+- radio: ラジオボタン
+  プロパティ: name(必須), label, options(必須), default
+  例: {"name": "priority", "type": "radio", "label": "優先度", "options": [{"value": "high", "label": "高"}, {"value": "low", "label": "低"}]}
+
+- checkbox: チェックボックス（真偽値）
+  プロパティ: name(必須), label(必須), required, default
+  例: {"name": "agree_terms", "type": "checkbox", "label": "利用規約に同意する", "required": true}
+
+■ 動的検索
+- autocomplete: 検索付き単一選択
+  プロパティ: name(必須), label, searchUrl(必須), searchParams, displayField(必須), valueField(必須), minChars, debounceMs, renderTemplate
+  例: {"name": "assignee", "type": "autocomplete", "label": "担当者", "searchUrl": "https://api.example.com/users/search", "searchParams": {"q": "{query}"}, "displayField": "name", "valueField": "id"}
+
+- multi-autocomplete: 検索付き複数選択
+  プロパティ: autocompleteと同様 + maxSelect
+  例: {"name": "members", "type": "multi-autocomplete", "label": "メンバー", "searchUrl": "...", "displayField": "name", "valueField": "id", "maxSelect": 5}
+
+- cascading-select: 連動選択（親の値で選択肢が変わる）
+  プロパティ: name(必須), label, searchUrl(必須), dependsOn(必須: 親フィールド名), dependsOnParam(必須), displayField(必須), valueField(必須)
+  例: {"name": "city", "type": "cascading-select", "label": "市区町村", "searchUrl": "...", "dependsOn": "prefecture", "dependsOnParam": "prefecture_code", "displayField": "name", "valueField": "code"}
+
+- async-select: 非同期読み込み選択（ページ読み込み時にAPI取得）
+  プロパティ: name(必須), label, loadUrl(必須), displayField(必須), valueField(必須), default
+  例: {"name": "category", "type": "async-select", "label": "カテゴリ", "loadUrl": "https://api.example.com/categories", "displayField": "name", "valueField": "id"}
+
+■ 数値
+- number: 数値入力
+  プロパティ: name(必須), label, min, max, step, default
+  例: {"name": "quantity", "type": "number", "label": "数量", "min": 1, "max": 100, "default": 1}
+
+- range: スライダー
+  プロパティ: name(必須), label, min, max, step, showValue
+  例: {"name": "percentage", "type": "range", "label": "割合 (%)", "min": 0, "max": 100, "step": 5, "showValue": true}
+
+■ 日付
+- date: 日付選択
+  プロパティ: name(必須), label, minDate, maxDate（"today", "+30days", ISO形式）
+  例: {"name": "due_date", "type": "date", "label": "期限", "minDate": "today"}
+
+- datetime: 日時選択
+  プロパティ: name(必須), label
+  例: {"name": "meeting_time", "type": "datetime", "label": "日時"}
+
+■ ファイル
+- file: ファイルアップロード
+  プロパティ: name(必須), label, accept, maxSize(バイト), multiple
+  例: {"name": "attachment", "type": "file", "label": "添付", "accept": ".pdf,.doc", "maxSize": 10485760}
+
+■ レイアウト（name不要）
+- divider: 区切り線
+  プロパティ: label（セクション名、オプション）
+  例: {"type": "divider", "label": "詳細設定"}
+
+- heading: 見出し
+  プロパティ: text(必須), level(1-4), description
+  例: {"type": "heading", "text": "基本情報", "level": 2, "description": "必須項目を入力してください"}
+
+- hidden: 隠しフィールド
+  プロパティ: name(必須), value(必須)
+  例: {"name": "form_version", "type": "hidden", "value": "1.0"}""",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -54,11 +128,11 @@ BUILTIN_TOOL_DEFINITIONS = {
                     "properties": {
                         "title": {
                             "type": "string",
-                            "description": "フォームのタイトル"
+                            "description": "フォームのタイトル（例: '新規プロジェクト作成'）"
                         },
                         "description": {
                             "type": "string",
-                            "description": "フォームの説明（オプション）"
+                            "description": "フォームの説明文（オプション）"
                         },
                         "submitLabel": {
                             "type": "string",
@@ -70,10 +144,73 @@ BUILTIN_TOOL_DEFINITIONS = {
                         },
                         "fields": {
                             "type": "array",
-                            "description": "フォームフィールドの配列",
+                            "description": "フォームフィールドの配列。各フィールドは type でタイプを指定し、入力フィールドは name が必須。",
                             "items": {
                                 "type": "object",
-                                "description": "フィールド定義"
+                                "properties": {
+                                    "type": {
+                                        "type": "string",
+                                        "enum": ["text", "textarea", "select", "multiselect", "autocomplete", "multi-autocomplete", "cascading-select", "async-select", "checkbox", "radio", "number", "range", "date", "datetime", "file", "hidden", "divider", "heading"],
+                                        "description": "フィールドタイプ"
+                                    },
+                                    "name": {
+                                        "type": "string",
+                                        "description": "フィールド名（送信データのキー）。divider, heading以外は必須"
+                                    },
+                                    "label": {
+                                        "type": "string",
+                                        "description": "表示ラベル"
+                                    },
+                                    "required": {
+                                        "type": "boolean",
+                                        "description": "必須フィールドか"
+                                    },
+                                    "options": {
+                                        "type": "array",
+                                        "description": "select/multiselect/radioの選択肢。各要素は {value, label}",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "value": {"type": "string"},
+                                                "label": {"type": "string"}
+                                            }
+                                        }
+                                    },
+                                    "suggestions": {
+                                        "type": "array",
+                                        "description": "text/textareaの入力候補（クリックで入力欄に反映）",
+                                        "items": {"type": "string"}
+                                    },
+                                    "placeholder": {"type": "string"},
+                                    "default": {"description": "デフォルト値"},
+                                    "minLength": {"type": "number"},
+                                    "maxLength": {"type": "number"},
+                                    "pattern": {"type": "string", "description": "正規表現パターン"},
+                                    "patternError": {"type": "string"},
+                                    "rows": {"type": "number", "description": "textareaの行数"},
+                                    "min": {"type": "number"},
+                                    "max": {"type": "number"},
+                                    "step": {"type": "number"},
+                                    "minSelect": {"type": "number"},
+                                    "maxSelect": {"type": "number"},
+                                    "searchUrl": {"type": "string", "description": "autocomplete系の検索API URL"},
+                                    "searchParams": {"type": "object", "description": "検索パラメータ。{query}がユーザー入力に置換"},
+                                    "loadUrl": {"type": "string", "description": "async-selectのデータ取得URL"},
+                                    "displayField": {"type": "string"},
+                                    "valueField": {"type": "string"},
+                                    "dependsOn": {"type": "string", "description": "cascading-selectの親フィールド名"},
+                                    "dependsOnParam": {"type": "string"},
+                                    "minDate": {"type": "string"},
+                                    "maxDate": {"type": "string"},
+                                    "accept": {"type": "string", "description": "ファイル許可形式（.pdf,.docなど）"},
+                                    "maxSize": {"type": "number", "description": "最大ファイルサイズ（バイト）"},
+                                    "multiple": {"type": "boolean"},
+                                    "text": {"type": "string", "description": "headingの見出しテキスト"},
+                                    "level": {"type": "number", "description": "headingのレベル（1-4）"},
+                                    "value": {"description": "hiddenフィールドの固定値"},
+                                    "showValue": {"type": "boolean", "description": "rangeで現在値を表示"}
+                                },
+                                "required": ["type"]
                             }
                         }
                     },
@@ -498,8 +635,8 @@ FORM_REQUEST_PROMPT = """
 1. **複数の情報が必要な場合はフォームを使用**
    - プロジェクト作成、設定変更、複雑なデータ入力など
 
-2. **単純な選択のみの場合は通常の会話で確認**
-   - はい/いいえ、A/B/Cの選択などはAskUserQuestionツールを使用
+2. **単純な質問は会話で確認**
+   - はい/いいえなど1つの質問は会話で直接確認
 
 3. **検索が必要なフィールドには autocomplete タイプを使用**
    - ユーザー検索、プロジェクト検索など
@@ -512,11 +649,11 @@ FORM_REQUEST_PROMPT = """
 
 ### フィールドタイプ
 
-- `text`: 単一行テキスト入力
-- `textarea`: 複数行テキスト入力
+- `text`: 単一行テキスト入力（suggestions対応）
+- `textarea`: 複数行テキスト入力（suggestions対応）
 - `select`: 単一選択（ドロップダウン）
 - `multiselect`: 複数選択
-- `autocomplete`: 検索付き単一選択
+- `autocomplete`: 検索付き単一選択（外部API連携）
 - `multi-autocomplete`: 検索付き複数選択
 - `cascading-select`: 連動選択（親子関係のある選択肢）
 - `async-select`: 非同期読み込み選択
@@ -528,6 +665,6 @@ FORM_REQUEST_PROMPT = """
 - `datetime`: 日時選択
 - `file`: ファイルアップロード
 - `hidden`: 隠しフィールド
-- `divider`: 区切り線
-- `heading`: 見出し
+- `divider`: 区切り線（セクション分け）
+- `heading`: 見出し（セクションタイトル）
 """
