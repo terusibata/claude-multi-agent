@@ -12,9 +12,11 @@ from app.config import get_settings
 settings = get_settings()
 
 # 非同期エンジンの作成
+# SQLログ出力: 開発環境かつDEBUGレベルの時のみ
+_echo_sql = settings.is_development and settings.log_level.upper() == "DEBUG"
 engine = create_async_engine(
     settings.database_url,
-    echo=settings.is_development,  # 開発環境ではSQLをログ出力
+    echo=_echo_sql,
     pool_size=10,
     max_overflow=20,
     pool_pre_ping=True,  # 接続の有効性チェック

@@ -156,10 +156,10 @@ uvicorn app.main:app --reload
 ### 基本フロー
 
 ```
-1. POST /tenants - テナントを作成
-2. POST /models - モデルを登録
-3. POST /tenants/{tenant_id}/conversations - 会話を作成
-4. POST /conversations/{conversation_id}/stream - ストリーミング実行
+1. POST /api/tenants - テナントを作成
+2. POST /api/models - モデルを登録
+3. POST /api/tenants/{tenant_id}/conversations - 会話を作成
+4. POST /api/tenants/{tenant_id}/conversations/{conversation_id}/stream - ストリーミング実行
 ```
 
 ## 主要な概念
@@ -190,10 +190,18 @@ uvicorn app.main:app --reload
 | AWS_REGION | AWSリージョン | us-west-2 |
 | AWS_ACCESS_KEY_ID | AWSアクセスキー | - |
 | AWS_SECRET_ACCESS_KEY | AWSシークレットキー | - |
+| ANTHROPIC_SONNET_MODEL | Sonnetモデル（メインエージェント用） | global.anthropic.claude-sonnet-4-5-20250929-v1:0 |
+| ANTHROPIC_HAIKU_MODEL | Haikuモデル（サブエージェント用） | global.anthropic.claude-haiku-4-5-20251001-v1:0 |
+| CLAUDE_CODE_SUBAGENT_MODEL | サブエージェントモデルエイリアス | haiku |
 | S3_BUCKET_NAME | ワークスペース用S3バケット名 | - |
 | S3_WORKSPACE_PREFIX | S3内のプレフィックス | workspaces/ |
+| WORKSPACE_TEMP_DIR | ローカルワークスペース一時ディレクトリ | /var/lib/aiagent/workspaces |
 | APP_ENV | 環境 | development |
+| APP_PORT | アプリケーションポート | 8000 |
+| LOG_LEVEL | ログレベル | INFO |
 | SKILLS_BASE_PATH | Skills保存パス | /skills |
+| CORS_ORIGINS | CORS許可オリジン（カンマ区切り） | http://localhost:3000,http://localhost:3001 |
+| MAX_UPLOAD_FILE_SIZE | ファイルアップロード上限（バイト） | 104857600 (100MB) |
 
 ### AWS IAMポリシー要件
 

@@ -11,10 +11,12 @@ from typing import Optional
 from uuid import uuid4
 
 import structlog
+from fastapi import UploadFile
 from sqlalchemy import and_, select, update, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.utils.exceptions import FileSizeExceededError
 from app.models.conversation import Conversation
 from app.models.conversation_file import ConversationFile
 from app.schemas.workspace import (
@@ -63,9 +65,20 @@ class WorkspaceService:
 
         Returns:
             アップロードされたファイル情報のリスト
+
+        Raises:
+            FileSizeExceededError: ファイルサイズが制限を超えた場合
         """
+        max_size = settings.max_upload_file_size
         results = []
         for filename, content, content_type in files:
+            # ファイルサイズチェック
+            if len(content) > max_size:
+                raise FileSizeExceededError(
+                    filename=filename,
+                    size=len(content),
+                    max_size=max_size,
+                )
             file_path = f"uploads/{filename}"
             await self.s3.upload(tenant_id, conversation_id, file_path, content, content_type)
 
@@ -82,6 +95,38 @@ class WorkspaceService:
             results.append(file_info)
 
         return results
+
+    async def upload_user_file(
+        self,
+        tenant_id: str,
+        conversation_id: str,
+        file: UploadFile,
+    ) -> ConversationFileInfo:
+        """
+        FastAPI UploadFile形式の単一ファイルをアップロード
+
+        Args:
+            tenant_id: テナントID
+            conversation_id: 会話ID
+            file: FastAPI UploadFile オブジェクト
+
+        Returns:
+            アップロードされたファイル情報
+
+        Raises:
+            FileSizeExceededError: ファイルサイズが制限を超えた場合
+        """
+        content = await file.read()
+        content_type = file.content_type or "application/octet-stream"
+        filename = file.filename or "unnamed"
+
+        # upload_files を利用（サイズチェックも含む）
+        results = await self.upload_files(
+            tenant_id,
+            conversation_id,
+            [(filename, content, content_type)],
+        )
+        return results[0]
 
     async def download_file(
         self,

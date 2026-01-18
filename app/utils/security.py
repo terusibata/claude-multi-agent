@@ -44,8 +44,8 @@ def validate_path_traversal(path: str, base_path: Optional[Path] = None) -> None
         if pattern in path:
             raise PathTraversalError(path)
 
-    # 絶対パスの場合はエラー
-    if path.startswith("/") or (len(path) > 1 and path[1] == ":"):
+    # 絶対パスの場合はエラー（クロスプラットフォーム対応）
+    if Path(path).is_absolute():
         raise PathTraversalError(path)
 
     # base_path が指定されている場合、正規化後のパスがベース配下か確認

@@ -8,6 +8,8 @@
 - GET /conversations/{conversation_id}/files/presented: AIが作成したファイル一覧
 """
 import logging
+import re
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
@@ -97,11 +99,16 @@ async def download_file(
             detail="ファイルのダウンロードに失敗しました",
         )
 
+    # ファイル名をサニタイズ（改行・制御文字除去）
+    safe_filename = re.sub(r'[\r\n\x00-\x1f]', '', filename)
+    # RFC 5987 エンコーディング（非ASCII文字対応）
+    encoded_filename = quote(safe_filename, safe='')
+
     return Response(
         content=content,
         media_type=content_type,
         headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
         },
     )
 
