@@ -11,7 +11,9 @@ from app.services.execute.aws_config import AWSConfig
 from app.services.execute.context import ExecutionContext, SDKOptions
 from app.services.builtin_tools import (
     create_file_presentation_mcp_server,
+    create_form_request_mcp_server,
     FILE_PRESENTATION_PROMPT,
+    FORM_REQUEST_PROMPT,
 )
 from app.services.mcp_server_service import McpServerService
 from app.services.openapi_mcp_service import create_openapi_mcp_server
@@ -264,6 +266,17 @@ class OptionsBuilder:
             logger.info(
                 "ビルトインMCPサーバー追加完了",
                 server_name="file-presentation",
+            )
+
+        # formは常に追加（フォームリクエスト機能）
+        form_server = create_form_request_mcp_server()
+        if form_server:
+            mcp_servers["form"] = form_server
+            allowed_tools.append("mcp__form__request_form")
+            system_prompt = f"{system_prompt}\n\n{FORM_REQUEST_PROMPT}"
+            logger.info(
+                "ビルトインMCPサーバー追加完了",
+                server_name="form",
             )
 
         return mcp_servers, allowed_tools, system_prompt
