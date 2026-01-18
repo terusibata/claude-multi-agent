@@ -79,7 +79,8 @@ class UsageInfo(BaseModel):
 
     input_tokens: int = 0
     output_tokens: int = 0
-    cache_creation_tokens: int = 0
+    cache_creation_5m_tokens: int = 0
+    cache_creation_1h_tokens: int = 0
     cache_read_tokens: int = 0
     total_tokens: int = 0
 

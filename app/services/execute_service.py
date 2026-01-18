@@ -392,8 +392,8 @@ class ExecuteService:
         input_tokens = usage_data.get("input_tokens", 0) if usage_data else 0
         output_tokens = usage_data.get("output_tokens", 0) if usage_data else 0
 
-        # キャッシュトークン取得（新旧両方の形式に対応）
-        cache_creation = self._get_cache_creation_tokens(usage_data) if usage_data else 0
+        # キャッシュトークン取得（新旧両方の形式に対応、5分/1時間を分離）
+        cache_5m, cache_1h = self._get_cache_creation_tokens(usage_data) if usage_data else (0, 0)
         cache_read = usage_data.get("cache_read_input_tokens", 0) if usage_data else 0
         total_cost = message.total_cost_usd or 0
         num_turns = message.num_turns
@@ -411,7 +411,8 @@ class ExecuteService:
                 tool_tracker=tool_tracker,
                 main_input_tokens=input_tokens,
                 main_output_tokens=output_tokens,
-                main_cache_creation=cache_creation,
+                main_cache_creation_5m=cache_5m,
+                main_cache_creation_1h=cache_1h,
                 main_cache_read=cache_read,
             )
 
@@ -425,7 +426,8 @@ class ExecuteService:
             model_id=context.request.model_id,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
-            cache_creation_tokens=cache_creation,
+            cache_creation_5m_tokens=cache_5m,
+            cache_creation_1h_tokens=cache_1h,
             cache_read_tokens=cache_read,
             cost_usd=total_cost_decimal,
             session_id=context.session_id,
@@ -437,23 +439,15 @@ class ExecuteService:
             title_event = await self._generate_and_update_title(context)
             events.append(title_event)
 
-        # 使用量オブジェクトを構築（ephemeral cache内訳を含む）
+        # 使用量オブジェクトを構築（5分/1時間キャッシュを分離）
         usage_obj = {
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
-            "cache_creation_tokens": cache_creation,
+            "cache_creation_5m_tokens": cache_5m,
+            "cache_creation_1h_tokens": cache_1h,
             "cache_read_tokens": cache_read,
             "total_tokens": input_tokens + output_tokens,
         }
-
-        # ephemeral cacheの内訳があれば追加
-        if usage_data:
-            cache_creation_detail = usage_data.get("cache_creation")
-            if isinstance(cache_creation_detail, dict):
-                usage_obj["cache_creation"] = {
-                    "ephemeral_1h_input_tokens": cache_creation_detail.get("ephemeral_1h_input_tokens", 0) or 0,
-                    "ephemeral_5m_input_tokens": cache_creation_detail.get("ephemeral_5m_input_tokens", 0) or 0,
-                }
 
         # 結果イベントを追加
         # JSON出力用にコストをフォーマット（科学的記数法を避ける）
@@ -587,7 +581,8 @@ class ExecuteService:
             usage={
                 "input_tokens": 0,
                 "output_tokens": 0,
-                "cache_creation_tokens": 0,
+                "cache_creation_5m_tokens": 0,
+                "cache_creation_1h_tokens": 0,
                 "cache_read_tokens": 0,
                 "total_tokens": 0,
             },
@@ -596,32 +591,33 @@ class ExecuteService:
             duration_ms=duration_ms,
         )
 
-    def _get_cache_creation_tokens(self, usage_data: dict) -> int:
+    def _get_cache_creation_tokens(self, usage_data: dict) -> tuple[int, int]:
         """
-        キャッシュ作成トークン数を取得
+        キャッシュ作成トークン数を取得（5分/1時間を分離）
 
         新旧両方のSDK形式に対応:
-        - 旧形式: cache_creation_input_tokens (int)
-        - 新形式: cache_creation.ephemeral_1h_input_tokens + ephemeral_5m_input_tokens
+        - 旧形式: cache_creation_input_tokens (int) → 全て5分キャッシュとして扱う
+        - 新形式: cache_creation.ephemeral_5m_input_tokens, ephemeral_1h_input_tokens
 
         Args:
             usage_data: SDKからの使用量データ
 
         Returns:
-            キャッシュ作成トークン数の合計
+            (cache_5m_tokens, cache_1h_tokens)
         """
-        # 旧形式をチェック
-        if "cache_creation_input_tokens" in usage_data:
-            return usage_data.get("cache_creation_input_tokens", 0) or 0
+        if not usage_data:
+            return 0, 0
 
         # 新形式をチェック
         cache_creation = usage_data.get("cache_creation")
         if isinstance(cache_creation, dict):
-            ephemeral_1h = cache_creation.get("ephemeral_1h_input_tokens", 0) or 0
             ephemeral_5m = cache_creation.get("ephemeral_5m_input_tokens", 0) or 0
-            return ephemeral_1h + ephemeral_5m
+            ephemeral_1h = cache_creation.get("ephemeral_1h_input_tokens", 0) or 0
+            return ephemeral_5m, ephemeral_1h
 
-        return 0
+        # 旧形式の場合は全て5分キャッシュとして扱う
+        old_format = usage_data.get("cache_creation_input_tokens", 0) or 0
+        return old_format, 0
 
     def _normalize_model_usage(
         self,
@@ -732,7 +728,8 @@ class ExecuteService:
             formatted[model_id] = {
                 "input_tokens": usage["input_tokens"],
                 "output_tokens": usage["output_tokens"],
-                "cache_creation_input_tokens": usage.get("cache_creation_input_tokens", 0),
+                "cache_creation_5m_input_tokens": usage.get("cache_creation_5m_input_tokens", 0),
+                "cache_creation_1h_input_tokens": usage.get("cache_creation_1h_input_tokens", 0),
                 "cache_read_input_tokens": usage.get("cache_read_input_tokens", 0),
                 "cost_usd": self._format_cost_for_json(cost),
             }
@@ -744,7 +741,8 @@ class ExecuteService:
         tool_tracker: ToolTracker,
         main_input_tokens: int,
         main_output_tokens: int,
-        main_cache_creation: int,
+        main_cache_creation_5m: int,
+        main_cache_creation_1h: int,
         main_cache_read: int,
     ) -> dict[str, dict[str, Any]]:
         """
@@ -759,7 +757,8 @@ class ExecuteService:
             tool_tracker: ツールトラッカー
             main_input_tokens: SDK全体の入力トークン数（メイン+サブエージェント）
             main_output_tokens: SDK全体の出力トークン数（メイン+サブエージェント）
-            main_cache_creation: キャッシュ作成トークン数
+            main_cache_creation_5m: 5分キャッシュ作成トークン数
+            main_cache_creation_1h: 1時間キャッシュ作成トークン数
             main_cache_read: キャッシュ読み込みトークン数
 
         Returns:
@@ -785,7 +784,8 @@ class ExecuteService:
         main_cost: Decimal = context.model.calculate_cost(
             main_actual_input,
             main_actual_output,
-            main_cache_creation,
+            main_cache_creation_5m,
+            main_cache_creation_1h,
             main_cache_read,
         )
 
@@ -793,7 +793,8 @@ class ExecuteService:
             main_model_id: {
                 "input_tokens": main_actual_input,
                 "output_tokens": main_actual_output,
-                "cache_creation_input_tokens": main_cache_creation,
+                "cache_creation_5m_input_tokens": main_cache_creation_5m,
+                "cache_creation_1h_input_tokens": main_cache_creation_1h,
                 "cache_read_input_tokens": main_cache_read,
                 "cost_usd": main_cost,  # Decimal
             }
@@ -812,7 +813,8 @@ class ExecuteService:
                 subagent_cost: Decimal = subagent_model.calculate_cost(
                     usage["input_tokens"],
                     usage["output_tokens"],
-                    usage.get("cache_creation_input_tokens", 0),
+                    usage.get("cache_creation_5m_input_tokens", 0),
+                    usage.get("cache_creation_1h_input_tokens", 0),
                     usage.get("cache_read_input_tokens", 0),
                 )
             else:
@@ -827,7 +829,8 @@ class ExecuteService:
                 # 同じモデルの場合はマージ
                 model_usage[model_id]["input_tokens"] += usage["input_tokens"]
                 model_usage[model_id]["output_tokens"] += usage["output_tokens"]
-                model_usage[model_id]["cache_creation_input_tokens"] += usage.get("cache_creation_input_tokens", 0)
+                model_usage[model_id]["cache_creation_5m_input_tokens"] += usage.get("cache_creation_5m_input_tokens", 0)
+                model_usage[model_id]["cache_creation_1h_input_tokens"] += usage.get("cache_creation_1h_input_tokens", 0)
                 model_usage[model_id]["cache_read_input_tokens"] += usage.get("cache_read_input_tokens", 0)
                 # コストはDecimal同士で加算
                 model_usage[model_id]["cost_usd"] += subagent_cost
@@ -836,7 +839,8 @@ class ExecuteService:
                 model_usage[model_id] = {
                     "input_tokens": usage["input_tokens"],
                     "output_tokens": usage["output_tokens"],
-                    "cache_creation_input_tokens": usage.get("cache_creation_input_tokens", 0),
+                    "cache_creation_5m_input_tokens": usage.get("cache_creation_5m_input_tokens", 0),
+                    "cache_creation_1h_input_tokens": usage.get("cache_creation_1h_input_tokens", 0),
                     "cache_read_input_tokens": usage.get("cache_read_input_tokens", 0),
                     "cost_usd": subagent_cost,  # Decimal
                 }

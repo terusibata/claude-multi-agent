@@ -97,6 +97,13 @@ class AWSConfig:
         env = {
             "CLAUDE_CODE_USE_BEDROCK": "1",
             "AWS_REGION": self.region,
+            # モデルエイリアス定義
+            # Claude Code SDK で "sonnet", "haiku" エイリアスが使用された際の解決先
+            "ANTHROPIC_MODEL": settings.anthropic_sonnet_model,
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": settings.anthropic_sonnet_model,
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": settings.anthropic_haiku_model,
+            # サブエージェントが使用するモデルエイリアス
+            "CLAUDE_CODE_SUBAGENT_MODEL": settings.claude_code_subagent_model,
         }
 
         # AWS認証情報を追加（設定されている場合のみ）
@@ -112,6 +119,10 @@ class AWSConfig:
         logger.info(
             "Bedrock環境変数構築完了",
             region=env["AWS_REGION"],
+            model=env["ANTHROPIC_MODEL"],
+            sonnet_model=env["ANTHROPIC_DEFAULT_SONNET_MODEL"],
+            haiku_model=env["ANTHROPIC_DEFAULT_HAIKU_MODEL"],
+            subagent_model=env["CLAUDE_CODE_SUBAGENT_MODEL"],
             has_access_key="AWS_ACCESS_KEY_ID" in env,
             has_secret_key="AWS_SECRET_ACCESS_KEY" in env,
             has_session_token="AWS_SESSION_TOKEN" in env,

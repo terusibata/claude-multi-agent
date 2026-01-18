@@ -29,7 +29,8 @@ class SubagentUsageInfo:
     # 使用量（Task完了時のtool_resultから取得）
     input_tokens: int = 0
     output_tokens: int = 0
-    cache_creation_tokens: int = 0
+    cache_creation_5m_tokens: int = 0  # 5分キャッシュ作成トークン数
+    cache_creation_1h_tokens: int = 0  # 1時間キャッシュ作成トークン数
     cache_read_tokens: int = 0
     total_cost_usd: Decimal = field(default_factory=lambda: Decimal("0"))
     duration_ms: int = 0
@@ -162,6 +163,9 @@ class ToolTracker:
             )
             return None
 
+        # キャッシュ作成トークンを抽出（新旧形式対応）
+        cache_5m, cache_1h = self._extract_cache_creation_tokens(usage)
+
         usage_info = SubagentUsageInfo(
             tool_use_id=tool_use_id,
             agent_type=info["agent_type"],
@@ -172,7 +176,8 @@ class ToolTracker:
             completed_at=datetime.utcnow(),
             input_tokens=usage.get("input_tokens", 0) if usage else 0,
             output_tokens=usage.get("output_tokens", 0) if usage else 0,
-            cache_creation_tokens=usage.get("cache_creation_input_tokens", 0) if usage else 0,
+            cache_creation_5m_tokens=cache_5m,
+            cache_creation_1h_tokens=cache_1h,
             cache_read_tokens=usage.get("cache_read_input_tokens", 0) if usage else 0,
             total_cost_usd=total_cost_usd or Decimal("0"),
             duration_ms=duration_ms or 0,
@@ -187,10 +192,39 @@ class ToolTracker:
             model_id=usage_info.model_id,
             input_tokens=usage_info.input_tokens,
             output_tokens=usage_info.output_tokens,
+            cache_creation_5m_tokens=usage_info.cache_creation_5m_tokens,
+            cache_creation_1h_tokens=usage_info.cache_creation_1h_tokens,
             total_cost_usd=str(usage_info.total_cost_usd),
         )
 
         return usage_info
+
+    def _extract_cache_creation_tokens(self, usage: dict[str, Any] | None) -> tuple[int, int]:
+        """
+        キャッシュ作成トークンを抽出（新旧SDK形式に対応）
+
+        新形式: cache_creation.ephemeral_5m_input_tokens, ephemeral_1h_input_tokens
+        旧形式: cache_creation_input_tokens（全て5分キャッシュとして扱う）
+
+        Args:
+            usage: SDK tool_resultからの使用量データ
+
+        Returns:
+            (cache_5m_tokens, cache_1h_tokens)
+        """
+        if not usage:
+            return 0, 0
+
+        # 新形式をチェック
+        cache_creation = usage.get("cache_creation")
+        if isinstance(cache_creation, dict):
+            ephemeral_5m = cache_creation.get("ephemeral_5m_input_tokens", 0) or 0
+            ephemeral_1h = cache_creation.get("ephemeral_1h_input_tokens", 0) or 0
+            return ephemeral_5m, ephemeral_1h
+
+        # 旧形式の場合は全て5分キャッシュとして扱う
+        old_format = usage.get("cache_creation_input_tokens", 0) or 0
+        return old_format, 0
 
     def get_current_parent_tool_id(self) -> Optional[str]:
         """
@@ -375,7 +409,8 @@ class ToolTracker:
                 "us.anthropic.claude-haiku-4-5-20251001-v1:0": {
                     "input_tokens": 5000,
                     "output_tokens": 1000,
-                    "cache_creation_input_tokens": 0,
+                    "cache_creation_5m_input_tokens": 0,
+                    "cache_creation_1h_input_tokens": 0,
                     "cache_read_input_tokens": 0,
                     "cost_usd": Decimal("0.015"),
                     "subagent_count": 2,
@@ -392,7 +427,8 @@ class ToolTracker:
                 aggregated[model_id] = {
                     "input_tokens": 0,
                     "output_tokens": 0,
-                    "cache_creation_input_tokens": 0,
+                    "cache_creation_5m_input_tokens": 0,
+                    "cache_creation_1h_input_tokens": 0,
                     "cache_read_input_tokens": 0,
                     "cost_usd": Decimal("0"),
                     "subagent_count": 0,
@@ -400,7 +436,8 @@ class ToolTracker:
 
             aggregated[model_id]["input_tokens"] += usage.input_tokens
             aggregated[model_id]["output_tokens"] += usage.output_tokens
-            aggregated[model_id]["cache_creation_input_tokens"] += usage.cache_creation_tokens
+            aggregated[model_id]["cache_creation_5m_input_tokens"] += usage.cache_creation_5m_tokens
+            aggregated[model_id]["cache_creation_1h_input_tokens"] += usage.cache_creation_1h_tokens
             aggregated[model_id]["cache_read_input_tokens"] += usage.cache_read_tokens
             aggregated[model_id]["cost_usd"] += usage.total_cost_usd
             aggregated[model_id]["subagent_count"] += 1
