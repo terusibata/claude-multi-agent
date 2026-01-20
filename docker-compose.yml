@@ -20,6 +20,22 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # Redis（分散ロック、レート制限、キャッシュ用）
+  redis:
+    image: redis:7-alpine
+    container_name: ai-agent-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+
   # AIエージェントバックエンド
   backend:
     build:
@@ -31,6 +47,9 @@ services:
     environment:
       # データベース設定
       DATABASE_URL: postgresql+asyncpg://${DB_USER:-aiagent}:${DB_PASSWORD:-aiagent_password}@db:5432/${DB_NAME:-aiagent}
+
+      # Redis設定
+      REDIS_URL: redis://redis:6379/0
 
       # アプリケーション設定
       APP_ENV: ${APP_ENV:-development}
@@ -45,6 +64,8 @@ services:
       - "${APP_PORT:-8000}:8000"
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     restart: unless-stopped
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
@@ -61,6 +82,7 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://${DB_USER:-aiagent}:${DB_PASSWORD:-aiagent_password}@db:5432/${DB_NAME:-aiagent}
+      REDIS_URL: redis://redis:6379/0
       APP_ENV: production
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       SKILLS_BASE_PATH: /skills
@@ -73,6 +95,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: unless-stopped
     deploy:
       resources:
@@ -82,6 +106,8 @@ services:
 
 volumes:
   postgres_data:
+    driver: local
+  redis_data:
     driver: local
   skills_data:
     driver: local

@@ -27,6 +27,9 @@ python-multipart>=0.0.21
 python-dotenv>=1.2.1
 PyYAML>=6.0.3
 
+# Redis
+redis>=5.0.0
+
 # ロギング
 structlog>=25.5.0
 

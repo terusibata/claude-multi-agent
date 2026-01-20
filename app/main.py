@@ -15,8 +15,21 @@ from fastapi.responses import JSONResponse
 
 from app import __version__
 from app.api import api_router
+from app.api.health import router as health_router
 from app.config import get_settings
 from app.database import close_db
+from app.infrastructure.redis import close_redis_pool
+from app.middleware.auth import AuthMiddleware
+from app.middleware.rate_limit import RateLimitMiddleware
+from app.middleware.security_headers import SecurityHeadersMiddleware
+from app.middleware.tracing import TracingMiddleware
+from app.schemas.error import ErrorCodes, create_error_response
+from app.utils.exceptions import (
+    AppError,
+    NotFoundError,
+    SecurityError,
+    ValidationError,
+)
 
 # 設定読み込み
 settings = get_settings()
@@ -28,9 +41,10 @@ logging.basicConfig(
     level=logging.INFO,
 )
 
-# ログ設定
+# ログ設定（structlog contextvars対応）
 structlog.configure(
     processors=[
+        structlog.contextvars.merge_contextvars,
         structlog.stdlib.filter_by_level,
         structlog.stdlib.add_logger_name,
         structlog.stdlib.add_log_level,
@@ -69,9 +83,23 @@ async def lifespan(app: FastAPI):
         os.environ["AWS_SECRET_ACCESS_KEY"] = settings.aws_secret_access_key
 
     # データベース初期化は Alembic マイグレーションで実施
-    # 開発環境でも本番環境でも、マイグレーションを使用することで一貫性を保つ
-    # 起動前に `alembic upgrade head` を実行してください
     logger.info("データベースマイグレーションは alembic upgrade head で実行してください")
+
+    # セキュリティ設定のログ出力
+    if settings.api_keys_list:
+        logger.info("API認証が有効化されています")
+    else:
+        logger.warning(
+            "API認証が無効化されています",
+            reason="API_KEYSが設定されていません",
+        )
+
+    if settings.rate_limit_enabled:
+        logger.info(
+            "レート制限が有効化されています",
+            requests=settings.rate_limit_requests,
+            period=settings.rate_limit_period,
+        )
 
     logger.info("アプリケーション起動完了", environment=settings.app_env)
 
@@ -80,6 +108,7 @@ async def lifespan(app: FastAPI):
     # 終了時
     logger.info("アプリケーション終了中...")
     await close_db()
+    await close_redis_pool()
     logger.info("アプリケーション終了完了")
 
 
@@ -103,8 +132,8 @@ AWS Bedrock + Claude Agent SDKを利用したマルチテナント対応AIエー
 
 ## 認証
 
-認証・権限管理はフロントエンド側で実施されます。
-APIへのアクセスはテナントID（tenant_id）単位で分離されます。
+APIへのアクセスにはAPIキーが必要です。
+`X-API-Key` ヘッダーまたは `Authorization: Bearer <key>` ヘッダーでAPIキーを送信してください。
     """,
     version=__version__,
     lifespan=lifespan,
@@ -112,80 +141,162 @@ APIへのアクセスはテナントID（tenant_id）単位で分離されます
     redoc_url="/redoc" if settings.is_development else None,
 )
 
-# CORSミドルウェア設定
+# ミドルウェア設定（適用順序は逆順になる点に注意）
+
+# 1. セキュリティヘッダー（最も内側、レスポンス時に最後に適用）
+app.add_middleware(
+    SecurityHeadersMiddleware,
+    enable_hsts=settings.hsts_enabled,
+    hsts_max_age=settings.hsts_max_age,
+)
+
+# 2. CORS（セキュリティヘッダーの外側）
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=settings.cors_methods_list,
+    allow_headers=settings.cors_headers_list,
+    expose_headers=["X-Request-ID", "X-Process-Time", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
+)
+
+# 3. レート制限（CORSの外側）
+app.add_middleware(
+    RateLimitMiddleware,
+    requests_per_window=settings.rate_limit_requests,
+    window_seconds=settings.rate_limit_period,
+)
+
+# 4. API認証（レート制限の外側）
+app.add_middleware(
+    AuthMiddleware,
+    api_keys=settings.api_keys_list,
+)
+
+# 5. リクエストトレーシング（最も外側、リクエスト時に最初に適用）
+app.add_middleware(
+    TracingMiddleware,
+    log_requests=True,
 )
 
 
+def _get_request_id(request: Request) -> str | None:
+    """リクエストIDを取得"""
+    return getattr(request.state, "request_id", None)
+
+
 # エラーハンドラー
-def _serialize_validation_errors(errors: list) -> list:
-    """バリデーションエラーをJSONシリアライズ可能な形式に変換"""
-    serialized = []
-    for error in errors:
-        serialized_error = {
-            "type": error.get("type"),
-            "loc": error.get("loc"),
-            "msg": error.get("msg"),
-        }
-        # ctxにエラーオブジェクトが含まれる場合は文字列化
-        if "ctx" in error and error["ctx"]:
-            ctx = {}
-            for key, value in error["ctx"].items():
-                if isinstance(value, Exception):
-                    ctx[key] = str(value)
-                else:
-                    ctx[key] = value
-            serialized_error["ctx"] = ctx
-        serialized.append(serialized_error)
-    return serialized
+
+@app.exception_handler(NotFoundError)
+async def not_found_error_handler(request: Request, exc: NotFoundError):
+    """リソース未検出エラーハンドラー"""
+    return JSONResponse(
+        status_code=status.HTTP_404_NOT_FOUND,
+        content=create_error_response(
+            code=ErrorCodes.NOT_FOUND,
+            message=exc.message,
+            details=[{"field": exc.resource_type, "message": exc.message}],
+            request_id=_get_request_id(request),
+        ),
+    )
+
+
+@app.exception_handler(ValidationError)
+async def validation_error_handler(request: Request, exc: ValidationError):
+    """バリデーションエラーハンドラー"""
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content=create_error_response(
+            code=ErrorCodes.VALIDATION_ERROR,
+            message=exc.message,
+            details=[{"field": exc.field, "message": exc.message}],
+            request_id=_get_request_id(request),
+        ),
+    )
+
+
+@app.exception_handler(SecurityError)
+async def security_error_handler(request: Request, exc: SecurityError):
+    """セキュリティエラーハンドラー"""
+    logger.warning(
+        "セキュリティエラー",
+        error_code=exc.error_code,
+        details=exc.details,
+    )
+    return JSONResponse(
+        status_code=status.HTTP_403_FORBIDDEN,
+        content=create_error_response(
+            code=exc.error_code,
+            message=exc.message,
+            request_id=_get_request_id(request),
+        ),
+    )
+
+
+@app.exception_handler(AppError)
+async def app_error_handler(request: Request, exc: AppError):
+    """アプリケーションエラーハンドラー"""
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content=create_error_response(
+            code=exc.error_code,
+            message=exc.message,
+            request_id=_get_request_id(request),
+        ),
+    )
 
 
 @app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    """バリデーションエラーハンドラー"""
-    serialized_errors = _serialize_validation_errors(exc.errors())
-    logger.warning("バリデーションエラー", errors=serialized_errors, path=request.url.path)
+async def request_validation_error_handler(request: Request, exc: RequestValidationError):
+    """リクエストバリデーションエラーハンドラー"""
+    details = []
+    for error in exc.errors():
+        loc = error.get("loc", [])
+        field = ".".join(str(l) for l in loc) if loc else "unknown"
+        details.append({
+            "field": field,
+            "message": error.get("msg", "Invalid value"),
+            "code": error.get("type"),
+        })
+
+    logger.warning(
+        "バリデーションエラー",
+        errors=details,
+        path=request.url.path,
+    )
+
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content={
-            "detail": "入力データが不正です",
-            "errors": serialized_errors,
-        },
+        content=create_error_response(
+            code=ErrorCodes.VALIDATION_ERROR,
+            message="入力データが不正です",
+            details=details,
+            request_id=_get_request_id(request),
+        ),
     )
 
 
 @app.exception_handler(Exception)
 async def general_exception_handler(request: Request, exc: Exception):
     """一般エラーハンドラー"""
-    logger.error("内部エラー", error=str(exc), path=request.url.path)
+    logger.error(
+        "内部エラー",
+        error=str(exc),
+        error_type=type(exc).__name__,
+        path=request.url.path,
+        exc_info=True,
+    )
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={
-            "detail": "内部サーバーエラーが発生しました",
-        },
+        content=create_error_response(
+            code=ErrorCodes.INTERNAL_ERROR,
+            message="内部サーバーエラーが発生しました",
+            request_id=_get_request_id(request),
+        ),
     )
 
 
-# ヘルスチェックエンドポイント
-@app.get("/health", tags=["ヘルスチェック"])
-async def health_check():
-    """
-    ヘルスチェック
-
-    サーバーの稼働状態を確認します。
-    """
-    return {
-        "status": "healthy",
-        "version": __version__,
-        "environment": settings.app_env,
-    }
-
-
+# ルートエンドポイント
 @app.get("/", tags=["ルート"])
 async def root():
     """
@@ -199,6 +310,9 @@ async def root():
         "docs_url": "/docs" if settings.is_development else None,
     }
 
+
+# ヘルスチェックルーターを登録（ルートレベル）
+app.include_router(health_router)
 
 # APIルーターを登録
 app.include_router(api_router, prefix="/api")

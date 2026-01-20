@@ -31,7 +31,7 @@ from app.services.skill_service import SkillService
 from app.services.usage_service import UsageService
 from app.services.workspace_service import WorkspaceService
 from app.utils.log_sanitizer import sanitize_sdk_options
-from app.utils.conversation_lock import (
+from app.infrastructure.distributed_lock import (
     ConversationLockError,
     get_conversation_lock_manager,
 )
