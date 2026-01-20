@@ -31,11 +31,67 @@ http://localhost:8000/api
 
 ```json
 {
-  "detail": "エラーメッセージ"
+  "error": {
+    "code": "ERROR_CODE",
+    "message": "エラーメッセージ",
+    "details": [...],
+    "request_id": "550e8400-e29b-41d4-a716-446655440000",
+    "timestamp": "2024-01-15T10:30:00Z"
+  }
 }
 ```
 
 ## 共通仕様
+
+### 認証
+
+APIへのアクセスには認証が必要です。以下のいずれかの方法でAPIキーを送信してください：
+
+```bash
+# X-API-Key ヘッダー（推奨）
+curl -H "X-API-Key: your-api-key" http://localhost:8000/api/tenants
+
+# Authorization ヘッダー
+curl -H "Authorization: Bearer your-api-key" http://localhost:8000/api/tenants
+```
+
+認証が不要なエンドポイント: `/`, `/health`, `/health/live`, `/health/ready`
+
+詳細は [security.md](./security.md) を参照してください。
+
+### レート制限
+
+ユーザー単位でのレート制限が適用されます。
+
+**必要なヘッダー:**
+
+| ヘッダー | 説明 |
+|----------|------|
+| `X-Tenant-ID` | テナントID |
+| `X-User-ID` | ユーザーID |
+
+**レスポンスヘッダー:**
+
+| ヘッダー | 説明 |
+|----------|------|
+| `X-RateLimit-Limit` | ウィンドウあたりの上限 |
+| `X-RateLimit-Remaining` | 残りリクエスト数 |
+| `X-RateLimit-Reset` | リセット時刻（Unix timestamp） |
+
+制限超過時は `429 Too Many Requests` が返されます。
+
+### リクエストトレーシング
+
+すべてのリクエストに `X-Request-ID` が付与されます。障害調査時に使用してください。
+
+```bash
+# リクエスト時にIDを指定可能
+curl -H "X-Request-ID: my-trace-id" http://localhost:8000/api/tenants
+
+# レスポンスヘッダーで確認
+# X-Request-ID: my-trace-id
+# X-Process-Time: 0.0234
+```
 
 ### テナントID
 

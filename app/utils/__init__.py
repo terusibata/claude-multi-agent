@@ -34,9 +34,9 @@ from app.utils.security import (
     validate_slash_command,
     validate_tenant_id,
 )
-from app.utils.conversation_lock import (
+from app.infrastructure.distributed_lock import (
     ConversationLockError,
-    ConversationLockManager,
+    DistributedLockManager as ConversationLockManager,
     get_conversation_lock_manager,
 )
 from app.utils.repository import BaseRepository
