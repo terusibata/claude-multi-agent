@@ -2,7 +2,7 @@
 レート制限ミドルウェア
 
 Redisベースのスライディングウィンドウアルゴリズムによるレート制限
-ユーザー単位 + テナント単位の階層的レート制限
+ユーザー単位での制限を実装（攻撃対策用）
 """
 import time
 from typing import Callable
@@ -23,10 +23,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     """
     レート制限ミドルウェア
 
-    階層的なレート制限を実装:
-    1. ユーザー単位: 個人の乱用防止（固定値）
-    2. テナント単位: テナント全体の制限（DB設定値 or デフォルト）
-    3. IP単位: ヘッダーがない場合のフォールバック
+    ユーザー単位でのレート制限を実装:
+    - X-User-ID + X-Tenant-ID: ユーザー単位で制限
+    - ヘッダーなし: IP単位で制限（フォールバック）
 
     攻撃対策用のため、正常利用では引っかからない緩めの設定を推奨
     """
@@ -85,42 +84,46 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         Args:
             app: FastAPIアプリケーション
-            requests_per_window: ユーザー単位のウィンドウあたり最大リクエスト数
+            requests_per_window: ウィンドウあたりの最大リクエスト数
             window_seconds: ウィンドウのサイズ（秒）
             key_prefix: Redisキーのプレフィックス
         """
         super().__init__(app)
-        self.user_requests_per_window = requests_per_window
+        self.requests_per_window = requests_per_window
         self.window_seconds = window_seconds
         self.key_prefix = key_prefix
         self.enabled = settings.rate_limit_enabled
 
-        # テナント単位のデフォルト制限（ユーザー制限の30倍程度）
-        self.tenant_requests_per_window = requests_per_window * 30
-
         if not self.enabled:
             logger.info("レート制限が無効化されています")
 
-    def _get_identifiers(self, request: Request) -> tuple[str | None, str | None, str]:
+    def _get_rate_limit_key(self, request: Request) -> str:
         """
-        クライアント識別子を取得
+        レート制限キーを取得
 
-        Returns:
-            (user_id, tenant_id, ip_address)
+        優先順位:
+        1. X-User-ID + X-Tenant-ID（ユーザー単位）
+        2. X-Forwarded-For（プロキシ経由のIP）
+        3. クライアントIP
         """
         user_id = request.headers.get("X-User-ID")
         tenant_id = request.headers.get("X-Tenant-ID")
 
-        # IPアドレス取得
+        # ユーザーIDとテナントIDがあればユーザー単位で制限
+        if user_id and tenant_id:
+            return f"{self.key_prefix}user:{tenant_id}:{user_id}"
+
+        # X-Forwarded-For（最初のIPを使用）
         forwarded_for = request.headers.get("X-Forwarded-For")
         if forwarded_for:
-            ip_address = forwarded_for.split(",")[0].strip()
-        elif request.client:
-            ip_address = request.client.host
-        else:
-            ip_address = "unknown"
+            client_ip = forwarded_for.split(",")[0].strip()
+            return f"{self.key_prefix}ip:{client_ip}"
 
-        return user_id, tenant_id, ip_address
+        # 直接接続のクライアントIP
+        if request.client:
+            return f"{self.key_prefix}ip:{request.client.host}"
+
+        return f"{self.key_prefix}ip:unknown"
 
     def _should_skip_rate_limit(self, path: str) -> bool:
         """レート制限をスキップすべきパスか判定"""
@@ -129,14 +132,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     async def _check_rate_limit(
         self,
         key: str,
-        limit: int,
     ) -> tuple[bool, int, int]:
         """
         レート制限をチェック
-
-        Args:
-            key: Redisキー
-            limit: リクエスト上限
 
         Returns:
             (allowed: bool, remaining: int, retry_after: int)
@@ -151,7 +149,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                     key,
                     now,
                     self.window_seconds,
-                    limit,
+                    self.requests_per_window,
                 )
 
                 allowed = result[0] == 1
@@ -163,7 +161,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         except Exception as e:
             # Redisエラー時は通過を許可（フェイルオープン）
             logger.error("レート制限チェック失敗", error=str(e))
-            return True, limit, 0
+            return True, self.requests_per_window, 0
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         """リクエストを処理"""
@@ -175,42 +173,16 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if self._should_skip_rate_limit(request.url.path):
             return await call_next(request)
 
-        # 識別子を取得
-        user_id, tenant_id, ip_address = self._get_identifiers(request)
-
-        # 使用する制限値とキーを決定
-        rate_limit_key: str
-        rate_limit_value: int
-        limit_type: str
-
-        if user_id and tenant_id:
-            # ユーザー単位の制限を適用（最も細かい粒度）
-            rate_limit_key = f"{self.key_prefix}user:{tenant_id}:{user_id}"
-            rate_limit_value = self.user_requests_per_window
-            limit_type = "user"
-        elif tenant_id:
-            # テナント単位の制限を適用
-            rate_limit_key = f"{self.key_prefix}tenant:{tenant_id}"
-            rate_limit_value = self.tenant_requests_per_window
-            limit_type = "tenant"
-        else:
-            # IP単位の制限を適用（フォールバック）
-            rate_limit_key = f"{self.key_prefix}ip:{ip_address}"
-            rate_limit_value = self.user_requests_per_window
-            limit_type = "ip"
+        # レート制限キーを取得
+        rate_limit_key = self._get_rate_limit_key(request)
 
         # レート制限チェック
-        allowed, remaining, retry_after = await self._check_rate_limit(
-            rate_limit_key, rate_limit_value
-        )
+        allowed, remaining, retry_after = await self._check_rate_limit(rate_limit_key)
 
         if not allowed:
             logger.warning(
                 "レート制限超過",
-                limit_type=limit_type,
-                user_id=user_id,
-                tenant_id=tenant_id,
-                ip_address=ip_address,
+                rate_limit_key=rate_limit_key,
                 path=request.url.path,
                 retry_after=retry_after,
             )
@@ -225,7 +197,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 },
                 headers={
                     "Retry-After": str(retry_after),
-                    "X-RateLimit-Limit": str(rate_limit_value),
+                    "X-RateLimit-Limit": str(self.requests_per_window),
                     "X-RateLimit-Remaining": "0",
                     "X-RateLimit-Reset": str(int(time.time()) + retry_after),
                 },
@@ -235,7 +207,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
 
         # レート制限ヘッダーを追加
-        response.headers["X-RateLimit-Limit"] = str(rate_limit_value)
+        response.headers["X-RateLimit-Limit"] = str(self.requests_per_window)
         response.headers["X-RateLimit-Remaining"] = str(remaining)
         response.headers["X-RateLimit-Reset"] = str(
             int(time.time()) + self.window_seconds
