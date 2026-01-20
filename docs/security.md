@@ -74,11 +74,44 @@ API_KEYS=key1,key2,key3
 - 本番環境では必ず`API_KEYS`を設定してください
 - APIキーはタイミング攻撃に対して安全なハッシュ比較を使用しています
 
+## 識別ヘッダー
+
+APIの種類に応じて、以下のヘッダーを使用してリクエスト元を識別します。
+
+### AI実行系API（一般ユーザー向け）
+
+会話作成、エージェント実行、ワークスペース操作などのAI実行系APIは、一般ユーザーがアクセスします。
+
+| ヘッダー | 必須 | 説明 |
+|----------|------|------|
+| `X-Tenant-ID` | ✓ | テナント識別子 |
+| `X-User-ID` | ✓ | ユーザー識別子 |
+
+**対象パス:**
+- `/api/tenants/{tenant_id}/conversations/**` - 会話関連
+- `/api/tenants/{tenant_id}/conversations/{id}/files/**` - ワークスペース関連
+
+### 管理系API（管理者向け）
+
+テナント管理、モデル管理、スキル管理などの管理系APIは、管理者アカウントがアクセスします。
+
+| ヘッダー | 必須 | 説明 |
+|----------|------|------|
+| `X-Admin-ID` | ✓ | 管理者識別子 |
+
+**対象パス:**
+- `/api/tenants` - テナント管理
+- `/api/models` - モデル管理
+- `/api/tenants/{tenant_id}/skills` - スキル管理
+- `/api/tenants/{tenant_id}/mcp-servers` - MCPサーバー管理
+- `/api/tenants/{tenant_id}/usage` - 使用状況
+
 ## レート制限
 
 ### 概要
 
-攻撃対策用のレート制限です。正常利用では引っかからない緩めの設定を推奨します。
+攻撃対策用のレート制限です。**AI実行系API（一般ユーザー向け）のみ**に適用されます。
+管理系APIは管理者アカウントからのアクセスのため、レート制限は適用されません。
 
 ### 制限ロジック
 
@@ -98,7 +131,7 @@ RATE_LIMIT_PERIOD=60     # ウィンドウサイズ（秒）
 
 ### レスポンスヘッダー
 
-すべてのレスポンスに以下のヘッダーが付与されます：
+AI実行系APIのレスポンスに以下のヘッダーが付与されます：
 
 | ヘッダー | 説明 |
 |----------|------|
@@ -120,7 +153,9 @@ RATE_LIMIT_PERIOD=60     # ウィンドウサイズ（秒）
 
 HTTPステータス: `429 Too Many Requests`
 
-### フロントエンドからの呼び出し例
+### 呼び出し例
+
+**AI実行系API（一般ユーザー）:**
 
 ```bash
 curl -X POST http://localhost:8000/api/tenants/xxx/conversations/yyy/stream \
@@ -129,6 +164,14 @@ curl -X POST http://localhost:8000/api/tenants/xxx/conversations/yyy/stream \
   -H "X-User-ID: user-456" \
   -H "Content-Type: application/json" \
   -d '{"user_input": "Hello"}'
+```
+
+**管理系API（管理者）:**
+
+```bash
+curl http://localhost:8000/api/tenants \
+  -H "X-API-Key: your-api-key" \
+  -H "X-Admin-ID: admin-789"
 ```
 
 ## セキュリティヘッダー
@@ -227,7 +270,7 @@ REDIS_MAX_CONNECTIONS=20
 |--------|-----------|------|
 | `CORS_ORIGINS` | `http://localhost:3000,http://localhost:3001` | 許可するオリジン |
 | `CORS_METHODS` | `GET,POST,PUT,DELETE,OPTIONS` | 許可するメソッド |
-| `CORS_HEADERS` | `Content-Type,Authorization,X-API-Key,X-Request-ID,X-Tenant-ID` | 許可するヘッダー |
+| `CORS_HEADERS` | `Content-Type,Authorization,X-API-Key,X-Request-ID,X-Tenant-ID,X-User-ID,X-Admin-ID` | 許可するヘッダー |
 
 ### Redis関連
 

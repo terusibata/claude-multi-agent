@@ -74,10 +74,19 @@ class TracingMiddleware(BaseHTTPMiddleware):
             path=request.url.path,
         )
 
-        # テナントIDがあればコンテキストに追加
+        # ヘッダーから識別情報を取得してコンテキストに追加
+        # AI実行系API用: X-Tenant-ID + X-User-ID
         tenant_id = request.headers.get("X-Tenant-ID")
+        user_id = request.headers.get("X-User-ID")
+        # 管理系API用: X-Admin-ID
+        admin_id = request.headers.get("X-Admin-ID")
+
         if tenant_id:
             bind_contextvars(tenant_id=tenant_id)
+        if user_id:
+            bind_contextvars(user_id=user_id)
+        if admin_id:
+            bind_contextvars(admin_id=admin_id)
 
         # リクエストをstateに保存（他のハンドラから参照可能）
         request.state.request_id = request_id

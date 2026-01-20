@@ -2,8 +2,9 @@
 レート制限ミドルウェア
 
 Redisベースのスライディングウィンドウアルゴリズムによるレート制限
-ユーザー単位での制限を実装（攻撃対策用）
+AI実行系API（一般ユーザー向け）のみに適用
 """
+import re
 import time
 from typing import Callable
 
@@ -23,15 +24,20 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     """
     レート制限ミドルウェア
 
-    ユーザー単位でのレート制限を実装:
-    - X-User-ID + X-Tenant-ID: ユーザー単位で制限
-    - ヘッダーなし: IP単位で制限（フォールバック）
+    AI実行系API（一般ユーザー向け）のみにレート制限を適用:
+    - 会話関連: /api/tenants/{tenant_id}/conversations/**
+    - ワークスペース関連: /api/tenants/{tenant_id}/conversations/{id}/files/**
 
-    攻撃対策用のため、正常利用では引っかからない緩めの設定を推奨
+    管理系API（管理者向け）はレート制限をスキップ:
+    - テナント管理: /api/tenants
+    - モデル管理: /api/models
+    - スキル管理: /api/tenants/{tenant_id}/skills
+    - MCPサーバー管理: /api/tenants/{tenant_id}/mcp-servers
+    - 使用状況: /api/tenants/{tenant_id}/usage
     """
 
-    # レート制限をスキップするパス
-    SKIP_RATE_LIMIT_PATHS = {
+    # レート制限を常にスキップするパス
+    ALWAYS_SKIP_PATHS = {
         "/",
         "/health",
         "/health/live",
@@ -41,8 +47,16 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         "/openapi.json",
     }
 
+    # レート制限を適用するパスパターン（正規表現）
+    # AI実行系API（一般ユーザー向け）
+    RATE_LIMITED_PATTERNS = [
+        # 会話関連（作成、一覧、詳細、メッセージ、ストリーミング）
+        re.compile(r"^/api/tenants/[^/]+/conversations(?:/[^/]+)?(?:/messages|/stream)?$"),
+        # ワークスペース関連（ファイル操作）
+        re.compile(r"^/api/tenants/[^/]+/conversations/[^/]+/files(?:/.*)?$"),
+    ]
+
     # Luaスクリプト: スライディングウィンドウカウンター
-    # アトミックな操作でレート制限を実装
     RATE_LIMIT_SCRIPT = """
     local key = KEYS[1]
     local now = tonumber(ARGV[1])
@@ -101,10 +115,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         """
         レート制限キーを取得
 
-        優先順位:
-        1. X-User-ID + X-Tenant-ID（ユーザー単位）
-        2. X-Forwarded-For（プロキシ経由のIP）
-        3. クライアントIP
+        AI実行系APIはユーザー単位で制限:
+        - X-User-ID + X-Tenant-ID: ユーザー単位（必須）
+        - ヘッダーなし: IP単位（フォールバック）
         """
         user_id = request.headers.get("X-User-ID")
         tenant_id = request.headers.get("X-Tenant-ID")
@@ -113,21 +126,36 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if user_id and tenant_id:
             return f"{self.key_prefix}user:{tenant_id}:{user_id}"
 
-        # X-Forwarded-For（最初のIPを使用）
+        # フォールバック: IP単位
         forwarded_for = request.headers.get("X-Forwarded-For")
         if forwarded_for:
             client_ip = forwarded_for.split(",")[0].strip()
             return f"{self.key_prefix}ip:{client_ip}"
 
-        # 直接接続のクライアントIP
         if request.client:
             return f"{self.key_prefix}ip:{request.client.host}"
 
         return f"{self.key_prefix}ip:unknown"
 
-    def _should_skip_rate_limit(self, path: str) -> bool:
-        """レート制限をスキップすべきパスか判定"""
-        return path in self.SKIP_RATE_LIMIT_PATHS
+    def _should_apply_rate_limit(self, path: str) -> bool:
+        """
+        レート制限を適用すべきパスか判定
+
+        Returns:
+            True: レート制限を適用
+            False: レート制限をスキップ
+        """
+        # 常にスキップするパス
+        if path in self.ALWAYS_SKIP_PATHS:
+            return False
+
+        # AI実行系パターンにマッチするか確認
+        for pattern in self.RATE_LIMITED_PATTERNS:
+            if pattern.match(path):
+                return True
+
+        # それ以外（管理系API）はスキップ
+        return False
 
     async def _check_rate_limit(
         self,
@@ -169,8 +197,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if not self.enabled:
             return await call_next(request)
 
-        # スキップパスのチェック
-        if self._should_skip_rate_limit(request.url.path):
+        # レート制限を適用すべきか判定
+        if not self._should_apply_rate_limit(request.url.path):
             return await call_next(request)
 
         # レート制限キーを取得
