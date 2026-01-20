@@ -166,16 +166,26 @@ curl -H "X-API-Key: your-api-key" http://localhost:8000/api/tenants
 curl -H "Authorization: Bearer your-api-key" http://localhost:8000/api/tenants
 ```
 
-### レート制限
+### 識別ヘッダー
 
-ユーザー単位でのレート制限（攻撃対策用）
+APIの種類に応じて、適切なヘッダーを送信してください。
 
 ```bash
-# 必要なヘッダー
-curl -H "X-Tenant-ID: tenant-123" \
+# AI実行系API（一般ユーザー向け）- 会話、ワークスペース操作
+curl -H "X-API-Key: your-api-key" \
+     -H "X-Tenant-ID: tenant-123" \
      -H "X-User-ID: user-456" \
+     http://localhost:8000/api/tenants/xxx/conversations
+
+# 管理系API（管理者向け）- テナント、モデル、スキル管理
+curl -H "X-API-Key: your-api-key" \
+     -H "X-Admin-ID: admin-789" \
      http://localhost:8000/api/tenants
 ```
+
+### レート制限
+
+AI実行系API（一般ユーザー向け）のみにレート制限が適用されます。管理系APIは対象外です。
 
 ### セキュリティヘッダー
 

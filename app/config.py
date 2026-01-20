@@ -85,7 +85,9 @@ class Settings(BaseSettings):
     cors_methods: str = "GET,POST,PUT,DELETE,OPTIONS"
 
     # CORS許可ヘッダー（カンマ区切り）
-    cors_headers: str = "Content-Type,Authorization,X-API-Key,X-Request-ID,X-Tenant-ID"
+    # X-User-ID, X-Tenant-ID: AI実行系API用（一般ユーザー）
+    # X-Admin-ID: 管理系API用（管理者）
+    cors_headers: str = "Content-Type,Authorization,X-API-Key,X-Request-ID,X-Tenant-ID,X-User-ID,X-Admin-ID"
 
     # API認証キー（カンマ区切りで複数指定可能）
     # 空の場合は認証が無効化される（開発環境用）
