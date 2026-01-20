@@ -223,7 +223,7 @@ Extended Thinking（思考プロセス）イベント。
 
 ### progress イベント
 
-統合型の進捗イベント。複数のタイプ（thinking, generating, tool, turn）を1つのイベント形式で通知します。
+統合型の進捗イベント。複数のタイプ（thinking, generating, tool）を1つのイベント形式で通知します。
 
 #### thinking（思考中）
 
@@ -276,22 +276,6 @@ Extended Thinking（思考プロセス）イベント。
 - `running`: 実行中
 - `completed`: 完了
 - `error`: エラー
-
-#### turn（ターン進捗）
-
-```json
-{
-  "event": "progress",
-  "data": {
-    "seq": 10,
-    "timestamp": "2024-01-01T00:00:00.000000Z",
-    "type": "turn",
-    "message": "ターン 2 / 10",
-    "turn": 2,
-    "max_turns": 10
-  }
-}
-```
 
 ### title イベント
 
@@ -421,49 +405,43 @@ Client                          Server
   |  event: init                  |  (seq: 1)
   |<------------------------------|
   |                               |
-  |  event: progress              |  (seq: 2, type: "turn")
+  |  event: progress              |  (seq: 2, type: "thinking")
   |<------------------------------|
   |                               |
-  |  event: progress              |  (seq: 3, type: "thinking")
+  |  event: thinking              |  (seq: 3)
   |<------------------------------|
   |                               |
-  |  event: thinking              |  (seq: 4)
+  |  event: progress              |  (seq: 4, type: "generating")
   |<------------------------------|
   |                               |
-  |  event: progress              |  (seq: 5, type: "generating")
+  |  event: assistant             |  (seq: 5, text)
   |<------------------------------|
   |                               |
-  |  event: assistant             |  (seq: 6, text)
+  |  event: progress              |  (seq: 6, type: "tool", status: "pending")
   |<------------------------------|
   |                               |
-  |  event: progress              |  (seq: 7, type: "tool", status: "pending")
+  |  event: tool_call             |  (seq: 7)
   |<------------------------------|
   |                               |
-  |  event: tool_call             |  (seq: 8)
-  |<------------------------------|
-  |                               |
-  |  event: progress              |  (seq: 9, type: "tool", status: "running")
+  |  event: progress              |  (seq: 8, type: "tool", status: "running")
   |<------------------------------|
   |                               |
   |  event: ping                  |  (seq: 0, heartbeat)
   |<------------------------------|
   |                               |
-  |  event: progress              |  (seq: 10, type: "tool", status: "completed")
+  |  event: progress              |  (seq: 9, type: "tool", status: "completed")
   |<------------------------------|
   |                               |
-  |  event: tool_result           |  (seq: 11)
+  |  event: tool_result           |  (seq: 10)
   |<------------------------------|
   |                               |
-  |  event: progress              |  (seq: 12, type: "turn")
+  |  event: assistant             |  (seq: 11, text)
   |<------------------------------|
   |                               |
-  |  event: assistant             |  (seq: 13, text)
+  |  event: title                 |  (seq: 12)
   |<------------------------------|
   |                               |
-  |  event: title                 |  (seq: 14)
-  |<------------------------------|
-  |                               |
-  |  event: done                  |  (seq: 15)
+  |  event: done                  |  (seq: 13)
   |<------------------------------|
   |                               |
   |  (connection closed)          |
@@ -608,14 +586,12 @@ export interface SubagentEndEvent {
 // progress イベント
 // ==========================================
 
-export type ProgressType = 'thinking' | 'generating' | 'tool' | 'turn';
+export type ProgressType = 'thinking' | 'generating' | 'tool';
 export type ToolProgressStatus = 'pending' | 'running' | 'completed' | 'error';
 
 export interface ProgressEventData extends BaseEventData {
   type: ProgressType;
   message: string;
-  turn?: number;
-  max_turns?: number;
   tool_use_id?: string;
   tool_name?: string;
   tool_status?: ToolProgressStatus;
@@ -836,8 +812,6 @@ interface StreamingState {
   usage: UsageInfo | null;
   error: string | null;
   status: DoneStatus | null;
-  turn: number;
-  maxTurns: number | null;
   lastSeq: number;
   pendingTools: Map<string, ToolCallEventData>;
 }
@@ -864,8 +838,6 @@ export function useStreaming(tenantId: string, conversationId: string) {
     usage: null,
     error: null,
     status: null,
-    turn: 0,
-    maxTurns: null,
     lastSeq: 0,
     pendingTools: new Map(),
   });
@@ -887,7 +859,6 @@ export function useStreaming(tenantId: string, conversationId: string) {
         currentText: '',
         thinkingText: '',
         status: null,
-        turn: 0,
         lastSeq: 0,
         pendingTools: new Map(),
       }));
@@ -991,7 +962,6 @@ function processEvent(
           ...prev,
           sessionId: data.session_id,
           tools: data.tools,
-          maxTurns: data.max_turns || null,
         }));
         handlers?.onInit?.(data);
         break;
@@ -1035,13 +1005,6 @@ function processEvent(
         break;
 
       case 'progress':
-        if (data.type === 'turn') {
-          setState(prev => ({
-            ...prev,
-            turn: data.turn,
-            maxTurns: data.max_turns || prev.maxTurns,
-          }));
-        }
         handlers?.onProgress?.(data.type, data.message);
         break;
 
@@ -1092,8 +1055,6 @@ export function Chat({ tenantId, conversationId }: { tenantId: string; conversat
     thinkingText,
     usage,
     error,
-    turn,
-    maxTurns,
     pendingTools,
     execute,
     cancel,
@@ -1124,12 +1085,9 @@ export function Chat({ tenantId, conversationId }: { tenantId: string; conversat
   return (
     <div>
       {/* 進捗表示 */}
-      {isStreaming && (
+      {isStreaming && pendingTools.size > 0 && (
         <div className="progress">
-          ターン: {turn}{maxTurns ? ` / ${maxTurns}` : ''}
-          {pendingTools.size > 0 && (
-            <span> | ツール実行中: {pendingTools.size}</span>
-          )}
+          ツール実行中: {pendingTools.size}
         </div>
       )}
 

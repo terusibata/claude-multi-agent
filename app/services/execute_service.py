@@ -296,15 +296,8 @@ class ExecuteService:
                         await self._update_session_id(context)
 
                 elif isinstance(message, AssistantMessage):
-                    # ターン進捗イベントを送信
+                    # ターン番号を内部的に追跡（ログ用）
                     sdk_turn_number += 1
-                    yield format_progress_event(
-                        seq=seq_counter.next(),
-                        progress_type="turn",
-                        message=f"ターン {sdk_turn_number}" + (f" / {max_turns}" if max_turns else ""),
-                        turn=sdk_turn_number,
-                        max_turns=max_turns,
-                    )
 
                     async for event in self._wrap_generator(
                         message_processor.process_assistant_message(
