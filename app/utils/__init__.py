@@ -2,7 +2,23 @@
 ユーティリティモジュール
 共通ユーティリティの公開
 """
-from app.utils.streaming import generate_sse_event, send_sse_event
+from app.utils.streaming import (
+    generate_sse_event,
+    SequenceCounter,
+    format_init_event,
+    format_thinking_event,
+    format_assistant_event,
+    format_tool_call_event,
+    format_tool_result_event,
+    format_subagent_start_event,
+    format_subagent_end_event,
+    format_progress_event,
+    format_title_event,
+    format_ping_event,
+    format_done_event,
+    format_error_event,
+    format_heartbeat_event,  # 後方互換
+)
 from app.utils.tool_summary import generate_tool_result_summary, generate_tool_summary
 from app.utils.exceptions import (
     AppError,
@@ -44,7 +60,20 @@ from app.utils.repository import BaseRepository
 __all__ = [
     # Streaming
     "generate_sse_event",
-    "send_sse_event",
+    "SequenceCounter",
+    "format_init_event",
+    "format_thinking_event",
+    "format_assistant_event",
+    "format_tool_call_event",
+    "format_tool_result_event",
+    "format_subagent_start_event",
+    "format_subagent_end_event",
+    "format_progress_event",
+    "format_title_event",
+    "format_ping_event",
+    "format_done_event",
+    "format_error_event",
+    "format_heartbeat_event",
     "generate_tool_summary",
     "generate_tool_result_summary",
     # Exceptions

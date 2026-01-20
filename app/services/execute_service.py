@@ -1,6 +1,6 @@
 """
 エージェント実行サービス
-Claude Agent SDKを使用したエージェント実行とストリーミング処理
+Claude Agent SDKを使用したエージェント実行とストリーミング処理（v2形式）
 """
 import time
 from datetime import datetime
@@ -36,10 +36,11 @@ from app.infrastructure.distributed_lock import (
     get_conversation_lock_manager,
 )
 from app.utils.streaming import (
+    SequenceCounter,
+    format_done_event,
     format_error_event,
-    format_result_event,
-    format_title_generated_event,
-    format_turn_progress_event,
+    format_progress_event,
+    format_title_event,
 )
 
 settings = get_settings()
@@ -98,6 +99,9 @@ class ExecuteService:
         # ツールトラッカーを初期化
         tool_tracker = ToolTracker()
 
+        # シーケンス番号カウンターを初期化
+        seq_counter = SequenceCounter()
+
         # 会話ロックを取得
         lock_manager = get_conversation_lock_manager()
         try:
@@ -109,10 +113,12 @@ class ExecuteService:
                 error=str(e),
             )
             yield format_error_event(
-                f"会話は現在使用中です。しばらくしてから再試行してください。",
-                "conversation_locked",
+                seq=seq_counter.next(),
+                error_type="conversation_locked",
+                message="会話は現在使用中です。しばらくしてから再試行してください。",
+                recoverable=True,
             )
-            yield self._create_error_result(context, [str(e)])
+            yield self._create_error_result(context, [str(e)], seq_counter)
             return
 
         logger.info(
@@ -137,13 +143,13 @@ class ExecuteService:
             )
 
             # SDKインポートと実行
-            async for event in self._execute_with_sdk(context, options, tool_tracker):
+            async for event in self._execute_with_sdk(context, options, tool_tracker, seq_counter):
                 yield event
 
             execution_success = True
 
         except Exception as e:
-            for event in self._handle_error(e, context, tool_tracker):
+            for event in self._handle_error(e, context, tool_tracker, seq_counter):
                 yield event
 
         finally:
@@ -188,6 +194,7 @@ class ExecuteService:
         context: ExecutionContext,
         options: dict,
         tool_tracker: ToolTracker,
+        seq_counter: SequenceCounter,
     ) -> AsyncGenerator[dict, None]:
         """SDKを使用して実行"""
         logger.info("Claude Agent SDK インポート中...")
@@ -208,17 +215,24 @@ class ExecuteService:
             logger.info("Claude Agent SDK インポート成功")
         except ImportError as e:
             yield format_error_event(
-                f"Claude Agent SDKがインストールされていません: {str(e)}",
-                "sdk_not_installed",
+                seq=seq_counter.next(),
+                error_type="sdk_not_installed",
+                message=f"Claude Agent SDKがインストールされていません: {str(e)}",
+                recoverable=False,
             )
-            yield self._create_error_result(context, [str(e)])
+            yield self._create_error_result(context, [str(e)], seq_counter)
             return
 
         # サブエージェント用モデルのバリデーション
         validation_error = await self._validate_subagent_models()
         if validation_error:
-            yield format_error_event(validation_error, "model_validation_error")
-            yield self._create_error_result(context, [validation_error])
+            yield format_error_event(
+                seq=seq_counter.next(),
+                error_type="model_validation_error",
+                message=validation_error,
+                recoverable=False,
+            )
+            yield self._create_error_result(context, [validation_error], seq_counter)
             return
 
         # オプション構築
@@ -228,16 +242,19 @@ class ExecuteService:
         except Exception as e:
             logger.error("ClaudeAgentOptions 構築エラー", error=str(e), exc_info=True)
             yield format_error_event(
-                f"SDK options構築エラー: {str(e)}", "options_error"
+                seq=seq_counter.next(),
+                error_type="options_error",
+                message=f"SDK options構築エラー: {str(e)}",
+                recoverable=False,
             )
-            yield self._create_error_result(context, [str(e)])
+            yield self._create_error_result(context, [str(e)], seq_counter)
             return
 
         # ユーザーメッセージを保存
         await self._save_user_message(context)
 
         # メッセージプロセッサを初期化
-        message_processor = MessageProcessor(context, tool_tracker, settings)
+        message_processor = MessageProcessor(context, tool_tracker, settings, seq_counter)
 
         # SDK実行
         logger.info(
@@ -270,7 +287,7 @@ class ExecuteService:
                 # メッセージタイプ別処理
                 if isinstance(message, SystemMessage):
                     async for event in self._wrap_generator(
-                        message_processor.process_system_message(message, log_entry)
+                        message_processor.process_system_message(message, log_entry, max_turns)
                     ):
                         yield event
 
@@ -281,8 +298,11 @@ class ExecuteService:
                 elif isinstance(message, AssistantMessage):
                     # ターン進捗イベントを送信
                     sdk_turn_number += 1
-                    yield format_turn_progress_event(
-                        current_turn=sdk_turn_number,
+                    yield format_progress_event(
+                        seq=seq_counter.next(),
+                        progress_type="turn",
+                        message=f"ターン {sdk_turn_number}" + (f" / {max_turns}" if max_turns else ""),
+                        turn=sdk_turn_number,
                         max_turns=max_turns,
                     )
 
@@ -308,7 +328,7 @@ class ExecuteService:
                         await self._sync_workspace_after_execution(context)
 
                     result_events = await self._handle_result_message(
-                        message, context, tool_tracker, log_entry
+                        message, context, tool_tracker, log_entry, seq_counter
                     )
                     for event in result_events:
                         yield event
@@ -366,6 +386,7 @@ class ExecuteService:
         context: ExecutionContext,
         tool_tracker: ToolTracker,
         log_entry: MessageLogEntry,
+        seq_counter: SequenceCounter,
     ) -> list[dict]:
         """
         結果メッセージを処理
@@ -440,7 +461,7 @@ class ExecuteService:
 
         # タイトル生成
         if context.turn_number == 1 and context.assistant_text and subtype == "success":
-            title_event = await self._generate_and_update_title(context)
+            title_event = await self._generate_and_update_title(context, seq_counter)
             events.append(title_event)
 
         # 使用量オブジェクトを構築（5分/1時間キャッシュを分離）
@@ -458,25 +479,30 @@ class ExecuteService:
         total_cost_formatted = self._format_cost_for_json(total_cost_decimal)
         model_usage_formatted = self._format_model_usage_for_json(model_usage)
 
-        result_event = format_result_event(
-            subtype=subtype,
+        # ステータスを決定
+        status = "success" if subtype == "success" else "error"
+
+        done_event = format_done_event(
+            seq=seq_counter.next(),
+            status=status,
             result=context.assistant_text if subtype == "success" else None,
             errors=context.errors if context.errors else None,
             usage=usage_obj,
             cost_usd=total_cost_formatted,
-            num_turns=num_turns,
+            turn_count=num_turns,
             duration_ms=duration_ms,
             session_id=context.session_id,
             messages=context.message_logs,
             model_usage=model_usage_formatted,
         )
-        events.append(result_event)
+        events.append(done_event)
 
         return events
 
     async def _generate_and_update_title(
         self,
         context: ExecutionContext,
+        seq_counter: SequenceCounter,
     ) -> dict:
         """タイトル生成と更新"""
         logger.info("初回実行のためタイトル生成中...")
@@ -497,7 +523,7 @@ class ExecuteService:
         )
         logger.info("タイトル更新完了", title=generated_title)
 
-        return format_title_generated_event(generated_title)
+        return format_title_event(seq=seq_counter.next(), title=generated_title)
 
     async def _save_message_log(
         self,
@@ -547,6 +573,7 @@ class ExecuteService:
         error: Exception,
         context: ExecutionContext,
         tool_tracker: ToolTracker,
+        seq_counter: SequenceCounter,
     ):
         """エラーハンドリング"""
         error_message = str(error)
@@ -567,19 +594,26 @@ class ExecuteService:
         else:
             logger.error("エージェント実行エラー", error=error_message, exc_info=True)
 
-        yield format_error_event(error_message, "execution_error")
-        yield self._create_error_result(context, [error_message])
+        yield format_error_event(
+            seq=seq_counter.next(),
+            error_type="execution_error",
+            message=error_message,
+            recoverable=False,
+        )
+        yield self._create_error_result(context, [error_message], seq_counter)
 
     def _create_error_result(
         self,
         context: ExecutionContext,
         errors: list[str],
+        seq_counter: SequenceCounter,
     ) -> dict:
         """エラー結果イベントを生成"""
         duration_ms = int((time.time() - context.start_time) * 1000)
 
-        return format_result_event(
-            subtype="error_during_execution",
+        return format_done_event(
+            seq=seq_counter.next(),
+            status="error",
             result=None,
             errors=errors,
             usage={
@@ -590,8 +624,8 @@ class ExecuteService:
                 "cache_read_tokens": 0,
                 "total_tokens": 0,
             },
-            cost_usd=0,
-            num_turns=0,
+            cost_usd="0",
+            turn_count=0,
             duration_ms=duration_ms,
         )
 

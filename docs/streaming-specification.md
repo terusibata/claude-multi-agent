@@ -1,4 +1,4 @@
-# ストリーミング仕様書
+# ストリーミング仕様書 v2
 
 Claude Multi-Agent のSSE（Server-Sent Events）ストリーミング仕様書です。
 
@@ -6,7 +6,7 @@ Claude Multi-Agent のSSE（Server-Sent Events）ストリーミング仕様書�
 
 - [概要](#概要)
 - [イベントタイプ](#イベントタイプ)
-- [メッセージ形式](#メッセージ形式)
+- [イベント形式](#イベント形式)
 - [フロー図](#フロー図)
 - [Next.js型定義](#nextjs型定義)
 - [クライアント実装例](#クライアント実装例)
@@ -21,375 +21,394 @@ POST /api/tenants/{tenant_id}/conversations/{conversation_id}/stream
 
 ### レスポンス形式
 
-Server-Sent Events (SSE) 形式でストリーミングします。
+Server-Sent Events (SSE) 形式でストリーミングします。全てのイベントに**シーケンス番号（seq）**が付与され、順序保証を提供します。
 
 ```
-event: message
-data: {"type": "system", "subtype": "init", ...}
+event: init
+data: {"seq": 1, "timestamp": "...", "session_id": "...", ...}
 
-event: message
-data: {"type": "assistant", "content_blocks": [...]}
+event: thinking
+data: {"seq": 2, "timestamp": "...", "content": "..."}
 
-event: message
-data: {"type": "result", "subtype": "success", ...}
+event: assistant
+data: {"seq": 3, "timestamp": "...", "content_blocks": [...]}
+
+event: done
+data: {"seq": 99, "timestamp": "...", "status": "success", ...}
 ```
 
 ### 接続特性
 
 - **タイムアウト**: 300秒
 - **バックグラウンド実行**: クライアント切断後も処理は継続
-- **メッセージ順序**: 保証される
-- **ハートビート**: 10秒間隔で送信
+- **メッセージ順序**: `seq`番号で保証される
+- **pingイベント**: 10秒間隔で送信
 
 ## イベントタイプ
 
-### 1. message イベント
+| イベント | 説明 | 送信タイミング |
+|---------|------|--------------|
+| `init` | セッション初期化 | 開始時1回 |
+| `thinking` | Extended Thinking | 思考ブロック受信時 |
+| `assistant` | テキストコンテンツ | アシスタントメッセージ時 |
+| `tool_call` | ツール呼び出し開始 | ツール使用決定時 |
+| `tool_result` | ツール実行結果 | 結果取得時 |
+| `subagent_start` | サブエージェント開始 | Task開始時 |
+| `subagent_end` | サブエージェント終了 | Task完了時 |
+| `progress` | 進捗更新（統合型） | 状態変化時 |
+| `title` | タイトル生成 | 初回実行時 |
+| `ping` | ハートビート | 10秒間隔 |
+| `done` | 完了 | 終了時 |
+| `error` | エラー | エラー発生時 |
 
-メインのメッセージイベント。`type` フィールドで種類を区別します。
+## イベント形式
 
-| type | 説明 |
-|------|------|
-| `system` | システムメッセージ（初期化など） |
-| `assistant` | アシスタントからのメッセージ（テキスト、ツール使用、思考） |
-| `user_result` | ツール実行結果 |
-| `result` | 最終結果 |
+### 共通構造
 
-### 2. error イベント
-
-エラー発生時に送信されます。
-
-### 3. title_generated イベント
-
-初回実行時、タイトルが自動生成された際に送信されます。
-
-### 4. status イベント（リアルタイム進捗）
-
-現在の処理状態を通知します。UIでの進捗表示に使用します。
-
-| state | 説明 |
-|-------|------|
-| `thinking` | 思考中 |
-| `generating` | レスポンス生成中 |
-| `tool_execution` | ツール実行中 |
-| `waiting` | 待機中 |
-
-### 5. heartbeat イベント
-
-接続維持のために定期的に送信されます。10秒間隔で送信されます。
-
-### 6. turn_progress イベント
-
-ターン進捗を通知します。AssistantMessageごとに送信されます。
-
-### 7. tool_progress イベント
-
-ツール実行の進捗を通知します。`parent_tool_use_id`でサブエージェント内のツールを識別できます。
-
-| status | 説明 |
-|--------|------|
-| `pending` | 受付済み |
-| `running` | 実行中 |
-| `completed` | 完了 |
-| `error` | エラー |
-
-**注意**: `status`イベントはメインエージェントのみで送信されます。サブエージェント内では`tool_progress`イベントの`parent_tool_use_id`で親子関係を追跡できます。
-
-### 8. subagent イベント
-
-Taskツールによるサブエージェントの開始/終了を通知します。
-
-## メッセージ形式
-
-### System Message (type: "system")
-
-#### subtype: "init"
-
-セッション初期化メッセージ。
+全てのイベントは以下の共通フィールドを持ちます：
 
 ```json
 {
-  "type": "system",
-  "subtype": "init",
-  "timestamp": "2024-01-01T00:00:00.000000",
+  "seq": 1,
+  "timestamp": "2024-01-01T00:00:00.000000Z"
+}
+```
+
+### init イベント
+
+セッション初期化イベント。
+
+```json
+{
+  "event": "init",
   "data": {
+    "seq": 1,
+    "timestamp": "2024-01-01T00:00:00.000000Z",
     "session_id": "session-uuid-from-sdk",
-    "conversation_id": "conversation-uuid",
     "tools": ["Read", "Write", "Bash", "Glob", "Grep"],
     "model": "Claude Sonnet 4",
-    "tenant_config": {
-      "tenant_id": "tenant-001",
-      "system_prompt_length": 50,
-      "system_prompt_preview": "あなたは親切なアシスタントです。..."
+    "conversation_id": "conversation-uuid",
+    "max_turns": 10
+  }
+}
+```
+
+### thinking イベント
+
+Extended Thinking（思考プロセス）イベント。
+
+```json
+{
+  "event": "thinking",
+  "data": {
+    "seq": 2,
+    "timestamp": "2024-01-01T00:00:00.000000Z",
+    "content": "ユーザーの要求を分析しています...",
+    "parent_agent_id": null
+  }
+}
+```
+
+サブエージェント内の場合：
+
+```json
+{
+  "event": "thinking",
+  "data": {
+    "seq": 15,
+    "timestamp": "2024-01-01T00:00:00.000000Z",
+    "content": "コードベースを分析中...",
+    "parent_agent_id": "task-tool-uuid"
+  }
+}
+```
+
+### assistant イベント
+
+テキストコンテンツイベント。
+
+```json
+{
+  "event": "assistant",
+  "data": {
+    "seq": 3,
+    "timestamp": "2024-01-01T00:00:00.000000Z",
+    "content_blocks": [
+      {
+        "type": "text",
+        "text": "こんにちは！お手伝いします。"
+      }
+    ],
+    "parent_agent_id": null
+  }
+}
+```
+
+### tool_call イベント
+
+ツール呼び出しイベント。
+
+```json
+{
+  "event": "tool_call",
+  "data": {
+    "seq": 4,
+    "timestamp": "2024-01-01T00:00:00.000000Z",
+    "tool_use_id": "tool-use-uuid",
+    "tool_name": "Read",
+    "input": {
+      "file_path": "/path/to/file.py"
     },
-    "model_config": {
-      "model_id": "claude-sonnet-4",
-      "display_name": "Claude Sonnet 4",
-      "bedrock_model_id": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-      "model_region": "us-west-2"
+    "summary": "ファイルを読み取り: file.py",
+    "parent_agent_id": null
+  }
+}
+```
+
+### tool_result イベント
+
+ツール実行結果イベント。
+
+```json
+{
+  "event": "tool_result",
+  "data": {
+    "seq": 6,
+    "timestamp": "2024-01-01T00:00:00.000000Z",
+    "tool_use_id": "tool-use-uuid",
+    "tool_name": "Read",
+    "status": "completed",
+    "content": "ファイルの内容プレビュー...",
+    "is_error": false,
+    "parent_agent_id": null
+  }
+}
+```
+
+### subagent_start イベント
+
+サブエージェント開始イベント。
+
+```json
+{
+  "event": "subagent_start",
+  "data": {
+    "seq": 7,
+    "timestamp": "2024-01-01T00:00:00.000000Z",
+    "agent_id": "task-tool-uuid",
+    "agent_type": "Explore",
+    "description": "コードベースを探索中",
+    "model": "claude-3-5-haiku-20241022"
+  }
+}
+```
+
+### subagent_end イベント
+
+サブエージェント終了イベント。
+
+```json
+{
+  "event": "subagent_end",
+  "data": {
+    "seq": 20,
+    "timestamp": "2024-01-01T00:00:00.000000Z",
+    "agent_id": "task-tool-uuid",
+    "agent_type": "Explore",
+    "status": "completed",
+    "result_preview": "ファイルが見つかりました"
+  }
+}
+```
+
+### progress イベント
+
+統合型の進捗イベント。複数のタイプ（thinking, generating, tool, turn）を1つのイベント形式で通知します。
+
+#### thinking（思考中）
+
+```json
+{
+  "event": "progress",
+  "data": {
+    "seq": 2,
+    "timestamp": "2024-01-01T00:00:00.000000Z",
+    "type": "thinking",
+    "message": "思考中..."
+  }
+}
+```
+
+#### generating（テキスト生成中）
+
+```json
+{
+  "event": "progress",
+  "data": {
+    "seq": 3,
+    "timestamp": "2024-01-01T00:00:00.000000Z",
+    "type": "generating",
+    "message": "レスポンスを生成中..."
+  }
+}
+```
+
+#### tool（ツール実行）
+
+```json
+{
+  "event": "progress",
+  "data": {
+    "seq": 5,
+    "timestamp": "2024-01-01T00:00:00.000000Z",
+    "type": "tool",
+    "message": "Readを実行中...",
+    "tool_use_id": "tool-use-uuid",
+    "tool_name": "Read",
+    "tool_status": "running",
+    "parent_agent_id": null
+  }
+}
+```
+
+ツールステータス:
+- `pending`: 受付済み
+- `running`: 実行中
+- `completed`: 完了
+- `error`: エラー
+
+#### turn（ターン進捗）
+
+```json
+{
+  "event": "progress",
+  "data": {
+    "seq": 10,
+    "timestamp": "2024-01-01T00:00:00.000000Z",
+    "type": "turn",
+    "message": "ターン 2 / 10",
+    "turn": 2,
+    "max_turns": 10
+  }
+}
+```
+
+### title イベント
+
+タイトル生成イベント。初回実行時のみ送信されます。
+
+```json
+{
+  "event": "title",
+  "data": {
+    "seq": 50,
+    "timestamp": "2024-01-01T00:00:00.000000Z",
+    "title": "生成されたタイトル"
+  }
+}
+```
+
+### ping イベント
+
+ハートビートイベント。接続維持のために10秒間隔で送信されます。
+
+```json
+{
+  "event": "ping",
+  "data": {
+    "seq": 0,
+    "timestamp": "2024-01-01T00:00:00.000000Z",
+    "elapsed_ms": 15000
+  }
+}
+```
+
+### done イベント
+
+完了イベント。処理終了時に送信されます。
+
+```json
+{
+  "event": "done",
+  "data": {
+    "seq": 99,
+    "timestamp": "2024-01-01T00:00:00.000000Z",
+    "status": "success",
+    "result": "完了しました。",
+    "is_error": false,
+    "errors": null,
+    "usage": {
+      "input_tokens": 1500,
+      "output_tokens": 500,
+      "cache_creation_5m_tokens": 15000,
+      "cache_creation_1h_tokens": 0,
+      "cache_read_tokens": 200,
+      "total_tokens": 2000
+    },
+    "cost_usd": "0.0075",
+    "turn_count": 3,
+    "duration_ms": 5230,
+    "session_id": "session-uuid-from-sdk",
+    "messages": [...],
+    "model_usage": {
+      "claude-sonnet-4-20250514": {
+        "input_tokens": 1000,
+        "output_tokens": 400,
+        "cache_creation_5m_input_tokens": 15000,
+        "cache_creation_1h_input_tokens": 0,
+        "cache_read_input_tokens": 200,
+        "cost_usd": "0.005"
+      },
+      "claude-3-5-haiku-20241022": {
+        "input_tokens": 500,
+        "output_tokens": 100,
+        "cache_creation_5m_input_tokens": 0,
+        "cache_creation_1h_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cost_usd": "0.0025"
+      }
     }
   }
 }
 ```
 
-### Assistant Message (type: "assistant")
+#### status の種類
 
-#### テキストブロック
-
-```json
-{
-  "type": "assistant",
-  "subtype": null,
-  "timestamp": "2024-01-01T00:00:00.000000",
-  "content_blocks": [
-    {
-      "type": "text",
-      "text": "こんにちは！お手伝いします。"
-    }
-  ]
-}
-```
-
-#### ツール使用ブロック
-
-```json
-{
-  "type": "assistant",
-  "subtype": null,
-  "timestamp": "2024-01-01T00:00:00.000000",
-  "content_blocks": [
-    {
-      "type": "tool_use",
-      "id": "tool-use-uuid",
-      "name": "Read",
-      "input": {
-        "file_path": "/path/to/file.py"
-      },
-      "summary": "ファイルを読み取り: file.py"
-    }
-  ]
-}
-```
-
-#### 思考ブロック（Extended Thinking）
-
-```json
-{
-  "type": "assistant",
-  "subtype": null,
-  "timestamp": "2024-01-01T00:00:00.000000",
-  "content_blocks": [
-    {
-      "type": "thinking",
-      "text": "ユーザーの要求を分析しています..."
-    }
-  ]
-}
-```
-
-### User Result Message (type: "user_result")
-
-ツール実行結果。
-
-```json
-{
-  "type": "user_result",
-  "subtype": null,
-  "timestamp": "2024-01-01T00:00:00.000000",
-  "content_blocks": [
-    {
-      "type": "tool_result",
-      "tool_use_id": "tool-use-uuid",
-      "tool_name": "Read",
-      "content": "ファイルの内容...",
-      "is_error": false,
-      "status": "completed"
-    }
-  ]
-}
-```
-
-### Result Message (type: "result")
-
-最終結果メッセージ。`messages`には`/api/tenants/{tenant_id}/conversations/{conversation_id}/messages`と同じ形式のメッセージログが含まれます。
-
-```json
-{
-  "type": "result",
-  "subtype": "success",
-  "timestamp": "2024-01-01T00:00:00.000000",
-  "result": "完了しました。",
-  "is_error": false,
-  "errors": null,
-  "usage": {
-    "input_tokens": 1500,
-    "output_tokens": 500,
-    "cache_creation_tokens": 15000,
-    "cache_read_tokens": 200,
-    "total_tokens": 2000,
-    "cache_creation": {
-      "ephemeral_1h_input_tokens": 0,
-      "ephemeral_5m_input_tokens": 15000
-    }
-  },
-  "total_cost_usd": 0.0075,
-  "num_turns": 3,
-  "duration_ms": 5230,
-  "session_id": "session-uuid-from-sdk",
-  "messages": [
-    {
-      "type": "system",
-      "subtype": "init",
-      "timestamp": "2024-01-01T00:00:00.000000",
-      "data": {...}
-    },
-    {
-      "type": "assistant",
-      "subtype": null,
-      "timestamp": "2024-01-01T00:00:01.000000",
-      "content_blocks": [...]
-    }
-  ],
-  "model_usage": null
-}
-```
-
-#### usage フィールド
-
-| フィールド | 型 | 説明 |
-|-----------|-----|------|
-| `input_tokens` | number | 入力トークン数 |
-| `output_tokens` | number | 出力トークン数 |
-| `cache_creation_tokens` | number | キャッシュ作成トークン合計 |
-| `cache_read_tokens` | number | キャッシュ読み込みトークン |
-| `total_tokens` | number | 合計トークン数（入力+出力） |
-| `cache_creation` | object | ephemeralキャッシュの内訳（オプション） |
-
-#### cache_creation 内訳（ephemeral cache）
-
-| フィールド | 説明 |
-|-----------|------|
-| `ephemeral_1h_input_tokens` | 1時間キャッシュのトークン数 |
-| `ephemeral_5m_input_tokens` | 5分キャッシュのトークン数 |
-
-#### model_usage について
-
-**注意**: `model_usage`フィールドはTypeScript SDKでのみ利用可能です。Python SDKでは常に`null`が返されます。サブエージェント（Task）が使用するモデル別のトークン使用量を追跡するには、TypeScript SDKの使用を検討してください。
-
-#### subtype の種類
-
-| subtype | 説明 |
-|---------|------|
+| status | 説明 |
+|--------|------|
 | `success` | 正常完了 |
-| `error_during_execution` | 実行中にエラー発生 |
+| `error` | エラー発生 |
+| `cancelled` | キャンセル |
 
-### Error Event
+### error イベント
 
-```json
-{
-  "type": "error",
-  "message": "エラーメッセージ",
-  "timestamp": "2024-01-01T00:00:00.000000"
-}
-```
-
-### Title Generated Event
+エラーイベント。
 
 ```json
 {
-  "title": "生成されたタイトル",
-  "timestamp": "2024-01-01T00:00:00.000000"
+  "event": "error",
+  "data": {
+    "seq": 1,
+    "timestamp": "2024-01-01T00:00:00.000000Z",
+    "error_type": "execution_error",
+    "message": "エラーメッセージ",
+    "recoverable": false
+  }
 }
 ```
 
-### Status Event（リアルタイム進捗）
+#### error_type の種類
 
-現在の処理状態を通知します。
-
-```json
-{
-  "state": "thinking",
-  "message": "思考中...",
-  "timestamp": "2024-01-01T00:00:00.000000"
-}
-```
-
-### Heartbeat Event
-
-接続維持のために定期的に送信されます。
-
-```json
-{
-  "timestamp": "2024-01-01T00:00:00.000000",
-  "elapsed_ms": 15000
-}
-```
-
-### Turn Progress Event
-
-ターン進捗を通知します。
-
-```json
-{
-  "current_turn": 2,
-  "max_turns": 10,
-  "timestamp": "2024-01-01T00:00:00.000000"
-}
-```
-
-### Tool Progress Event
-
-ツール実行の進捗を通知します。
-
-```json
-{
-  "tool_use_id": "tool-use-uuid",
-  "tool_name": "Read",
-  "status": "running",
-  "message": "ファイルを読み取り中...",
-  "parent_tool_use_id": null,
-  "timestamp": "2024-01-01T00:00:00.000000"
-}
-```
-
-サブエージェント内のツールの場合:
-
-```json
-{
-  "tool_use_id": "child-tool-uuid",
-  "tool_name": "Grep",
-  "status": "running",
-  "message": "検索中...",
-  "parent_tool_use_id": "task-tool-uuid",
-  "timestamp": "2024-01-01T00:00:00.000000"
-}
-```
-
-### Subagent Event
-
-Taskツールによるサブエージェントの開始/終了を通知します。
-
-```json
-{
-  "action": "start",
-  "agent_type": "Explore",
-  "description": "コードベースを探索中",
-  "parent_tool_use_id": "task-tool-uuid",
-  "timestamp": "2024-01-01T00:00:00.000000"
-}
-```
-
-終了時:
-
-```json
-{
-  "action": "stop",
-  "agent_type": "Explore",
-  "description": "コードベースを探索中",
-  "parent_tool_use_id": "task-tool-uuid",
-  "result": "ファイルが見つかりました",
-  "timestamp": "2024-01-01T00:00:00.000000"
-}
-```
+| error_type | 説明 | recoverable |
+|------------|------|-------------|
+| `conversation_locked` | 会話がロック中 | true |
+| `sdk_not_installed` | SDKがインストールされていない | false |
+| `model_validation_error` | モデルバリデーションエラー | false |
+| `options_error` | SDK オプション構築エラー | false |
+| `execution_error` | 実行中のエラー | false |
+| `background_execution_error` | バックグラウンド実行エラー | false |
+| `background_task_error` | バックグラウンドタスクエラー | false |
+| `timeout_error` | タイムアウト | true |
 
 ## フロー図
 
@@ -399,80 +418,52 @@ Client                          Server
   |  POST /conversations/{id}/stream
   |------------------------------>|
   |                               |
-  |  event: message               |
-  |  data: {type: "system", subtype: "init", ...}
+  |  event: init                  |  (seq: 1)
   |<------------------------------|
   |                               |
-  |  event: turn_progress         |
-  |  data: {current_turn: 1, ...} |
+  |  event: progress              |  (seq: 2, type: "turn")
   |<------------------------------|
   |                               |
-  |  event: status                |
-  |  data: {state: "thinking", ...}
+  |  event: progress              |  (seq: 3, type: "thinking")
   |<------------------------------|
   |                               |
-  |  event: message (thinking)    |
-  |  data: {type: "assistant", content_blocks: [{type: "thinking", ...}]}
+  |  event: thinking              |  (seq: 4)
   |<------------------------------|
   |                               |
-  |  event: status                |
-  |  data: {state: "generating", ...}
+  |  event: progress              |  (seq: 5, type: "generating")
   |<------------------------------|
   |                               |
-  |  event: message               |
-  |  data: {type: "assistant", content_blocks: [{type: "text", ...}]}
+  |  event: assistant             |  (seq: 6, text)
   |<------------------------------|
   |                               |
-  |  event: heartbeat             |
-  |  data: {elapsed_ms: 10000, ...}
+  |  event: progress              |  (seq: 7, type: "tool", status: "pending")
   |<------------------------------|
   |                               |
-  |  event: status                |
-  |  data: {state: "tool_execution", ...}
+  |  event: tool_call             |  (seq: 8)
   |<------------------------------|
   |                               |
-  |  event: tool_progress         |
-  |  data: {status: "pending", tool_name: "Read", ...}
+  |  event: progress              |  (seq: 9, type: "tool", status: "running")
   |<------------------------------|
   |                               |
-  |  event: message               |
-  |  data: {type: "assistant", content_blocks: [{type: "tool_use", ...}]}
+  |  event: ping                  |  (seq: 0, heartbeat)
   |<------------------------------|
   |                               |
-  |  event: tool_progress         |
-  |  data: {status: "running", ...}
+  |  event: progress              |  (seq: 10, type: "tool", status: "completed")
   |<------------------------------|
   |                               |
-  |  event: tool_progress         |
-  |  data: {status: "completed", ...}
+  |  event: tool_result           |  (seq: 11)
   |<------------------------------|
   |                               |
-  |  event: message               |
-  |  data: {type: "user_result", content_blocks: [{type: "tool_result", ...}]}
+  |  event: progress              |  (seq: 12, type: "turn")
   |<------------------------------|
   |                               |
-  |  event: heartbeat             |
-  |  data: {elapsed_ms: 20000, ...}
+  |  event: assistant             |  (seq: 13, text)
   |<------------------------------|
   |                               |
-  |  event: turn_progress         |
-  |  data: {current_turn: 2, ...} |
+  |  event: title                 |  (seq: 14)
   |<------------------------------|
   |                               |
-  |  event: status                |
-  |  data: {state: "generating", ...}
-  |<------------------------------|
-  |                               |
-  |  event: message               |
-  |  data: {type: "assistant", content_blocks: [{type: "text", ...}]}
-  |<------------------------------|
-  |                               |
-  |  event: title_generated       |
-  |  data: {title: "...", ...}    |
-  |<------------------------------|
-  |                               |
-  |  event: message               |
-  |  data: {type: "result", subtype: "success", ...}
+  |  event: done                  |  (seq: 15)
   |<------------------------------|
   |                               |
   |  (connection closed)          |
@@ -490,14 +481,45 @@ Client                          Server
 // 基本型
 // ==========================================
 
-export type MessageType = 'system' | 'assistant' | 'user_result' | 'result' | 'unknown';
-
-export type SystemSubtype = 'init' | 'finish';
-
-export type ResultSubtype = 'success' | 'error_during_execution';
+/** イベント共通フィールド */
+export interface BaseEventData {
+  seq: number;
+  timestamp: string;
+}
 
 // ==========================================
-// コンテンツブロック
+// init イベント
+// ==========================================
+
+export interface InitEventData extends BaseEventData {
+  session_id: string;
+  tools: string[];
+  model: string;
+  conversation_id?: string;
+  max_turns?: number;
+}
+
+export interface InitEvent {
+  event: 'init';
+  data: InitEventData;
+}
+
+// ==========================================
+// thinking イベント
+// ==========================================
+
+export interface ThinkingEventData extends BaseEventData {
+  content: string;
+  parent_agent_id?: string | null;
+}
+
+export interface ThinkingEvent {
+  event: 'thinking';
+  data: ThinkingEventData;
+}
+
+// ==========================================
+// assistant イベント
 // ==========================================
 
 export interface TextBlock {
@@ -505,223 +527,217 @@ export interface TextBlock {
   text: string;
 }
 
-export interface ToolUseBlock {
-  type: 'tool_use';
-  id: string;
-  name: string;
-  input: Record<string, unknown>;
-  summary?: string;
+export type ContentBlock = TextBlock;
+
+export interface AssistantEventData extends BaseEventData {
+  content_blocks: ContentBlock[];
+  parent_agent_id?: string | null;
 }
 
-export interface ThinkingBlock {
-  type: 'thinking';
-  text: string;
+export interface AssistantEvent {
+  event: 'assistant';
+  data: AssistantEventData;
 }
 
-export interface ToolResultBlock {
-  type: 'tool_result';
+// ==========================================
+// tool_call イベント
+// ==========================================
+
+export interface ToolCallEventData extends BaseEventData {
   tool_use_id: string;
   tool_name: string;
+  input: Record<string, unknown>;
+  summary: string;
+  parent_agent_id?: string | null;
+}
+
+export interface ToolCallEvent {
+  event: 'tool_call';
+  data: ToolCallEventData;
+}
+
+// ==========================================
+// tool_result イベント
+// ==========================================
+
+export type ToolStatus = 'completed' | 'error';
+
+export interface ToolResultEventData extends BaseEventData {
+  tool_use_id: string;
+  tool_name: string;
+  status: ToolStatus;
   content: string;
   is_error: boolean;
-  status: 'completed' | 'error';
+  parent_agent_id?: string | null;
 }
 
-export type ContentBlock = TextBlock | ToolUseBlock | ThinkingBlock | ToolResultBlock;
-
-// ==========================================
-// 使用状況
-// ==========================================
-
-export interface CacheCreationInfo {
-  ephemeral_1h_input_tokens: number;
-  ephemeral_5m_input_tokens: number;
+export interface ToolResultEvent {
+  event: 'tool_result';
+  data: ToolResultEventData;
 }
+
+// ==========================================
+// subagent イベント
+// ==========================================
+
+export interface SubagentStartEventData extends BaseEventData {
+  agent_id: string;
+  agent_type: string;
+  description: string;
+  model?: string;
+}
+
+export interface SubagentStartEvent {
+  event: 'subagent_start';
+  data: SubagentStartEventData;
+}
+
+export interface SubagentEndEventData extends BaseEventData {
+  agent_id: string;
+  agent_type: string;
+  status: ToolStatus;
+  result_preview?: string;
+}
+
+export interface SubagentEndEvent {
+  event: 'subagent_end';
+  data: SubagentEndEventData;
+}
+
+// ==========================================
+// progress イベント
+// ==========================================
+
+export type ProgressType = 'thinking' | 'generating' | 'tool' | 'turn';
+export type ToolProgressStatus = 'pending' | 'running' | 'completed' | 'error';
+
+export interface ProgressEventData extends BaseEventData {
+  type: ProgressType;
+  message: string;
+  turn?: number;
+  max_turns?: number;
+  tool_use_id?: string;
+  tool_name?: string;
+  tool_status?: ToolProgressStatus;
+  parent_agent_id?: string | null;
+}
+
+export interface ProgressEvent {
+  event: 'progress';
+  data: ProgressEventData;
+}
+
+// ==========================================
+// title イベント
+// ==========================================
+
+export interface TitleEventData extends BaseEventData {
+  title: string;
+}
+
+export interface TitleEvent {
+  event: 'title';
+  data: TitleEventData;
+}
+
+// ==========================================
+// ping イベント
+// ==========================================
+
+export interface PingEventData extends BaseEventData {
+  elapsed_ms: number;
+}
+
+export interface PingEvent {
+  event: 'ping';
+  data: PingEventData;
+}
+
+// ==========================================
+// done イベント
+// ==========================================
 
 export interface UsageInfo {
   input_tokens: number;
   output_tokens: number;
-  cache_creation_tokens: number;
+  cache_creation_5m_tokens: number;
+  cache_creation_1h_tokens: number;
   cache_read_tokens: number;
   total_tokens: number;
-  cache_creation?: CacheCreationInfo;  // ephemeralキャッシュの内訳
-}
-
-// ==========================================
-// 設定情報
-// ==========================================
-
-export interface TenantConfigInfo {
-  tenant_id: string;
-  system_prompt_length: number;
-  system_prompt_preview: string;
-}
-
-export interface ModelConfigInfo {
-  model_id: string;
-  display_name: string;
-  bedrock_model_id: string;
-  model_region: string;
-}
-
-// ==========================================
-// メッセージ型
-// ==========================================
-
-export interface SystemInitData {
-  session_id: string;
-  conversation_id?: string;
-  tools: string[];
-  model: string;
-  tenant_config?: TenantConfigInfo;
-  model_config?: ModelConfigInfo;
-}
-
-export interface SystemMessage {
-  type: 'system';
-  subtype: SystemSubtype;
-  timestamp: string;
-  data: SystemInitData;
-}
-
-export interface AssistantMessage {
-  type: 'assistant';
-  subtype: null;
-  timestamp: string;
-  content_blocks: ContentBlock[];
-}
-
-export interface UserResultMessage {
-  type: 'user_result';
-  subtype: null;
-  timestamp: string;
-  content_blocks: ToolResultBlock[];
 }
 
 export interface ModelUsageInfo {
   input_tokens: number;
   output_tokens: number;
-  cache_creation_input_tokens: number;
+  cache_creation_5m_input_tokens: number;
+  cache_creation_1h_input_tokens: number;
   cache_read_input_tokens: number;
+  cost_usd: string;
 }
 
-export interface ResultMessage {
-  type: 'result';
-  subtype: ResultSubtype;
-  timestamp: string;
+export type DoneStatus = 'success' | 'error' | 'cancelled';
+
+export interface DoneEventData extends BaseEventData {
+  status: DoneStatus;
   result: string | null;
   is_error: boolean;
   errors: string[] | null;
   usage: UsageInfo;
-  total_cost_usd: number;
-  num_turns: number;
+  cost_usd: string;
+  turn_count: number;
   duration_ms: number;
   session_id?: string;
-  messages?: StreamingMessage[];
+  messages?: unknown[];
   model_usage?: Record<string, ModelUsageInfo>;
 }
 
-export type StreamingMessage =
-  | SystemMessage
-  | AssistantMessage
-  | UserResultMessage
-  | ResultMessage;
+export interface DoneEvent {
+  event: 'done';
+  data: DoneEventData;
+}
 
 // ==========================================
-// イベント型
+// error イベント
 // ==========================================
 
-export interface MessageEvent {
-  event: 'message';
-  data: StreamingMessage;
+export type ErrorType =
+  | 'conversation_locked'
+  | 'sdk_not_installed'
+  | 'model_validation_error'
+  | 'options_error'
+  | 'execution_error'
+  | 'background_execution_error'
+  | 'background_task_error'
+  | 'timeout_error';
+
+export interface ErrorEventData extends BaseEventData {
+  error_type: ErrorType;
+  message: string;
+  recoverable: boolean;
 }
 
 export interface ErrorEvent {
   event: 'error';
-  data: {
-    type: string;
-    message: string;
-    timestamp: string;
-  };
-}
-
-export interface TitleGeneratedEvent {
-  event: 'title_generated';
-  data: {
-    title: string;
-    timestamp: string;
-  };
+  data: ErrorEventData;
 }
 
 // ==========================================
-// リアルタイム進捗イベント型
+// 統合型
 // ==========================================
-
-export type StatusState = 'thinking' | 'generating' | 'tool_execution' | 'waiting';
-
-export interface StatusEvent {
-  event: 'status';
-  data: {
-    state: StatusState;
-    message: string;
-    timestamp: string;
-  };
-}
-
-export interface HeartbeatEvent {
-  event: 'heartbeat';
-  data: {
-    timestamp: string;
-    elapsed_ms: number;
-  };
-}
-
-export interface TurnProgressEvent {
-  event: 'turn_progress';
-  data: {
-    current_turn: number;
-    max_turns: number | null;
-    timestamp: string;
-  };
-}
-
-export type ToolProgressStatus = 'pending' | 'running' | 'completed' | 'error';
-
-export interface ToolProgressEvent {
-  event: 'tool_progress';
-  data: {
-    tool_use_id: string;
-    tool_name: string;
-    status: ToolProgressStatus;
-    message?: string;
-    parent_tool_use_id: string | null;
-    timestamp: string;
-  };
-}
-
-export type SubagentAction = 'start' | 'stop';
-
-export interface SubagentEvent {
-  event: 'subagent';
-  data: {
-    action: SubagentAction;
-    agent_type: string;
-    description: string;
-    parent_tool_use_id: string;
-    result?: string;
-    timestamp: string;
-  };
-}
 
 export type StreamingEvent =
-  | MessageEvent
-  | ErrorEvent
-  | TitleGeneratedEvent
-  | StatusEvent
-  | HeartbeatEvent
-  | TurnProgressEvent
-  | ToolProgressEvent
-  | SubagentEvent;
+  | InitEvent
+  | ThinkingEvent
+  | AssistantEvent
+  | ToolCallEvent
+  | ToolResultEvent
+  | SubagentStartEvent
+  | SubagentEndEvent
+  | ProgressEvent
+  | TitleEvent
+  | PingEvent
+  | DoneEvent
+  | ErrorEvent;
 
 // ==========================================
 // リクエスト型
@@ -745,36 +761,52 @@ export interface StreamRequest {
 // 型ガード
 // ==========================================
 
-export function isSystemMessage(msg: StreamingMessage): msg is SystemMessage {
-  return msg.type === 'system';
+export function isInitEvent(event: StreamingEvent): event is InitEvent {
+  return event.event === 'init';
 }
 
-export function isAssistantMessage(msg: StreamingMessage): msg is AssistantMessage {
-  return msg.type === 'assistant';
+export function isThinkingEvent(event: StreamingEvent): event is ThinkingEvent {
+  return event.event === 'thinking';
 }
 
-export function isUserResultMessage(msg: StreamingMessage): msg is UserResultMessage {
-  return msg.type === 'user_result';
+export function isAssistantEvent(event: StreamingEvent): event is AssistantEvent {
+  return event.event === 'assistant';
 }
 
-export function isResultMessage(msg: StreamingMessage): msg is ResultMessage {
-  return msg.type === 'result';
+export function isToolCallEvent(event: StreamingEvent): event is ToolCallEvent {
+  return event.event === 'tool_call';
 }
 
-export function isTextBlock(block: ContentBlock): block is TextBlock {
-  return block.type === 'text';
+export function isToolResultEvent(event: StreamingEvent): event is ToolResultEvent {
+  return event.event === 'tool_result';
 }
 
-export function isToolUseBlock(block: ContentBlock): block is ToolUseBlock {
-  return block.type === 'tool_use';
+export function isSubagentStartEvent(event: StreamingEvent): event is SubagentStartEvent {
+  return event.event === 'subagent_start';
 }
 
-export function isThinkingBlock(block: ContentBlock): block is ThinkingBlock {
-  return block.type === 'thinking';
+export function isSubagentEndEvent(event: StreamingEvent): event is SubagentEndEvent {
+  return event.event === 'subagent_end';
 }
 
-export function isToolResultBlock(block: ContentBlock): block is ToolResultBlock {
-  return block.type === 'tool_result';
+export function isProgressEvent(event: StreamingEvent): event is ProgressEvent {
+  return event.event === 'progress';
+}
+
+export function isTitleEvent(event: StreamingEvent): event is TitleEvent {
+  return event.event === 'title';
+}
+
+export function isPingEvent(event: StreamingEvent): event is PingEvent {
+  return event.event === 'ping';
+}
+
+export function isDoneEvent(event: StreamingEvent): event is DoneEvent {
+  return event.event === 'done';
+}
+
+export function isErrorEvent(event: StreamingEvent): event is ErrorEvent {
+  return event.event === 'error';
 }
 ```
 
@@ -788,39 +820,54 @@ export function isToolResultBlock(block: ContentBlock): block is ToolResultBlock
 import { useState, useCallback, useRef } from 'react';
 import type {
   StreamRequest,
-  StreamingMessage,
-  ContentBlock,
+  StreamingEvent,
   UsageInfo,
+  DoneStatus,
+  ToolCallEventData,
+  ToolResultEventData,
 } from '@/types/streaming';
-
-interface StreamingHandlers {
-  onSystem?: (message: StreamingMessage) => void;
-  onAssistant?: (message: StreamingMessage) => void;
-  onUserResult?: (message: StreamingMessage) => void;
-  onResult?: (message: StreamingMessage) => void;
-  onError?: (error: { message: string }) => void;
-  onTitleGenerated?: (title: string) => void;
-}
 
 interface StreamingState {
   isStreaming: boolean;
   sessionId: string | null;
-  messages: StreamingMessage[];
   currentText: string;
+  thinkingText: string;
   tools: string[];
   usage: UsageInfo | null;
   error: string | null;
+  status: DoneStatus | null;
+  turn: number;
+  maxTurns: number | null;
+  lastSeq: number;
+  pendingTools: Map<string, ToolCallEventData>;
+}
+
+interface StreamingHandlers {
+  onInit?: (data: StreamingEvent['data']) => void;
+  onThinking?: (content: string) => void;
+  onAssistant?: (text: string) => void;
+  onToolCall?: (data: ToolCallEventData) => void;
+  onToolResult?: (data: ToolResultEventData) => void;
+  onProgress?: (type: string, message: string) => void;
+  onTitle?: (title: string) => void;
+  onDone?: (data: StreamingEvent['data']) => void;
+  onError?: (message: string, recoverable: boolean) => void;
 }
 
 export function useStreaming(tenantId: string, conversationId: string) {
   const [state, setState] = useState<StreamingState>({
     isStreaming: false,
     sessionId: null,
-    messages: [],
     currentText: '',
+    thinkingText: '',
     tools: [],
     usage: null,
     error: null,
+    status: null,
+    turn: 0,
+    maxTurns: null,
+    lastSeq: 0,
+    pendingTools: new Map(),
   });
 
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -838,6 +885,11 @@ export function useStreaming(tenantId: string, conversationId: string) {
         isStreaming: true,
         error: null,
         currentText: '',
+        thinkingText: '',
+        status: null,
+        turn: 0,
+        lastSeq: 0,
+        pendingTools: new Map(),
       }));
 
       try {
@@ -897,6 +949,7 @@ export function useStreaming(tenantId: string, conversationId: string) {
             ...prev,
             error: (error as Error).message,
           }));
+          handlers?.onError?.((error as Error).message, false);
         }
       } finally {
         setState(prev => ({ ...prev, isStreaming: false }));
@@ -927,58 +980,95 @@ function processEvent(
   try {
     const data = JSON.parse(eventData);
 
-    if (eventType === 'message') {
-      const message = data as StreamingMessage;
+    // シーケンス番号を更新
+    if (data.seq > 0) {
+      setState(prev => ({ ...prev, lastSeq: data.seq }));
+    }
 
-      setState(prev => ({
-        ...prev,
-        messages: [...prev.messages, message],
-      }));
+    switch (eventType) {
+      case 'init':
+        setState(prev => ({
+          ...prev,
+          sessionId: data.session_id,
+          tools: data.tools,
+          maxTurns: data.max_turns || null,
+        }));
+        handlers?.onInit?.(data);
+        break;
 
-      switch (message.type) {
-        case 'system':
-          if (message.subtype === 'init') {
+      case 'thinking':
+        setState(prev => ({
+          ...prev,
+          thinkingText: prev.thinkingText + data.content,
+        }));
+        handlers?.onThinking?.(data.content);
+        break;
+
+      case 'assistant':
+        for (const block of data.content_blocks) {
+          if (block.type === 'text') {
             setState(prev => ({
               ...prev,
-              sessionId: message.data.session_id,
-              tools: message.data.tools,
+              currentText: prev.currentText + block.text,
             }));
+            handlers?.onAssistant?.(block.text);
           }
-          handlers?.onSystem?.(message);
-          break;
+        }
+        break;
 
-        case 'assistant':
-          for (const block of message.content_blocks) {
-            if (block.type === 'text') {
-              setState(prev => ({
-                ...prev,
-                currentText: prev.currentText + block.text,
-              }));
-            }
-          }
-          handlers?.onAssistant?.(message);
-          break;
+      case 'tool_call':
+        setState(prev => {
+          const newTools = new Map(prev.pendingTools);
+          newTools.set(data.tool_use_id, data);
+          return { ...prev, pendingTools: newTools };
+        });
+        handlers?.onToolCall?.(data);
+        break;
 
-        case 'user_result':
-          handlers?.onUserResult?.(message);
-          break;
+      case 'tool_result':
+        setState(prev => {
+          const newTools = new Map(prev.pendingTools);
+          newTools.delete(data.tool_use_id);
+          return { ...prev, pendingTools: newTools };
+        });
+        handlers?.onToolResult?.(data);
+        break;
 
-        case 'result':
+      case 'progress':
+        if (data.type === 'turn') {
           setState(prev => ({
             ...prev,
-            usage: message.usage,
+            turn: data.turn,
+            maxTurns: data.max_turns || prev.maxTurns,
           }));
-          handlers?.onResult?.(message);
-          break;
-      }
-    } else if (eventType === 'error') {
-      setState(prev => ({
-        ...prev,
-        error: data.message,
-      }));
-      handlers?.onError?.(data);
-    } else if (eventType === 'title_generated') {
-      handlers?.onTitleGenerated?.(data.title);
+        }
+        handlers?.onProgress?.(data.type, data.message);
+        break;
+
+      case 'title':
+        handlers?.onTitle?.(data.title);
+        break;
+
+      case 'done':
+        setState(prev => ({
+          ...prev,
+          usage: data.usage,
+          status: data.status,
+        }));
+        handlers?.onDone?.(data);
+        break;
+
+      case 'error':
+        setState(prev => ({
+          ...prev,
+          error: data.message,
+        }));
+        handlers?.onError?.(data.message, data.recoverable);
+        break;
+
+      case 'ping':
+        // pingイベントは接続維持用なので特に処理しない
+        break;
     }
   } catch (e) {
     console.error('Failed to parse event data:', e);
@@ -999,8 +1089,12 @@ export function Chat({ tenantId, conversationId }: { tenantId: string; conversat
   const {
     isStreaming,
     currentText,
+    thinkingText,
     usage,
     error,
+    turn,
+    maxTurns,
+    pendingTools,
     execute,
     cancel,
   } = useStreaming(tenantId, conversationId);
@@ -1016,8 +1110,11 @@ export function Chat({ tenantId, conversationId }: { tenantId: string; conversat
         email: 'user@example.com',
       },
     }, {
-      onTitleGenerated: (title) => {
+      onTitle: (title) => {
         console.log('Title generated:', title);
+      },
+      onProgress: (type, message) => {
+        console.log(`Progress [${type}]: ${message}`);
       },
     });
 
@@ -1026,18 +1123,39 @@ export function Chat({ tenantId, conversationId }: { tenantId: string; conversat
 
   return (
     <div>
+      {/* 進捗表示 */}
+      {isStreaming && (
+        <div className="progress">
+          ターン: {turn}{maxTurns ? ` / ${maxTurns}` : ''}
+          {pendingTools.size > 0 && (
+            <span> | ツール実行中: {pendingTools.size}</span>
+          )}
+        </div>
+      )}
+
+      {/* 思考表示 */}
+      {thinkingText && (
+        <div className="thinking">
+          <strong>思考中:</strong> {thinkingText}
+        </div>
+      )}
+
+      {/* メッセージ表示 */}
       <div className="messages">
         {currentText && <div className="assistant">{currentText}</div>}
       </div>
 
+      {/* エラー表示 */}
       {error && <div className="error">{error}</div>}
 
+      {/* 使用量表示 */}
       {usage && (
         <div className="usage">
           Tokens: {usage.total_tokens}
         </div>
       )}
 
+      {/* 入力 */}
       <div className="input">
         <input
           value={input}
