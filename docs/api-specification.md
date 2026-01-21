@@ -10,6 +10,7 @@ Claude Multi-Agent API のエンドポイント仕様書です。
   - [Tenants](#tenants)
   - [Models](#models)
   - [Conversations](#conversations)
+  - [Simple Chats](#simple-chats)
   - [Workspace](#workspace)
   - [Skills](#skills)
   - [MCP Servers](#mcp-servers)
@@ -586,6 +587,72 @@ MCPサーバーを更新
 #### DELETE /api/tenants/{tenant_id}/mcp-servers/{mcp_server_id}
 
 MCPサーバーを削除（論理削除）
+
+---
+
+### Simple Chats
+
+シンプルチャットAPI。Claude Agent SDKを使わず、AWS Bedrock Converse APIを直接呼び出すシンプルなチャット機能を提供します。
+
+**特徴:**
+
+- SDKを使わない直接Bedrock API呼び出し
+- テキストのみのチャット（添付ファイルなし）
+- ストリーミング応答（SSE形式）
+- 会話履歴の引き継ぎ
+- タイトル自動生成（初回応答完了時）
+- `application_type` による用途識別
+
+詳細は [10-simple-chat.md](./api-specification/10-simple-chat.md) を参照してください。
+
+#### POST /api/tenants/{tenant_id}/simple-chats/stream
+
+ストリーミング実行（新規作成・継続を統合）
+
+**動作モード:**
+- `chat_id` を指定しない → **新規作成**
+- `chat_id` を指定する → **継続**
+
+**新規作成リクエスト:**
+
+```json
+{
+  "user_id": "user-001",
+  "application_type": "translationApp",
+  "system_prompt": "You are a professional translator.",
+  "model_id": "claude-sonnet-4",
+  "message": "Hello, how are you?"
+}
+```
+
+**継続リクエスト:**
+
+```json
+{
+  "chat_id": "550e8400-e29b-41d4-a716-446655440000",
+  "message": "Now translate it to French."
+}
+```
+
+**レスポンス:** `Content-Type: text/event-stream`
+
+新規作成時はレスポンスヘッダー `X-Chat-ID` にチャットIDが含まれます。
+
+#### GET /api/tenants/{tenant_id}/simple-chats
+
+シンプルチャット一覧を取得
+
+#### GET /api/tenants/{tenant_id}/simple-chats/{chat_id}
+
+シンプルチャット詳細（メッセージ履歴含む）を取得
+
+#### POST /api/tenants/{tenant_id}/simple-chats/{chat_id}/archive
+
+シンプルチャットをアーカイブ
+
+#### DELETE /api/tenants/{tenant_id}/simple-chats/{chat_id}
+
+シンプルチャットを削除
 
 ---
 

@@ -8,6 +8,7 @@ from app.api import (
     conversations,
     mcp_servers,
     models,
+    simple_chats,
     skills,
     tenants,
     usage,
@@ -59,4 +60,10 @@ api_router.include_router(
     workspace.router,
     prefix="/tenants/{tenant_id}",
     tags=["ワークスペース"],
+)
+
+api_router.include_router(
+    simple_chats.router,
+    prefix="/tenants/{tenant_id}/simple-chats",
+    tags=["シンプルチャット"],
 )

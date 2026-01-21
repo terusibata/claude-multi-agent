@@ -44,6 +44,7 @@ class UsageService:
         cost_usd: Decimal = Decimal("0"),
         session_id: Optional[str] = None,
         conversation_id: Optional[str] = None,
+        simple_chat_id: Optional[str] = None,
     ) -> UsageLog:
         """
         使用状況ログを保存
@@ -59,7 +60,8 @@ class UsageService:
             cache_read_tokens: キャッシュ読み込みトークン数
             cost_usd: コスト（USD）
             session_id: SDKセッションID
-            conversation_id: 会話ID
+            conversation_id: 会話ID（エージェント実行時）
+            simple_chat_id: シンプルチャットID（シンプルチャット実行時）
 
         Returns:
             保存された使用状況ログ
@@ -77,6 +79,7 @@ class UsageService:
             model_id=model_id,
             session_id=session_id,
             conversation_id=conversation_id,
+            simple_chat_id=simple_chat_id,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cache_creation_5m_tokens=cache_creation_5m_tokens,
