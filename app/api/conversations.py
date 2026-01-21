@@ -39,7 +39,7 @@ from app.services.conversation_service import ConversationService
 from app.services.execute_service import ExecuteService
 from app.services.tenant_service import TenantService
 from app.services.workspace_service import WorkspaceService
-from app.utils.streaming import format_error_event, format_heartbeat_event
+from app.utils.streaming import format_error_event, format_ping_event
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -324,8 +324,10 @@ async def _background_execution(
             extra={"conversation_id": request.conversation_id},
         )
         error_event = format_error_event(
-            f"バックグラウンド実行エラー: {str(e)}",
-            "background_execution_error",
+            seq=0,
+            error_type="background_execution_error",
+            message=f"バックグラウンド実行エラー: {str(e)}",
+            recoverable=False,
         )
         await event_queue.put(error_event)
     finally:
@@ -392,16 +394,16 @@ async def _event_generator(
             except asyncio.TimeoutError:
                 current_time = time.time()
 
-                # ハートビート送信
+                # pingイベント送信
                 elapsed_ms = int((current_time - start_time) * 1000)
-                heartbeat_event = format_heartbeat_event(elapsed_ms)
+                ping_event = format_ping_event(0, elapsed_ms)
                 yield {
-                    "event": heartbeat_event["event"],
-                    "data": json.dumps(heartbeat_event["data"], ensure_ascii=False, default=str),
+                    "event": ping_event["event"],
+                    "data": json.dumps(ping_event["data"], ensure_ascii=False, default=str),
                 }
                 last_heartbeat_time = current_time
                 logger.debug(
-                    "Heartbeat sent",
+                    "Ping sent",
                     extra={
                         "conversation_id": request.conversation_id,
                         "elapsed_ms": elapsed_ms,
@@ -425,8 +427,10 @@ async def _event_generator(
                         )
                         # クライアントにエラーを通知
                         error_event = format_error_event(
-                            f"バックグラウンドタスクエラー: {str(task_error)}",
-                            "background_task_error",
+                            seq=0,
+                            error_type="background_task_error",
+                            message=f"バックグラウンドタスクエラー: {str(task_error)}",
+                            recoverable=False,
                         )
                         yield {
                             "event": error_event["event"],
@@ -447,8 +451,10 @@ async def _event_generator(
                         extra={"conversation_id": request.conversation_id},
                     )
                     error_event = format_error_event(
-                        "応答タイムアウト: サーバーからの応答がありません",
-                        "timeout_error",
+                        seq=0,
+                        error_type="timeout_error",
+                        message="応答タイムアウト: サーバーからの応答がありません",
+                        recoverable=True,
                     )
                     yield {
                         "event": error_event["event"],

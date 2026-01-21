@@ -1,9 +1,9 @@
 """
 メッセージプロセッサ
-SDKからのメッセージを処理してSSEイベントに変換
+SDKからのメッセージを処理してSSEイベントに変換（v2形式）
 """
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Generator, Optional
+from typing import TYPE_CHECKING, Any, Generator
 
 import structlog
 
@@ -11,14 +11,15 @@ from app.services.execute.context import ExecutionContext, MessageLogEntry
 from app.services.execute.model_mapping import SubagentModelMapping
 from app.services.execute.tool_tracker import ToolTracker
 from app.utils.streaming import (
-    format_session_start_event,
-    format_status_event,
-    format_subagent_event,
-    format_text_delta_event,
+    SequenceCounter,
+    format_assistant_event,
+    format_init_event,
+    format_progress_event,
+    format_subagent_end_event,
+    format_subagent_start_event,
     format_thinking_event,
-    format_tool_complete_event,
-    format_tool_progress_event,
-    format_tool_start_event,
+    format_tool_call_event,
+    format_tool_result_event,
 )
 from app.utils.tool_summary import generate_tool_summary
 
@@ -40,6 +41,7 @@ class MessageProcessor:
         context: ExecutionContext,
         tool_tracker: ToolTracker,
         settings: "Settings",
+        seq_counter: SequenceCounter,
     ):
         """
         初期化
@@ -48,10 +50,12 @@ class MessageProcessor:
             context: 実行コンテキスト
             tool_tracker: ツールトラッカー
             settings: アプリケーション設定
+            seq_counter: シーケンス番号カウンター
         """
         self.context = context
         self.tool_tracker = tool_tracker
         self.settings = settings
+        self.seq = seq_counter
 
     def process_system_message(
         self,
@@ -98,10 +102,12 @@ class MessageProcessor:
                 "model_region": self.context.model.model_region,
             }
 
-            yield format_session_start_event(
+            yield format_init_event(
+                seq=self.seq.next(),
                 session_id=session_id or "",
                 tools=tools,
                 model=model_name,
+                conversation_id=self.context.conversation_id,
             )
 
     def process_assistant_message(
@@ -131,16 +137,30 @@ class MessageProcessor:
         content_blocks = getattr(message, "content", []) or []
         log_entry.content_blocks = []
 
+        # 親エージェントIDを取得
+        parent_agent_id = self.tool_tracker.current_subagent_id
+
         for content in content_blocks:
             # テキストブロック
             if isinstance(content, text_block_class):
                 text = getattr(content, "text", "") or ""
                 self.context.assistant_text += text
                 log_entry.content_blocks.append({"type": "text", "text": text})
-                # ステータスイベント: テキスト生成中（メインエージェントのみ）
-                if not self.tool_tracker.is_in_subagent:
-                    yield format_status_event("generating", "レスポンスを生成中...")
-                yield format_text_delta_event(text)
+
+                # 進捗イベント: テキスト生成中（メインエージェントのみ）
+                if not parent_agent_id:
+                    yield format_progress_event(
+                        seq=self.seq.next(),
+                        progress_type="generating",
+                        message="レスポンスを生成中...",
+                    )
+
+                # アシスタントイベント
+                yield format_assistant_event(
+                    seq=self.seq.next(),
+                    content_blocks=[{"type": "text", "text": text}],
+                    parent_agent_id=parent_agent_id,
+                )
 
             # ツール使用ブロック
             elif isinstance(content, tool_use_block_class):
@@ -153,10 +173,21 @@ class MessageProcessor:
                     "type": "thinking",
                     "text": thinking_text,
                 })
-                # ステータスイベント: 思考中（メインエージェントのみ）
-                if not self.tool_tracker.is_in_subagent:
-                    yield format_status_event("thinking", "思考中...")
-                yield format_thinking_event(thinking_text)
+
+                # 進捗イベント: 思考中（メインエージェントのみ）
+                if not parent_agent_id:
+                    yield format_progress_event(
+                        seq=self.seq.next(),
+                        progress_type="thinking",
+                        message="思考中...",
+                    )
+
+                # 思考イベント
+                yield format_thinking_event(
+                    seq=self.seq.next(),
+                    content=thinking_text,
+                    parent_agent_id=parent_agent_id,
+                )
 
             # ツール結果ブロック
             elif isinstance(content, tool_result_block_class):
@@ -236,42 +267,51 @@ class MessageProcessor:
             "parent_tool_use_id": parent_tool_id,
         })
 
-        # ステータスイベント: ツール実行中（メインエージェントのみ）
+        # 親エージェントIDを取得
+        parent_agent_id = self.tool_tracker.current_subagent_id
+
+        # 進捗イベント: ツール実行中（メインエージェントのみ）
         if not parent_tool_id:
-            yield format_status_event("tool_execution", f"ツール実行中: {tool_name}")
+            yield format_progress_event(
+                seq=self.seq.next(),
+                progress_type="tool",
+                message=f"ツール実行中: {tool_name}",
+                tool_use_id=tool_id,
+                tool_name=tool_name,
+                tool_status="pending",
+            )
 
-        # ツール進捗イベント: pending（受付）
-        yield format_tool_progress_event(
+        # ツール呼び出しイベント
+        yield format_tool_call_event(
+            seq=self.seq.next(),
             tool_use_id=tool_id,
             tool_name=tool_name,
-            status="pending",
-            message=summary,
-            parent_tool_use_id=parent_tool_id,
+            tool_input=tool_input,
+            summary=summary,
+            parent_agent_id=parent_agent_id,
         )
 
-        # ツール開始イベント
-        yield format_tool_start_event(
-            tool_id, tool_name, summary, tool_input=tool_input
-        )
-
-        # ツール進捗イベント: running（実行中）
-        yield format_tool_progress_event(
-            tool_use_id=tool_id,
-            tool_name=tool_name,
-            status="running",
+        # 進捗イベント: running
+        yield format_progress_event(
+            seq=self.seq.next(),
+            progress_type="tool",
             message=f"{tool_name}を実行中...",
-            parent_tool_use_id=parent_tool_id,
+            tool_use_id=tool_id,
+            tool_name=tool_name,
+            tool_status="running",
+            parent_agent_id=parent_agent_id,
         )
 
         # Taskツールの場合はサブエージェント開始イベントを送信
         if tool_name == "Task":
             subagent_type = tool_input.get("subagent_type", "unknown")
             description = tool_input.get("description", "サブエージェント実行")
-            yield format_subagent_event(
-                action="start",
+            yield format_subagent_start_event(
+                seq=self.seq.next(),
+                agent_id=tool_id,
                 agent_type=subagent_type,
                 description=description,
-                parent_tool_use_id=tool_id,
+                model=model_id,
             )
 
     def _process_tool_result(
@@ -345,35 +385,40 @@ class MessageProcessor:
         # 結果サマリー生成
         result_summary = self.tool_tracker.generate_result_summary(tool_result)
 
-        # ツール進捗イベント: completed / error
-        yield format_tool_progress_event(
+        # 親エージェントID
+        parent_agent_id = self.tool_tracker.current_subagent_id
+
+        # 進捗イベント: completed / error
+        yield format_progress_event(
+            seq=self.seq.next(),
+            progress_type="tool",
+            message=result_summary,
             tool_use_id=tool_use_id,
             tool_name=tool_name,
-            status=status,
-            message=result_summary,
-            parent_tool_use_id=parent_tool_id,
+            tool_status=status,
+            parent_agent_id=parent_agent_id,
         )
 
         # Taskツールの場合はサブエージェント終了イベントを送信
         if tool_name == "Task":
             subagent_type = tool_input.get("subagent_type", "unknown")
-            description = tool_input.get("description", "サブエージェント完了")
-            yield format_subagent_event(
-                action="stop",
+            yield format_subagent_end_event(
+                seq=self.seq.next(),
+                agent_id=tool_use_id,
                 agent_type=subagent_type,
-                description=description,
-                parent_tool_use_id=tool_use_id,
-                result=result_summary[:200] if result_summary else None,
+                status=status,
+                result_preview=result_summary[:200] if result_summary else None,
             )
 
-        # tool_resultイベントを送信
-        yield format_tool_complete_event(
+        # ツール結果イベントを送信
+        yield format_tool_result_event(
+            seq=self.seq.next(),
             tool_use_id=tool_use_id,
             tool_name=tool_name,
-            status="error" if is_error else "completed",
-            summary=result_summary,
-            result_preview=result_summary,
+            status=status,
+            content=result_summary,
             is_error=is_error,
+            parent_agent_id=parent_agent_id,
         )
 
     def determine_message_type(self, message: Any) -> str:

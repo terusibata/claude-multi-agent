@@ -1,20 +1,87 @@
 """
-SSEストリーミングユーティリティ
+SSEストリーミングユーティリティ v2
 Server-Sent Events形式でのストリーミング送信
 
-イベント形式はmessagesエンドポイント（/api/tenants/{tenant_id}/conversations/{conversation_id}/messages）
-で取得できる形式と統一されています。
+イベント形式:
+- init: セッション初期化
+- thinking: Extended Thinking
+- assistant: テキスト・ツール使用
+- tool_call: ツール呼び出し開始
+- tool_result: ツール実行結果
+- subagent_start: サブエージェント開始
+- subagent_end: サブエージェント終了
+- progress: 進捗更新（状態・ターン・ツール統合）
+- title: タイトル生成
+- ping: ハートビート
+- done: 完了
+- error: エラー
 
-イベントタイプ:
-- message: メッセージイベント（type: system/assistant/user_result/result）
-- error: エラーイベント
-- title_generated: タイトル生成イベント
+全てのイベントにシーケンス番号（seq）を付与し、順序保証を提供
 """
 import json
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, AsyncIterator
+from typing import Any
 
 from sse_starlette.sse import ServerSentEvent
+
+
+# =============================================================================
+# シーケンス番号管理
+# =============================================================================
+
+
+@dataclass
+class SequenceCounter:
+    """シーケンス番号カウンター"""
+
+    _counter: int = field(default=0, init=False)
+
+    def next(self) -> int:
+        """次のシーケンス番号を取得"""
+        self._counter += 1
+        return self._counter
+
+    @property
+    def current(self) -> int:
+        """現在のシーケンス番号"""
+        return self._counter
+
+    def reset(self) -> None:
+        """カウンターをリセット"""
+        self._counter = 0
+
+
+# =============================================================================
+# 基本ユーティリティ
+# =============================================================================
+
+
+def _get_timestamp() -> str:
+    """現在のタイムスタンプをISO形式で取得"""
+    return datetime.utcnow().isoformat() + "Z"
+
+
+def _create_event(event_type: str, seq: int, data: dict[str, Any]) -> dict:
+    """
+    イベントを生成
+
+    Args:
+        event_type: イベントタイプ
+        seq: シーケンス番号
+        data: イベントデータ
+
+    Returns:
+        イベント辞書
+    """
+    return {
+        "event": event_type,
+        "data": {
+            "seq": seq,
+            "timestamp": _get_timestamp(),
+            **data,
+        },
+    }
 
 
 def generate_sse_event(event: str, data: dict[str, Any]) -> ServerSentEvent:
@@ -34,191 +101,27 @@ def generate_sse_event(event: str, data: dict[str, Any]) -> ServerSentEvent:
     )
 
 
-async def send_sse_event(
-    event: str,
-    data: dict[str, Any],
-) -> str:
-    """
-    SSEイベントを文字列形式で生成
-
-    Args:
-        event: イベントタイプ
-        data: イベントデータ
-
-    Returns:
-        SSE形式の文字列
-    """
-    json_data = json.dumps(data, ensure_ascii=False, default=str)
-    return f"event: {event}\ndata: {json_data}\n\n"
+# =============================================================================
+# イベント生成関数
+# =============================================================================
 
 
-async def sse_event_generator(
-    event: str,
-    data: dict[str, Any],
-) -> AsyncIterator[dict]:
-    """
-    SSEイベントジェネレータ
-
-    Args:
-        event: イベントタイプ
-        data: イベントデータ
-
-    Yields:
-        SSEイベント辞書
-    """
-    yield {
-        "event": event,
-        "data": json.dumps(data, ensure_ascii=False, default=str),
-    }
-
-
-def _get_timestamp() -> str:
-    """現在のタイムスタンプをISO形式で取得"""
-    return datetime.utcnow().isoformat()
-
-
-def format_system_message_event(
-    subtype: str,
-    data: dict[str, Any],
-) -> dict:
-    """
-    システムメッセージイベントをフォーマット
-
-    Args:
-        subtype: サブタイプ (init / finish)
-        data: データ
-
-    Returns:
-        イベントデータ
-    """
-    return {
-        "event": "message",
-        "data": {
-            "type": "system",
-            "subtype": subtype,
-            "timestamp": _get_timestamp(),
-            "data": data,
-        },
-    }
-
-
-def format_assistant_message_event(
-    content_blocks: list[dict[str, Any]],
-) -> dict:
-    """
-    アシスタントメッセージイベントをフォーマット
-
-    Args:
-        content_blocks: コンテンツブロックのリスト
-
-    Returns:
-        イベントデータ
-    """
-    return {
-        "event": "message",
-        "data": {
-            "type": "assistant",
-            "subtype": None,
-            "timestamp": _get_timestamp(),
-            "content_blocks": content_blocks,
-        },
-    }
-
-
-def format_user_result_message_event(
-    content_blocks: list[dict[str, Any]],
-) -> dict:
-    """
-    ユーザー結果メッセージイベントをフォーマット（ツール結果）
-
-    Args:
-        content_blocks: コンテンツブロックのリスト
-
-    Returns:
-        イベントデータ
-    """
-    return {
-        "event": "message",
-        "data": {
-            "type": "user_result",
-            "subtype": None,
-            "timestamp": _get_timestamp(),
-            "content_blocks": content_blocks,
-        },
-    }
-
-
-def format_result_message_event(
-    subtype: str,
-    result: str | None,
-    errors: list[str] | None,
-    usage: dict,
-    cost_usd: float | str,
-    num_turns: int,
-    duration_ms: int,
-    session_id: str | None = None,
-    messages: list[dict[str, Any]] | None = None,
-    model_usage: dict[str, dict[str, Any]] | None = None,
-) -> dict:
-    """
-    結果メッセージイベントをフォーマット
-
-    Args:
-        subtype: サブタイプ (success / error_during_execution)
-        result: 結果テキスト（後方互換性のため残す）
-        errors: エラーリスト
-        usage: 使用状況（合計）
-        cost_usd: コスト（USD）
-        num_turns: ターン数
-        duration_ms: 実行時間（ミリ秒）
-        session_id: セッションID
-        messages: メッセージログ（/messagesと同じ形式）
-        model_usage: モデルごとの使用量
-
-    Returns:
-        イベントデータ
-    """
-    data = {
-        "type": "result",
-        "subtype": subtype,
-        "timestamp": _get_timestamp(),
-        "result": result,  # 後方互換性のため残す
-        "is_error": subtype != "success",
-        "errors": errors,
-        "usage": usage,
-        "total_cost_usd": cost_usd,
-        "num_turns": num_turns,
-        "duration_ms": duration_ms,
-    }
-    if session_id is not None:
-        data["session_id"] = session_id
-    if messages is not None:
-        data["messages"] = messages
-    if model_usage is not None:
-        data["model_usage"] = model_usage
-    return {
-        "event": "message",
-        "data": data,
-    }
-
-
-# 以下は後方互換性のためのエイリアス関数
-# 新しいコードではformat_*_message_event関数を使用してください
-
-def format_session_start_event(
+def format_init_event(
+    seq: int,
     session_id: str,
     tools: list[str],
     model: str,
     conversation_id: str | None = None,
 ) -> dict:
     """
-    セッション開始イベントをフォーマット（messages形式）
+    初期化イベントをフォーマット
 
     Args:
-        session_id: セッションID（Claude SDK用）
+        seq: シーケンス番号
+        session_id: セッションID
         tools: 利用可能なツールリスト
         model: 使用モデル
-        conversation_id: 会話ID（オプション）
+        conversation_id: 会話ID
 
     Returns:
         イベントデータ
@@ -231,297 +134,121 @@ def format_session_start_event(
     if conversation_id:
         data["conversation_id"] = conversation_id
 
-    return format_system_message_event(
-        subtype="init",
-        data=data,
-    )
+    return _create_event("init", seq, data)
 
 
-def format_text_delta_event(text: str) -> dict:
-    """
-    テキスト増分イベントをフォーマット（messages形式）
-
-    Args:
-        text: テキスト増分
-
-    Returns:
-        イベントデータ
-    """
-    return format_assistant_message_event(
-        content_blocks=[{"type": "text", "text": text}]
-    )
-
-
-def format_tool_start_event(
-    tool_use_id: str,
-    tool_name: str,
-    summary: str,
-    tool_input: dict | None = None,
+def format_thinking_event(
+    seq: int,
+    content: str,
+    parent_agent_id: str | None = None,
 ) -> dict:
     """
-    ツール開始イベントをフォーマット（messages形式）
+    思考プロセスイベントをフォーマット
 
     Args:
-        tool_use_id: ツール使用ID
-        tool_name: ツール名
-        summary: サマリー
-        tool_input: ツール入力パラメータ
-
-    Returns:
-        イベントデータ
-    """
-    input_data = tool_input or {}
-    # 大きな入力値は切り詰める
-    if tool_input:
-        input_data = {}
-        for key, value in tool_input.items():
-            if isinstance(value, str) and len(value) > 500:
-                input_data[key] = value[:500] + "..."
-            else:
-                input_data[key] = value
-
-    return format_assistant_message_event(
-        content_blocks=[{
-            "type": "tool_use",
-            "id": tool_use_id,
-            "name": tool_name,
-            "input": input_data,
-            "summary": summary,
-        }]
-    )
-
-
-def format_tool_complete_event(
-    tool_use_id: str,
-    tool_name: str,
-    status: str,
-    summary: str,
-    result_preview: str | None = None,
-    is_error: bool = False,
-) -> dict:
-    """
-    ツール完了イベントをフォーマット（messages形式）
-
-    Args:
-        tool_use_id: ツール使用ID
-        tool_name: ツール名
-        status: ステータス
-        summary: サマリー
-        result_preview: 結果のプレビュー
-        is_error: エラーかどうか
-
-    Returns:
-        イベントデータ
-    """
-    return format_user_result_message_event(
-        content_blocks=[{
-            "type": "tool_result",
-            "tool_use_id": tool_use_id,
-            "tool_name": tool_name,
-            "content": result_preview or summary,
-            "is_error": is_error,
-            "status": status,
-        }]
-    )
-
-
-def format_thinking_event(content: str) -> dict:
-    """
-    思考プロセスイベントをフォーマット（messages形式）
-
-    Args:
+        seq: シーケンス番号
         content: 思考内容
+        parent_agent_id: 親エージェントID（サブエージェント内の場合）
 
     Returns:
         イベントデータ
     """
-    return format_assistant_message_event(
-        content_blocks=[{"type": "thinking", "text": content}]
-    )
+    data = {
+        "content": content,
+    }
+    if parent_agent_id:
+        data["parent_agent_id"] = parent_agent_id
+
+    return _create_event("thinking", seq, data)
 
 
-def format_result_event(
-    subtype: str,
-    result: str | None,
-    errors: list[str] | None,
-    usage: dict,
-    cost_usd: float | str,
-    num_turns: int,
-    duration_ms: int,
-    session_id: str | None = None,
-    messages: list[dict[str, Any]] | None = None,
-    model_usage: dict[str, dict[str, Any]] | None = None,
+def format_assistant_event(
+    seq: int,
+    content_blocks: list[dict[str, Any]],
+    parent_agent_id: str | None = None,
 ) -> dict:
     """
-    結果イベントをフォーマット（messages形式）
+    アシスタントメッセージイベントをフォーマット
 
     Args:
-        subtype: サブタイプ (success / error_during_execution)
-        result: 結果テキスト（後方互換性のため残す）
-        errors: エラーリスト
-        usage: 使用状況（合計）
-        cost_usd: コスト（USD）
-        num_turns: ターン数
-        duration_ms: 実行時間（ミリ秒）
-        session_id: セッションID
-        messages: メッセージログ（/messagesと同じ形式）
-        model_usage: モデルごとの使用量
+        seq: シーケンス番号
+        content_blocks: コンテンツブロックのリスト
+        parent_agent_id: 親エージェントID（サブエージェント内の場合）
 
     Returns:
         イベントデータ
     """
-    return format_result_message_event(
-        subtype=subtype,
-        result=result,
-        errors=errors,
-        usage=usage,
-        cost_usd=cost_usd,
-        num_turns=num_turns,
-        duration_ms=duration_ms,
-        session_id=session_id,
-        messages=messages,
-        model_usage=model_usage,
-    )
-
-
-def format_error_event(error_message: str, error_type: str = "error") -> dict:
-    """
-    エラーイベントをフォーマット
-
-    Args:
-        error_message: エラーメッセージ
-        error_type: エラータイプ
-
-    Returns:
-        イベントデータ
-    """
-    return {
-        "event": "error",
-        "data": {
-            "type": error_type,
-            "message": error_message,
-            "timestamp": _get_timestamp(),
-        },
+    data = {
+        "content_blocks": content_blocks,
     }
+    if parent_agent_id:
+        data["parent_agent_id"] = parent_agent_id
+
+    return _create_event("assistant", seq, data)
 
 
-def format_title_generated_event(title: str) -> dict:
-    """
-    タイトル生成イベントをフォーマット
-
-    Args:
-        title: 生成されたタイトル
-
-    Returns:
-        イベントデータ
-    """
-    return {
-        "event": "title_generated",
-        "data": {
-            "title": title,
-            "timestamp": _get_timestamp(),
-        },
-    }
-
-
-# =============================================================================
-# リアルタイム進捗イベント
-# =============================================================================
-
-
-def format_status_event(
-    state: str,
-    message: str,
+def format_tool_call_event(
+    seq: int,
+    tool_use_id: str,
+    tool_name: str,
+    tool_input: dict[str, Any],
+    summary: str,
+    parent_agent_id: str | None = None,
 ) -> dict:
     """
-    ステータスイベントをフォーマット
-
-    現在の処理状態をクライアントに通知します。
+    ツール呼び出しイベントをフォーマット
 
     Args:
-        state: 状態 (thinking / generating / tool_execution / waiting)
-        message: 状態の説明メッセージ
+        seq: シーケンス番号
+        tool_use_id: ツール使用ID
+        tool_name: ツール名
+        tool_input: ツール入力パラメータ（切り詰め済み）
+        summary: サマリー
+        parent_agent_id: 親エージェントID（サブエージェント内の場合）
 
     Returns:
         イベントデータ
     """
-    return {
-        "event": "status",
-        "data": {
-            "state": state,
-            "message": message,
-            "timestamp": _get_timestamp(),
-        },
+    # 大きな入力値は切り詰める
+    truncated_input = {}
+    for key, value in tool_input.items():
+        if isinstance(value, str) and len(value) > 500:
+            truncated_input[key] = value[:500] + "..."
+        else:
+            truncated_input[key] = value
+
+    data = {
+        "tool_use_id": tool_use_id,
+        "tool_name": tool_name,
+        "input": truncated_input,
+        "summary": summary,
     }
+    if parent_agent_id:
+        data["parent_agent_id"] = parent_agent_id
+
+    return _create_event("tool_call", seq, data)
 
 
-def format_heartbeat_event(
-    elapsed_ms: int,
-) -> dict:
-    """
-    ハートビートイベントをフォーマット
-
-    接続維持とタイムアウト防止のために定期的に送信されます。
-
-    Args:
-        elapsed_ms: 経過時間（ミリ秒）
-
-    Returns:
-        イベントデータ
-    """
-    return {
-        "event": "heartbeat",
-        "data": {
-            "timestamp": _get_timestamp(),
-            "elapsed_ms": elapsed_ms,
-        },
-    }
-
-
-def format_turn_progress_event(
-    current_turn: int,
-    max_turns: int | None = None,
-) -> dict:
-    """
-    ターン進捗イベントをフォーマット
-
-    現在のターン番号を通知します。
-
-    Args:
-        current_turn: 現在のターン番号
-        max_turns: 最大ターン数（設定されている場合）
-
-    Returns:
-        イベントデータ
-    """
-    return {
-        "event": "turn_progress",
-        "data": {
-            "current_turn": current_turn,
-            "max_turns": max_turns,
-            "timestamp": _get_timestamp(),
-        },
-    }
-
-
-def format_tool_progress_event(
+def format_tool_result_event(
+    seq: int,
     tool_use_id: str,
     tool_name: str,
     status: str,
-    message: str | None = None,
-    parent_tool_use_id: str | None = None,
+    content: str,
+    is_error: bool = False,
+    parent_agent_id: str | None = None,
 ) -> dict:
     """
-    ツール進捗イベントをフォーマット
-
-    ツール実行の状態を通知します。
+    ツール結果イベントをフォーマット
 
     Args:
+        seq: シーケンス番号
         tool_use_id: ツール使用ID
         tool_name: ツール名
-        status: ステータス (pending / running / completed / error)
-        message: 進捗メッセージ（オプション）
-        parent_tool_use_id: 親ツールID（サブエージェント内の場合）
+        status: ステータス（completed / error）
+        content: 結果内容（プレビュー）
+        is_error: エラーかどうか
+        parent_agent_id: 親エージェントID（サブエージェント内の場合）
 
     Returns:
         イベントデータ
@@ -530,50 +257,292 @@ def format_tool_progress_event(
         "tool_use_id": tool_use_id,
         "tool_name": tool_name,
         "status": status,
-        "parent_tool_use_id": parent_tool_use_id,
-        "timestamp": _get_timestamp(),
+        "content": content,
+        "is_error": is_error,
     }
-    if message:
-        data["message"] = message
-    return {
-        "event": "tool_progress",
-        "data": data,
-    }
+    if parent_agent_id:
+        data["parent_agent_id"] = parent_agent_id
+
+    return _create_event("tool_result", seq, data)
 
 
-def format_subagent_event(
-    action: str,
+def format_subagent_start_event(
+    seq: int,
+    agent_id: str,
     agent_type: str,
     description: str,
-    parent_tool_use_id: str,
-    result: str | None = None,
+    model: str | None = None,
 ) -> dict:
     """
-    サブエージェントイベントをフォーマット
-
-    Taskツールによるサブエージェントの開始/終了を通知します。
+    サブエージェント開始イベントをフォーマット
 
     Args:
-        action: アクション (start / stop)
+        seq: シーケンス番号
+        agent_id: エージェントID（tool_use_id）
         agent_type: エージェントタイプ
         description: 説明
-        parent_tool_use_id: 親ツール使用ID
-        result: 結果（終了時のみ）
+        model: 使用モデル
 
     Returns:
         イベントデータ
     """
     data = {
-        "action": action,
+        "agent_id": agent_id,
         "agent_type": agent_type,
         "description": description,
-        "parent_tool_use_id": parent_tool_use_id,
-        "timestamp": _get_timestamp(),
     }
-    if result:
-        data["result"] = result
-    return {
-        "event": "subagent",
-        "data": data,
+    if model:
+        data["model"] = model
+
+    return _create_event("subagent_start", seq, data)
+
+
+def format_subagent_end_event(
+    seq: int,
+    agent_id: str,
+    agent_type: str,
+    status: str,
+    result_preview: str | None = None,
+) -> dict:
+    """
+    サブエージェント終了イベントをフォーマット
+
+    Args:
+        seq: シーケンス番号
+        agent_id: エージェントID（tool_use_id）
+        agent_type: エージェントタイプ
+        status: ステータス（completed / error）
+        result_preview: 結果プレビュー
+
+    Returns:
+        イベントデータ
+    """
+    data = {
+        "agent_id": agent_id,
+        "agent_type": agent_type,
+        "status": status,
+    }
+    if result_preview:
+        data["result_preview"] = result_preview
+
+    return _create_event("subagent_end", seq, data)
+
+
+def format_progress_event(
+    seq: int,
+    progress_type: str,
+    message: str,
+    tool_use_id: str | None = None,
+    tool_name: str | None = None,
+    tool_status: str | None = None,
+    parent_agent_id: str | None = None,
+) -> dict:
+    """
+    進捗イベントをフォーマット（統合型）
+
+    Args:
+        seq: シーケンス番号
+        progress_type: 進捗タイプ（thinking / generating / tool）
+        message: 進捗メッセージ
+        tool_use_id: ツール使用ID（tool タイプ時）
+        tool_name: ツール名（tool タイプ時）
+        tool_status: ツールステータス（pending / running / completed / error）
+        parent_agent_id: 親エージェントID（サブエージェント内の場合）
+
+    Returns:
+        イベントデータ
+    """
+    data: dict[str, Any] = {
+        "type": progress_type,
+        "message": message,
     }
 
+    if tool_use_id:
+        data["tool_use_id"] = tool_use_id
+    if tool_name:
+        data["tool_name"] = tool_name
+    if tool_status:
+        data["tool_status"] = tool_status
+    if parent_agent_id:
+        data["parent_agent_id"] = parent_agent_id
+
+    return _create_event("progress", seq, data)
+
+
+def format_title_event(seq: int, title: str) -> dict:
+    """
+    タイトル生成イベントをフォーマット
+
+    Args:
+        seq: シーケンス番号
+        title: 生成されたタイトル
+
+    Returns:
+        イベントデータ
+    """
+    return _create_event("title", seq, {"title": title})
+
+
+def format_ping_event(seq: int, elapsed_ms: int) -> dict:
+    """
+    ハートビート（ping）イベントをフォーマット
+
+    Args:
+        seq: シーケンス番号
+        elapsed_ms: 経過時間（ミリ秒）
+
+    Returns:
+        イベントデータ
+    """
+    return _create_event("ping", seq, {"elapsed_ms": elapsed_ms})
+
+
+def format_done_event(
+    seq: int,
+    status: str,
+    result: str | None,
+    errors: list[str] | None,
+    usage: dict[str, Any],
+    cost_usd: float | str,
+    turn_count: int,
+    duration_ms: int,
+    session_id: str | None = None,
+    messages: list[dict[str, Any]] | None = None,
+    model_usage: dict[str, dict[str, Any]] | None = None,
+) -> dict:
+    """
+    完了イベントをフォーマット
+
+    Args:
+        seq: シーケンス番号
+        status: ステータス（success / error / cancelled）
+        result: 結果テキスト
+        errors: エラーリスト
+        usage: 使用状況
+        cost_usd: コスト（USD）
+        turn_count: ターン数
+        duration_ms: 実行時間（ミリ秒）
+        session_id: セッションID
+        messages: メッセージログ
+        model_usage: モデル別使用量
+
+    Returns:
+        イベントデータ
+    """
+    data: dict[str, Any] = {
+        "status": status,
+        "result": result,
+        "is_error": status != "success",
+        "errors": errors,
+        "usage": usage,
+        "cost_usd": cost_usd,
+        "turn_count": turn_count,
+        "duration_ms": duration_ms,
+    }
+    if session_id is not None:
+        data["session_id"] = session_id
+    if messages is not None:
+        data["messages"] = messages
+    if model_usage is not None:
+        data["model_usage"] = model_usage
+
+    return _create_event("done", seq, data)
+
+
+def format_error_event(
+    seq: int,
+    error_type: str,
+    message: str,
+    recoverable: bool = False,
+) -> dict:
+    """
+    エラーイベントをフォーマット
+
+    Args:
+        seq: シーケンス番号
+        error_type: エラータイプ
+        message: エラーメッセージ
+        recoverable: 回復可能かどうか
+
+    Returns:
+        イベントデータ
+    """
+    return _create_event("error", seq, {
+        "error_type": error_type,
+        "message": message,
+        "recoverable": recoverable,
+    })
+
+
+# =============================================================================
+# 後方互換性のためのエイリアス関数（非推奨）
+# 新しいコードでは上記の関数を直接使用してください
+# =============================================================================
+
+
+def format_heartbeat_event(elapsed_ms: int) -> dict:
+    """
+    ハートビートイベントをフォーマット（後方互換性用）
+
+    注: seq番号が0になるため、新しいコードでは format_ping_event を使用してください
+
+    Args:
+        elapsed_ms: 経過時間（ミリ秒）
+
+    Returns:
+        イベントデータ
+    """
+    return format_ping_event(0, elapsed_ms)
+
+
+# =============================================================================
+# 旧形式からのマイグレーション用ヘルパー
+# =============================================================================
+
+
+def convert_legacy_message_event(legacy_event: dict) -> dict:
+    """
+    旧形式のmessageイベントを新形式に変換
+
+    Args:
+        legacy_event: 旧形式のイベント
+
+    Returns:
+        新形式のイベント
+    """
+    data = legacy_event.get("data", {})
+    msg_type = data.get("type")
+    subtype = data.get("subtype")
+
+    # シーケンス番号は呼び出し側で管理
+    seq = data.get("seq", 0)
+
+    if msg_type == "system" and subtype == "init":
+        return format_init_event(
+            seq=seq,
+            session_id=data.get("data", {}).get("session_id", ""),
+            tools=data.get("data", {}).get("tools", []),
+            model=data.get("data", {}).get("model", ""),
+        )
+
+    elif msg_type == "assistant":
+        content_blocks = data.get("content_blocks", [])
+        return format_assistant_event(seq=seq, content_blocks=content_blocks)
+
+    elif msg_type == "result":
+        return format_done_event(
+            seq=seq,
+            status=subtype if subtype == "success" else "error",
+            result=data.get("result"),
+            errors=data.get("errors"),
+            usage=data.get("usage", {}),
+            cost_usd=data.get("total_cost_usd", 0),
+            turn_count=data.get("num_turns", 0),
+            duration_ms=data.get("duration_ms", 0),
+            session_id=data.get("session_id"),
+            messages=data.get("messages"),
+            model_usage=data.get("model_usage"),
+        )
+
+    # 変換不可能な場合はそのまま返す
+    return legacy_event
