@@ -296,18 +296,21 @@ curl -X GET "https://api.example.com/api/tenants/acme-corp/conversations/550e840
 
 ```
 workspace/
-├── uploads/           # ユーザーアップロードファイル
+├── uploads/           # ユーザーアップロードファイル（強制）
 │   ├── data.csv
 │   └── image.png
-└── outputs/           # AI作成ファイル
-    ├── result.csv
-    └── report.md
+├── result.csv         # AI作成ファイル（任意の場所）
+├── analysis/
+│   └── report.md
+└── output.json
 ```
 
 | ディレクトリ | 説明 |
 |-------------|------|
-| `uploads/` | ユーザーがアップロードしたファイル |
-| `outputs/` | AIが作成したファイル |
+| `uploads/` | ユーザーがアップロードしたファイル（このディレクトリに自動配置） |
+| その他 | AIが作成したファイルは任意の場所に配置可能 |
+
+**注意**: AIはワークスペース直下や任意のサブディレクトリにファイルを作成できます。`uploads/`はユーザーアップロード用の予約ディレクトリです。
 
 ---
 
