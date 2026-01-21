@@ -201,6 +201,37 @@ class SimpleChatService:
         await self.db.delete(chat)
         return True
 
+    async def archive_chat(
+        self,
+        chat_id: str,
+        tenant_id: str,
+    ) -> Optional[SimpleChat]:
+        """
+        チャットをアーカイブ
+
+        Args:
+            chat_id: チャットID
+            tenant_id: テナントID
+
+        Returns:
+            更新されたチャット（存在しない場合はNone）
+        """
+        chat = await self.get_chat_by_id(chat_id, tenant_id)
+        if not chat:
+            return None
+
+        chat.status = "archived"
+        await self.db.flush()
+        await self.db.refresh(chat)
+
+        logger.info(
+            "シンプルチャットアーカイブ",
+            chat_id=chat.chat_id,
+            tenant_id=tenant_id,
+        )
+
+        return chat
+
     # ============================================
     # メッセージ操作
     # ============================================

@@ -115,6 +115,33 @@ async def get_simple_chat(
     )
 
 
+@router.post(
+    "/{chat_id}/archive",
+    response_model=SimpleChatResponse,
+    summary="シンプルチャットアーカイブ",
+)
+async def archive_simple_chat(
+    tenant_id: str,
+    chat_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    シンプルチャットをアーカイブします。
+
+    アーカイブされたチャットは継続メッセージを送信できなくなりますが、
+    履歴の参照は引き続き可能です。
+    """
+    service = SimpleChatService(db)
+    chat = await service.archive_chat(chat_id, tenant_id)
+    if not chat:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"チャット '{chat_id}' が見つかりません",
+        )
+    await db.commit()
+    return SimpleChatResponse.model_validate(chat)
+
+
 @router.delete(
     "/{chat_id}",
     status_code=status.HTTP_204_NO_CONTENT,
