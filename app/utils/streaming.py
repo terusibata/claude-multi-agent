@@ -112,7 +112,6 @@ def format_init_event(
     tools: list[str],
     model: str,
     conversation_id: str | None = None,
-    max_turns: int | None = None,
 ) -> dict:
     """
     初期化イベントをフォーマット
@@ -123,7 +122,6 @@ def format_init_event(
         tools: 利用可能なツールリスト
         model: 使用モデル
         conversation_id: 会話ID
-        max_turns: 最大ターン数
 
     Returns:
         イベントデータ
@@ -135,8 +133,6 @@ def format_init_event(
     }
     if conversation_id:
         data["conversation_id"] = conversation_id
-    if max_turns is not None:
-        data["max_turns"] = max_turns
 
     return _create_event("init", seq, data)
 
@@ -336,8 +332,6 @@ def format_progress_event(
     seq: int,
     progress_type: str,
     message: str,
-    turn: int | None = None,
-    max_turns: int | None = None,
     tool_use_id: str | None = None,
     tool_name: str | None = None,
     tool_status: str | None = None,
@@ -348,10 +342,8 @@ def format_progress_event(
 
     Args:
         seq: シーケンス番号
-        progress_type: 進捗タイプ（thinking / generating / tool / turn）
+        progress_type: 進捗タイプ（thinking / generating / tool）
         message: 進捗メッセージ
-        turn: 現在のターン番号
-        max_turns: 最大ターン数
         tool_use_id: ツール使用ID（tool タイプ時）
         tool_name: ツール名（tool タイプ時）
         tool_status: ツールステータス（pending / running / completed / error）
@@ -365,10 +357,6 @@ def format_progress_event(
         "message": message,
     }
 
-    if turn is not None:
-        data["turn"] = turn
-    if max_turns is not None:
-        data["max_turns"] = max_turns
     if tool_use_id:
         data["tool_use_id"] = tool_use_id
     if tool_name:

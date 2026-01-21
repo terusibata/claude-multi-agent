@@ -61,7 +61,6 @@ class MessageProcessor:
         self,
         message: Any,
         log_entry: MessageLogEntry,
-        max_turns: int | None = None,
     ) -> Generator[dict, None, None]:
         """
         システムメッセージを処理
@@ -69,7 +68,6 @@ class MessageProcessor:
         Args:
             message: SDKメッセージ
             log_entry: ログエントリ
-            max_turns: 最大ターン数
 
         Yields:
             SSEイベント
@@ -110,7 +108,6 @@ class MessageProcessor:
                 tools=tools,
                 model=model_name,
                 conversation_id=self.context.conversation_id,
-                max_turns=max_turns,
             )
 
     def process_assistant_message(

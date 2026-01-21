@@ -87,8 +87,7 @@ data: {"seq": 99, "timestamp": "...", "status": "success", ...}
     "session_id": "session-uuid-from-sdk",
     "tools": ["Read", "Write", "Bash", "Glob", "Grep"],
     "model": "Claude Sonnet 4",
-    "conversation_id": "conversation-uuid",
-    "max_turns": 10
+    "conversation_id": "conversation-uuid"
   }
 }
 ```
@@ -474,7 +473,6 @@ export interface InitEventData extends BaseEventData {
   tools: string[];
   model: string;
   conversation_id?: string;
-  max_turns?: number;
 }
 
 export interface InitEvent {

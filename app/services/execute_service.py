@@ -39,7 +39,6 @@ from app.utils.streaming import (
     SequenceCounter,
     format_done_event,
     format_error_event,
-    format_progress_event,
     format_title_event,
 )
 
@@ -262,9 +261,8 @@ class ExecuteService:
             user_input=context.request.user_input[:100],
         )
 
-        # ターン番号追跡（SDKのターン）
+        # ターン番号追跡（SDKのターン、内部ログ用）
         sdk_turn_number = 0
-        max_turns = options.get("max_turns")
 
         async with ClaudeSDKClient(options=sdk_options) as client:
             await client.query(context.request.user_input)
@@ -287,7 +285,7 @@ class ExecuteService:
                 # メッセージタイプ別処理
                 if isinstance(message, SystemMessage):
                     async for event in self._wrap_generator(
-                        message_processor.process_system_message(message, log_entry, max_turns)
+                        message_processor.process_system_message(message, log_entry)
                     ):
                         yield event
 
