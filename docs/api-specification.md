@@ -603,174 +603,56 @@ MCPサーバーを削除（論理削除）
 - タイトル自動生成（初回応答完了時）
 - `application_type` による用途識別
 
-#### POST /api/tenants/{tenant_id}/simple-chats
+詳細は [10-simple-chat.md](./api-specification/10-simple-chat.md) を参照してください。
 
-新規シンプルチャットを作成し、初回メッセージのストリーミング応答を開始
+#### POST /api/tenants/{tenant_id}/simple-chats/stream
 
-**リクエスト:**
+ストリーミング実行（新規作成・継続を統合）
+
+**動作モード:**
+- `chat_id` を指定しない → **新規作成**
+- `chat_id` を指定する → **継続**
+
+**新規作成リクエスト:**
 
 ```json
 {
   "user_id": "user-001",
   "application_type": "translationApp",
-  "system_prompt": "You are a professional translator. Translate the following text to Japanese.",
+  "system_prompt": "You are a professional translator.",
   "model_id": "claude-sonnet-4",
   "message": "Hello, how are you?"
 }
 ```
 
-| フィールド | 型 | 必須 | 説明 |
-|-----------|-----|------|------|
-| `user_id` | string | ○ | ユーザーID |
-| `application_type` | string | ○ | 用途識別子（例: translationApp, summarizer, chatbot） |
-| `system_prompt` | string | ○ | システムプロンプト |
-| `model_id` | string | ○ | モデルID（内部ID） |
-| `message` | string | ○ | 最初のユーザーメッセージ |
-
-**レスポンス:** `Content-Type: text/event-stream`
-
-レスポンスヘッダー `X-Chat-ID` に作成されたチャットIDが含まれます。
-
-```
-event: text_delta
-data: {"seq":1,"timestamp":"2024-01-15T10:30:00Z","event_type":"text_delta","content":"こんにちは"}
-
-event: text_delta
-data: {"seq":2,"timestamp":"2024-01-15T10:30:01Z","event_type":"text_delta","content":"、お元気ですか？"}
-
-event: done
-data: {"seq":3,"timestamp":"2024-01-15T10:30:02Z","event_type":"done","title":"挨拶の翻訳","usage":{"input_tokens":50,"output_tokens":15,"total_tokens":65},"cost_usd":"0.00013"}
-```
-
-**SSEイベントタイプ:**
-
-| イベント | 説明 |
-|----------|------|
-| `text_delta` | テキスト増分 |
-| `done` | 完了（タイトル、使用量、コスト含む） |
-| `error` | エラー |
-
-#### GET /api/tenants/{tenant_id}/simple-chats
-
-シンプルチャット一覧を取得
-
-**クエリパラメータ:**
-
-| パラメータ | 型 | 説明 |
-|-----------|-----|------|
-| `user_id` | string | ユーザーIDでフィルタ |
-| `application_type` | string | アプリケーションタイプでフィルタ |
-| `status` | string | ステータスでフィルタ（active/archived） |
-| `limit` | int | 取得件数（デフォルト: 50） |
-| `offset` | int | オフセット |
-
-**レスポンス:**
-
-```json
-{
-  "items": [
-    {
-      "chat_id": "550e8400-e29b-41d4-a716-446655440000",
-      "tenant_id": "tenant-001",
-      "user_id": "user-001",
-      "model_id": "claude-sonnet-4",
-      "application_type": "translationApp",
-      "system_prompt": "You are a professional translator...",
-      "title": "挨拶の翻訳",
-      "status": "active",
-      "created_at": "2024-01-15T10:30:00Z",
-      "updated_at": "2024-01-15T10:30:02Z"
-    }
-  ],
-  "total": 1,
-  "limit": 50,
-  "offset": 0
-}
-```
-
-#### GET /api/tenants/{tenant_id}/simple-chats/{chat_id}
-
-シンプルチャット詳細（メッセージ履歴含む）を取得
-
-**レスポンス:**
+**継続リクエスト:**
 
 ```json
 {
   "chat_id": "550e8400-e29b-41d4-a716-446655440000",
-  "tenant_id": "tenant-001",
-  "user_id": "user-001",
-  "model_id": "claude-sonnet-4",
-  "application_type": "translationApp",
-  "system_prompt": "You are a professional translator...",
-  "title": "挨拶の翻訳",
-  "status": "active",
-  "created_at": "2024-01-15T10:30:00Z",
-  "updated_at": "2024-01-15T10:30:02Z",
-  "messages": [
-    {
-      "message_id": "661f8511-f30c-52e5-b827-557766551111",
-      "chat_id": "550e8400-e29b-41d4-a716-446655440000",
-      "message_seq": 1,
-      "role": "user",
-      "content": "Hello, how are you?",
-      "created_at": "2024-01-15T10:30:00Z"
-    },
-    {
-      "message_id": "772f8622-g41d-63f6-c938-668877662222",
-      "chat_id": "550e8400-e29b-41d4-a716-446655440000",
-      "message_seq": 2,
-      "role": "assistant",
-      "content": "こんにちは、お元気ですか？",
-      "created_at": "2024-01-15T10:30:02Z"
-    }
-  ]
-}
-```
-
-#### POST /api/tenants/{tenant_id}/simple-chats/{chat_id}/messages
-
-継続メッセージを送信し、ストリーミング応答を取得
-
-**リクエスト:**
-
-```json
-{
   "message": "Now translate it to French."
 }
 ```
 
 **レスポンス:** `Content-Type: text/event-stream`
 
-POST /simple-chats と同じSSE形式（`done` イベントに `title` は含まれない）
+新規作成時はレスポンスヘッダー `X-Chat-ID` にチャットIDが含まれます。
+
+#### GET /api/tenants/{tenant_id}/simple-chats
+
+シンプルチャット一覧を取得
+
+#### GET /api/tenants/{tenant_id}/simple-chats/{chat_id}
+
+シンプルチャット詳細（メッセージ履歴含む）を取得
 
 #### POST /api/tenants/{tenant_id}/simple-chats/{chat_id}/archive
 
 シンプルチャットをアーカイブ
 
-アーカイブされたチャットは継続メッセージを送信できませんが、履歴の参照は可能です。
-
-**レスポンス:**
-
-```json
-{
-  "chat_id": "550e8400-e29b-41d4-a716-446655440000",
-  "tenant_id": "tenant-001",
-  "user_id": "user-001",
-  "model_id": "claude-sonnet-4",
-  "application_type": "translationApp",
-  "system_prompt": "You are a professional translator...",
-  "title": "挨拶の翻訳",
-  "status": "archived",
-  "created_at": "2024-01-15T10:30:00Z",
-  "updated_at": "2024-01-15T11:00:00Z"
-}
-```
-
 #### DELETE /api/tenants/{tenant_id}/simple-chats/{chat_id}
 
-シンプルチャットを削除（関連するメッセージも削除）
-
-**レスポンス:** 204 No Content
+シンプルチャットを削除
 
 ---
 

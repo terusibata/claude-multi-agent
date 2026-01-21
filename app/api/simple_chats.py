@@ -14,12 +14,11 @@ from sse_starlette.sse import EventSourceResponse
 from app.database import get_db
 from app.models.model import Model
 from app.schemas.simple_chat import (
-    CreateSimpleChatRequest,
-    SendMessageRequest,
     SimpleChatDetailResponse,
     SimpleChatListResponse,
     SimpleChatMessageResponse,
     SimpleChatResponse,
+    SimpleChatStreamRequest,
 )
 from app.services.simple_chat_service import SimpleChatService
 from app.services.tenant_service import TenantService
@@ -213,28 +212,39 @@ async def _simple_chat_event_generator(
 
 
 @router.post(
-    "",
-    summary="シンプルチャット作成＆初回メッセージ送信",
+    "/stream",
+    summary="シンプルチャットストリーミング実行",
 )
-async def create_simple_chat_and_stream(
+async def stream_simple_chat(
     tenant_id: str,
-    request: CreateSimpleChatRequest,
+    request: SimpleChatStreamRequest,
     db: AsyncSession = Depends(get_db),
 ):
     """
-    新しいシンプルチャットを作成し、初回メッセージのストリーミング応答を開始します。
+    シンプルチャットのストリーミング実行を行います。
+
+    ## 動作モード
+
+    - **新規作成**: `chat_id` を指定しない場合、新しいチャットを作成
+    - **継続**: `chat_id` を指定した場合、既存のチャットを継続
 
     ## リクエストボディ
 
+    ### 新規作成時（chat_idなし）
     - **user_id**: ユーザーID（必須）
     - **application_type**: アプリケーションタイプ（必須、例: translationApp）
     - **system_prompt**: システムプロンプト（必須）
-    - **model_id**: Bedrockモデル内部ID（必須）
-    - **message**: 最初のユーザーメッセージ（必須）
+    - **model_id**: モデルID（必須）
+    - **message**: ユーザーメッセージ（必須）
+
+    ### 継続時（chat_idあり）
+    - **chat_id**: チャットID（必須）
+    - **message**: ユーザーメッセージ（必須）
 
     ## レスポンス
 
     Server-Sent Events (SSE) 形式でストリーミング送信されます。
+    新規作成時はレスポンスヘッダー `X-Chat-ID` にチャットIDが含まれます。
 
     ### イベントタイプ
 
@@ -256,89 +266,89 @@ async def create_simple_chat_and_stream(
             detail=f"テナント '{tenant_id}' は現在利用できません",
         )
 
-    # モデル存在確認
-    model_query = select(Model).where(Model.model_id == request.model_id)
-    model_result = await db.execute(model_query)
-    model = model_result.scalar_one_or_none()
-    if not model:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"モデル '{request.model_id}' が見つかりません",
-        )
-    if model.status != "active":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"モデル '{request.model_id}' は現在利用できません",
-        )
-
-    # チャット作成
     service = SimpleChatService(db)
-    chat = await service.create_chat(
-        tenant_id=tenant_id,
-        user_id=request.user_id,
-        model_id=request.model_id,
-        application_type=request.application_type,
-        system_prompt=request.system_prompt,
-    )
-    await db.commit()
+    response_headers = {}
 
-    # SSEレスポンスを返す（chat_idをヘッダーに含める）
-    return EventSourceResponse(
-        _simple_chat_event_generator(
-            service=service,
-            chat=chat,
-            model=model,
-            user_message=request.message,
-        ),
-        media_type="text/event-stream",
-        headers={"X-Chat-ID": chat.chat_id},
-    )
+    if request.chat_id:
+        # ========================================
+        # 継続モード: 既存チャットを継続
+        # ========================================
+        chat = await service.get_chat_by_id(request.chat_id, tenant_id)
+        if not chat:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"チャット '{request.chat_id}' が見つかりません",
+            )
+        if chat.status != "active":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"チャット '{request.chat_id}' はアーカイブされています",
+            )
 
+        # モデル取得
+        model_query = select(Model).where(Model.model_id == chat.model_id)
+        model_result = await db.execute(model_query)
+        model = model_result.scalar_one_or_none()
+        if not model:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"モデル '{chat.model_id}' が見つかりません",
+            )
 
-@router.post(
-    "/{chat_id}/messages",
-    summary="シンプルチャットメッセージ送信",
-)
-async def send_simple_chat_message(
-    tenant_id: str,
-    chat_id: str,
-    request: SendMessageRequest,
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    既存のシンプルチャットにメッセージを送信し、ストリーミング応答を取得します。
+    else:
+        # ========================================
+        # 新規作成モード: 新しいチャットを作成
+        # ========================================
 
-    ## リクエストボディ
+        # 必須パラメータのバリデーション
+        if not request.user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="新規作成時は user_id が必須です",
+            )
+        if not request.application_type:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="新規作成時は application_type が必須です",
+            )
+        if not request.system_prompt:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="新規作成時は system_prompt が必須です",
+            )
+        if not request.model_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="新規作成時は model_id が必須です",
+            )
 
-    - **message**: ユーザーメッセージ（必須）
+        # モデル存在確認
+        model_query = select(Model).where(Model.model_id == request.model_id)
+        model_result = await db.execute(model_query)
+        model = model_result.scalar_one_or_none()
+        if not model:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"モデル '{request.model_id}' が見つかりません",
+            )
+        if model.status != "active":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"モデル '{request.model_id}' は現在利用できません",
+            )
 
-    ## レスポンス
-
-    Server-Sent Events (SSE) 形式でストリーミング送信されます。
-    """
-    # チャット存在確認
-    service = SimpleChatService(db)
-    chat = await service.get_chat_by_id(chat_id, tenant_id)
-    if not chat:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"チャット '{chat_id}' が見つかりません",
+        # チャット作成
+        chat = await service.create_chat(
+            tenant_id=tenant_id,
+            user_id=request.user_id,
+            model_id=request.model_id,
+            application_type=request.application_type,
+            system_prompt=request.system_prompt,
         )
-    if chat.status != "active":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"チャット '{chat_id}' はアーカイブされています",
-        )
+        await db.commit()
 
-    # モデル取得
-    model_query = select(Model).where(Model.model_id == chat.model_id)
-    model_result = await db.execute(model_query)
-    model = model_result.scalar_one_or_none()
-    if not model:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"モデル '{chat.model_id}' が見つかりません",
-        )
+        # レスポンスヘッダーにチャットIDを含める
+        response_headers["X-Chat-ID"] = chat.chat_id
 
     # SSEレスポンスを返す
     return EventSourceResponse(
@@ -349,4 +359,5 @@ async def send_simple_chat_message(
             user_message=request.message,
         ),
         media_type="text/event-stream",
+        headers=response_headers if response_headers else None,
     )

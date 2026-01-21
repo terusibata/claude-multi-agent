@@ -14,23 +14,28 @@ from pydantic import BaseModel, ConfigDict, Field
 # ===========================================
 
 
-class CreateSimpleChatRequest(BaseModel):
-    """シンプルチャット作成リクエスト"""
+class SimpleChatStreamRequest(BaseModel):
+    """
+    シンプルチャットストリームリクエスト
 
-    user_id: str = Field(..., description="ユーザーID")
-    application_type: str = Field(
-        ...,
-        description="アプリケーションタイプ（用途識別子）",
+    chat_idがある場合は継続、ない場合は新規作成として処理。
+    新規作成時はuser_id, application_type, system_prompt, model_idが必須。
+    """
+
+    # 継続時に必要（指定がなければ新規作成）
+    chat_id: Optional[str] = Field(None, description="チャットID（継続時に指定）")
+
+    # 新規作成時に必要
+    user_id: Optional[str] = Field(None, description="ユーザーID（新規作成時に必須）")
+    application_type: Optional[str] = Field(
+        None,
+        description="アプリケーションタイプ（新規作成時に必須）",
         examples=["translationApp", "summarizer", "chatbot"],
     )
-    system_prompt: str = Field(..., description="システムプロンプト")
-    model_id: str = Field(..., description="Bedrock モデルID")
-    message: str = Field(..., description="最初のユーザーメッセージ")
+    system_prompt: Optional[str] = Field(None, description="システムプロンプト（新規作成時に必須）")
+    model_id: Optional[str] = Field(None, description="モデルID（新規作成時に必須）")
 
-
-class SendMessageRequest(BaseModel):
-    """メッセージ送信リクエスト"""
-
+    # 常に必要
     message: str = Field(..., description="ユーザーメッセージ")
 
 
