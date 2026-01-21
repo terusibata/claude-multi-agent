@@ -267,6 +267,70 @@ interface ToolResultEvent {
 }
 ```
 
+#### 組み込みツール: present_files（ファイル提示）
+
+AIが作成・編集したファイルをユーザーに提示する組み込みツールです。
+Write/Edit/NotebookEditでファイルを作成・編集した後、AIはこのツールを使用してユーザーにファイルを提示します。
+
+**tool_call イベント:**
+```json
+{
+  "seq": 20,
+  "timestamp": "2024-01-15T10:30:15.123Z",
+  "tool_use_id": "tu_present_001",
+  "tool_name": "mcp__file-presentation__present_files",
+  "input": {
+    "file_paths": ["analysis_result.csv", "report.md"],
+    "description": "データ分析結果のCSVファイルとレポート"
+  },
+  "summary": "ファイルをユーザーに提示します"
+}
+```
+
+**tool_result イベント（成功時）:**
+```json
+{
+  "seq": 21,
+  "timestamp": "2024-01-15T10:30:15.456Z",
+  "tool_use_id": "tu_present_001",
+  "tool_name": "mcp__file-presentation__present_files",
+  "status": "completed",
+  "content": "ファイルを提示しました: データ分析結果のCSVファイルとレポート\n\n【提示されたファイル】\n• analysis_result.csv (5120 bytes)\n  ダウンロードパス: analysis_result.csv\n• report.md (2048 bytes)\n  ダウンロードパス: report.md",
+  "is_error": false
+}
+```
+
+**tool_result イベント（一部ファイルが見つからない場合）:**
+```json
+{
+  "seq": 21,
+  "timestamp": "2024-01-15T10:30:15.456Z",
+  "tool_use_id": "tu_present_001",
+  "tool_name": "mcp__file-presentation__present_files",
+  "status": "completed",
+  "content": "ファイルを提示しました: 分析レポート\n\n【提示されたファイル】\n• report.md (2048 bytes)\n  ダウンロードパス: report.md\n\n【見つからなかったファイル】\n• missing.csv",
+  "is_error": false
+}
+```
+
+**フロントエンドでの処理:**
+
+`mcp__file-presentation__present_files` のtool_resultを受信した場合、フロントエンドは以下の処理を行うことを推奨します：
+
+1. ダウンロードパスを抽出してダウンロードボタンを表示
+2. [ワークスペースAPI](./07-workspace.md)の`GET .../files/download`でファイルをダウンロード
+
+```typescript
+// tool_resultイベントの処理例
+function handleToolResult(event: ToolResultEvent) {
+  if (event.tool_name === "mcp__file-presentation__present_files") {
+    // ダウンロードパスをパースしてUIに表示
+    const downloadPaths = parseDownloadPaths(event.content);
+    showDownloadButtons(downloadPaths);
+  }
+}
+```
+
 ### 6. subagent_start（サブエージェント開始）
 
 サブエージェント（Taskツール）の開始を通知します。
