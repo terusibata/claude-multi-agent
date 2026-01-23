@@ -75,9 +75,14 @@ curl -X POST "https://api.example.com/api/tenants/acme-corp/conversations/550e84
 
 ```
 event: <event_type>
-data: {"seq": <number>, "timestamp": "<ISO8601>", ...}
+data: {"seq": <number>, "event": "<event_type>", "timestamp": "<ISO8601>", ...}
 
 ```
+
+**重要**: JSONデータ内にも `event` フィールドを含めます。これにより：
+- EventSource API を使用しない環境でもイベントタイプを判別可能
+- デバッグ時にログからイベントタイプを直接確認可能
+- SSEヘッダーをパースできないクライアントでも対応可能
 
 ### イベントデータの共通フィールド
 
@@ -85,6 +90,7 @@ data: {"seq": <number>, "timestamp": "<ISO8601>", ...}
 |-----------|-----|------|
 | `seq` | number | シーケンス番号（順序保証用） |
 | `timestamp` | string | イベント発生時刻（ISO 8601） |
+| `event` | string | イベントタイプ（SSEヘッダーと同じ値） |
 
 ---
 
@@ -116,6 +122,7 @@ data: {"seq": <number>, "timestamp": "<ISO8601>", ...}
 ```typescript
 interface InitEvent {
   seq: number;
+  event: "init";
   timestamp: string;
   session_id: string;           // セッションID
   tools: string[];              // 利用可能なツールリスト
@@ -128,6 +135,7 @@ interface InitEvent {
 ```json
 {
   "seq": 1,
+  "event": "init",
   "timestamp": "2024-01-15T10:30:00.123Z",
   "session_id": "sess_abc123def456",
   "tools": ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "mcp__servicenow__search"],
@@ -143,6 +151,7 @@ AIの思考プロセスを表示します。
 ```typescript
 interface ThinkingEvent {
   seq: number;
+  event: "thinking";
   timestamp: string;
   content: string;               // 思考内容
   parent_agent_id?: string;      // 親エージェントID（サブエージェント内の場合）
@@ -153,6 +162,7 @@ interface ThinkingEvent {
 ```json
 {
   "seq": 2,
+  "event": "thinking",
   "timestamp": "2024-01-15T10:30:01.456Z",
   "content": "ユーザーはCSVファイルの分析を依頼しています。まずファイルの内容を確認し、データの構造を理解する必要があります..."
 }
@@ -165,6 +175,7 @@ AIからのテキスト応答やツール使用を含みます。
 ```typescript
 interface AssistantEvent {
   seq: number;
+  event: "assistant";
   timestamp: string;
   content_blocks: ContentBlock[];    // コンテンツブロックのリスト
   parent_agent_id?: string;          // 親エージェントID
@@ -189,6 +200,7 @@ interface ToolUseBlock {
 ```json
 {
   "seq": 3,
+  "event": "assistant",
   "timestamp": "2024-01-15T10:30:02.789Z",
   "content_blocks": [
     {
@@ -214,6 +226,7 @@ interface ToolUseBlock {
 ```typescript
 interface ToolCallEvent {
   seq: number;
+  event: "tool_call";
   timestamp: string;
   tool_use_id: string;           // ツール使用ID
   tool_name: string;             // ツール名
@@ -227,6 +240,7 @@ interface ToolCallEvent {
 ```json
 {
   "seq": 4,
+  "event": "tool_call",
   "timestamp": "2024-01-15T10:30:03.012Z",
   "tool_use_id": "tu_abc123",
   "tool_name": "Read",
@@ -244,6 +258,7 @@ interface ToolCallEvent {
 ```typescript
 interface ToolResultEvent {
   seq: number;
+  event: "tool_result";
   timestamp: string;
   tool_use_id: string;           // ツール使用ID
   tool_name: string;             // ツール名
@@ -258,6 +273,7 @@ interface ToolResultEvent {
 ```json
 {
   "seq": 5,
+  "event": "tool_result",
   "timestamp": "2024-01-15T10:30:03.345Z",
   "tool_use_id": "tu_abc123",
   "tool_name": "Read",
@@ -274,6 +290,7 @@ interface ToolResultEvent {
 ```typescript
 interface SubagentStartEvent {
   seq: number;
+  event: "subagent_start";
   timestamp: string;
   agent_id: string;              // エージェントID（tool_use_id）
   agent_type: string;            // エージェントタイプ
@@ -286,6 +303,7 @@ interface SubagentStartEvent {
 ```json
 {
   "seq": 10,
+  "event": "subagent_start",
   "timestamp": "2024-01-15T10:30:10.123Z",
   "agent_id": "tu_subagent_001",
   "agent_type": "Explore",
@@ -301,6 +319,7 @@ interface SubagentStartEvent {
 ```typescript
 interface SubagentEndEvent {
   seq: number;
+  event: "subagent_end";
   timestamp: string;
   agent_id: string;                       // エージェントID
   agent_type: string;                     // エージェントタイプ
@@ -313,6 +332,7 @@ interface SubagentEndEvent {
 ```json
 {
   "seq": 15,
+  "event": "subagent_end",
   "timestamp": "2024-01-15T10:30:25.456Z",
   "agent_id": "tu_subagent_001",
   "agent_type": "Explore",
@@ -328,6 +348,7 @@ interface SubagentEndEvent {
 ```typescript
 interface ProgressEvent {
   seq: number;
+  event: "progress";
   timestamp: string;
   type: "thinking" | "generating" | "tool";  // 進捗タイプ
   message: string;                           // 進捗メッセージ
@@ -342,6 +363,7 @@ interface ProgressEvent {
 ```json
 {
   "seq": 6,
+  "event": "progress",
   "timestamp": "2024-01-15T10:30:04.567Z",
   "type": "tool",
   "message": "ファイルを読み込み中...",
@@ -358,6 +380,7 @@ interface ProgressEvent {
 ```typescript
 interface TitleEvent {
   seq: number;
+  event: "title";
   timestamp: string;
   title: string;                 // 生成されたタイトル
 }
@@ -367,6 +390,7 @@ interface TitleEvent {
 ```json
 {
   "seq": 20,
+  "event": "title",
   "timestamp": "2024-01-15T10:31:00.789Z",
   "title": "CSVデータ分析と可視化"
 }
@@ -379,6 +403,7 @@ interface TitleEvent {
 ```typescript
 interface PingEvent {
   seq: number;
+  event: "ping";
   timestamp: string;
   elapsed_ms: number;            // 実行開始からの経過時間（ミリ秒）
 }
@@ -388,6 +413,7 @@ interface PingEvent {
 ```json
 {
   "seq": 7,
+  "event": "ping",
   "timestamp": "2024-01-15T10:30:10.000Z",
   "elapsed_ms": 10000
 }
@@ -400,6 +426,7 @@ interface PingEvent {
 ```typescript
 interface DoneEvent {
   seq: number;
+  event: "done";
   timestamp: string;
   status: "success" | "error" | "cancelled";  // ステータス
   result: string | null;                       // 最終結果テキスト
@@ -428,6 +455,7 @@ interface UsageInfo {
 ```json
 {
   "seq": 50,
+  "event": "done",
   "timestamp": "2024-01-15T10:32:00.123Z",
   "status": "success",
   "result": "CSVファイルの分析が完了しました。データには1000行3列があり...",
@@ -455,6 +483,7 @@ interface UsageInfo {
 ```typescript
 interface ErrorEvent {
   seq: number;
+  event: "error";
   timestamp: string;
   error_type: string;            // エラータイプ
   message: string;               // エラーメッセージ
@@ -466,6 +495,7 @@ interface ErrorEvent {
 ```json
 {
   "seq": 8,
+  "event": "error",
   "timestamp": "2024-01-15T10:30:15.789Z",
   "error_type": "tool_execution_error",
   "message": "ファイルが見つかりません: /workspace/missing.csv",
@@ -533,6 +563,7 @@ interface ErrorEvent {
 ```json
 {
   "seq": 100,
+  "event": "error",
   "timestamp": "2024-01-15T10:35:00.000Z",
   "error_type": "timeout_error",
   "message": "応答タイムアウト: サーバーからの応答がありません",

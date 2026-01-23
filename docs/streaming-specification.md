@@ -23,18 +23,20 @@ POST /api/tenants/{tenant_id}/conversations/{conversation_id}/stream
 
 Server-Sent Events (SSE) 形式でストリーミングします。全てのイベントに**シーケンス番号（seq）**が付与され、順序保証を提供します。
 
+**重要**: JSONデータ内にも `event` フィールドを含めます。これにより、SSEの `event:` ヘッダーをパースできない環境でもイベントタイプを判別できます。
+
 ```
 event: init
-data: {"seq": 1, "timestamp": "...", "session_id": "...", ...}
+data: {"seq": 1, "event": "init", "timestamp": "...", "session_id": "...", ...}
 
 event: thinking
-data: {"seq": 2, "timestamp": "...", "content": "..."}
+data: {"seq": 2, "event": "thinking", "timestamp": "...", "content": "..."}
 
 event: assistant
-data: {"seq": 3, "timestamp": "...", "content_blocks": [...]}
+data: {"seq": 3, "event": "assistant", "timestamp": "...", "content_blocks": [...]}
 
 event: done
-data: {"seq": 99, "timestamp": "...", "status": "success", ...}
+data: {"seq": 99, "event": "done", "timestamp": "...", "status": "success", ...}
 ```
 
 ### 接続特性
@@ -70,9 +72,15 @@ data: {"seq": 99, "timestamp": "...", "status": "success", ...}
 ```json
 {
   "seq": 1,
-  "timestamp": "2024-01-01T00:00:00.000000Z"
+  "timestamp": "2024-01-01T00:00:00.000000Z",
+  "event": "イベントタイプ名"
 }
 ```
+
+**注記**: `event` フィールドは SSE の `event:` ヘッダーと同じ値を持ちます。これにより、クライアント側で以下の2つの方法でイベントタイプを判別できます：
+
+1. **EventSource API 使用時**: `event.type` プロパティ
+2. **生のストリームパース時**: JSON の `event` フィールド
 
 ### init イベント
 

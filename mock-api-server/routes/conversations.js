@@ -254,6 +254,7 @@ router.post("/:conversation_id/stream", upload.array("files"), async (req, res) 
     const event = {
       seq,
       timestamp: new Date().toISOString(),
+      event: eventType, // フロントエンドでイベントタイプを判別しやすくするため
       ...data,
     };
     res.write(`event: ${eventType}\n`);

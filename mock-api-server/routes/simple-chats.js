@@ -205,7 +205,7 @@ router.post("/stream", async (req, res) => {
     const event = {
       seq,
       timestamp: new Date().toISOString(),
-      event_type: eventType,
+      event: eventType, // フロントエンドでイベントタイプを判別しやすくするため
       ...data,
     };
     res.write(`event: ${eventType}\n`);
