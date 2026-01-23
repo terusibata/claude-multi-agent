@@ -217,15 +217,12 @@ router.post("/stream", async (req, res) => {
 
   await randomDelay(100, 300);
 
-  // Stream text chunks
+  // Generate response text and send as single message
   const chunks = generateStreamingChunks();
-  let fullText = "";
+  let fullText = chunks.join("");
 
-  for (const chunk of chunks) {
-    sendEvent("text_delta", { content: chunk });
-    fullText += chunk;
-    await randomDelay(30, 100);
-  }
+  await randomDelay(200, 500);
+  sendEvent("text_delta", { content: fullText });
 
   // Store assistant message
   store.addSimpleChatMessage(chat.chatId, "assistant", fullText);

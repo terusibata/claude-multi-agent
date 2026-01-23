@@ -266,15 +266,12 @@ router.post("/:conversation_id/stream", upload.array("files"), async (req, res) 
     await randomDelay(200, 500);
   }
 
-  // Stream text chunks
+  // Generate response text and send as single message
   const chunks = generateStreamingChunks();
-  let fullText = "";
+  let fullText = chunks.join("");
 
-  for (const chunk of chunks) {
-    sendEvent("text_delta", { content: chunk });
-    fullText += chunk;
-    await randomDelay(50, 150);
-  }
+  await randomDelay(200, 500);
+  sendEvent("text_delta", { content: fullText });
 
   // Random tool use (50% chance for present_files)
   let toolUsed = false;
@@ -327,7 +324,7 @@ router.post("/:conversation_id/stream", upload.array("files"), async (req, res) 
 
     await randomDelay(100, 200);
 
-    // Additional text after tool use
+    // Additional text after tool use (as single message)
     const additionalText = "\n\nI've prepared the files for you. You can download them from the workspace.";
     sendEvent("text_delta", { content: additionalText });
     fullText += additionalText;
