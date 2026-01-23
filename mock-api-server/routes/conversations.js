@@ -238,21 +238,33 @@ router.post("/:conversation_id/stream", upload.array("files"), async (req, res) 
   const startTime = Date.now();
   const sessionId = conversation.sessionId;
 
+  // Available tools list (mock)
+  const availableTools = [
+    "Read",
+    "Write",
+    "Edit",
+    "Bash",
+    "Glob",
+    "Grep",
+    "mcp__file-presentation__present_files",
+  ];
+
   const sendEvent = (eventType, data) => {
     seq++;
     const event = {
       seq,
       timestamp: new Date().toISOString(),
-      event_type: eventType,
       ...data,
     };
     res.write(`event: ${eventType}\n`);
     res.write(`data: ${JSON.stringify(event)}\n\n`);
   };
 
-  // Session start
-  sendEvent("session_start", {
+  // init event (was session_start)
+  sendEvent("init", {
     session_id: sessionId,
+    tools: availableTools,
+    model: conversation.modelId || "claude-sonnet-4",
     conversation_id: conversationId,
   });
 
@@ -266,12 +278,21 @@ router.post("/:conversation_id/stream", upload.array("files"), async (req, res) 
     await randomDelay(200, 500);
   }
 
-  // Generate response text and send as single message
+  // Generate response text
   const chunks = generateStreamingChunks();
   let fullText = chunks.join("");
 
   await randomDelay(200, 500);
-  sendEvent("text_delta", { content: fullText });
+
+  // assistant event with content_blocks (was text_delta)
+  sendEvent("assistant", {
+    content_blocks: [
+      {
+        type: "text",
+        text: fullText,
+      },
+    ],
+  });
 
   // Random tool use (50% chance for present_files)
   let toolUsed = false;
@@ -279,10 +300,12 @@ router.post("/:conversation_id/stream", upload.array("files"), async (req, res) 
     toolUsed = true;
     const toolUse = generatePresentFilesToolUse();
 
-    sendEvent("tool_use", {
-      tool_name: toolUse.toolName,
+    // tool_call event (was tool_use)
+    sendEvent("tool_call", {
       tool_use_id: toolUse.toolUseId,
+      tool_name: toolUse.toolName,
       input: toolUse.input,
+      summary: `Presenting ${toolUse.input.files.length} file(s) to workspace`,
     });
 
     await randomDelay(300, 800);
@@ -305,9 +328,13 @@ router.post("/:conversation_id/stream", upload.array("files"), async (req, res) 
 
     const toolResult = generatePresentFilesToolResult(toolUse.toolUseId, toolUse.input.files);
 
+    // tool_result event with updated structure
     sendEvent("tool_result", {
       tool_use_id: toolResult.toolUseId,
-      output: toolResult.output,
+      tool_name: toolUse.toolName,
+      status: "completed",
+      content: JSON.stringify(toolResult.output).substring(0, 500),
+      is_error: false,
     });
 
     // Log tool usage
@@ -324,9 +351,16 @@ router.post("/:conversation_id/stream", upload.array("files"), async (req, res) 
 
     await randomDelay(100, 200);
 
-    // Additional text after tool use (as single message)
+    // Additional text after tool use
     const additionalText = "\n\nI've prepared the files for you. You can download them from the workspace.";
-    sendEvent("text_delta", { content: additionalText });
+    sendEvent("assistant", {
+      content_blocks: [
+        {
+          type: "text",
+          text: additionalText,
+        },
+      ],
+    });
     fullText += additionalText;
   }
 
@@ -365,17 +399,25 @@ router.post("/:conversation_id/stream", upload.array("files"), async (req, res) 
 
   // Update conversation title if first message
   const messages = store.getMessagesForConversation(conversationId);
+  let generatedTitle = null;
   if (messages.length <= 2) {
+    generatedTitle = randomTitle();
     store.updateConversation(tenantId, conversationId, {
-      title: randomTitle(),
+      title: generatedTitle,
+    });
+
+    // title event
+    sendEvent("title", {
+      title: generatedTitle,
     });
   }
 
-  // Result event
-  sendEvent("result", {
-    subtype: "success",
+  // done event (was result)
+  sendEvent("done", {
+    status: "success",
     result: fullText,
-    errors: [],
+    is_error: false,
+    errors: null,
     usage: {
       input_tokens: usage.inputTokens,
       output_tokens: usage.outputTokens,
@@ -385,8 +427,9 @@ router.post("/:conversation_id/stream", upload.array("files"), async (req, res) 
       total_tokens: usage.totalTokens,
     },
     cost_usd: costUsd,
-    num_turns: toolUsed ? 2 : 1,
+    turn_count: toolUsed ? 2 : 1,
     duration_ms: durationMs,
+    session_id: sessionId,
   });
 
   res.end();
