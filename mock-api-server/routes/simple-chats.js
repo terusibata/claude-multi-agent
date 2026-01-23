@@ -217,12 +217,15 @@ router.post("/stream", async (req, res) => {
 
   await randomDelay(100, 300);
 
-  // Generate response text and send as single message
+  // Stream text chunks (AWS Bedrock supports streaming)
   const chunks = generateStreamingChunks();
-  let fullText = chunks.join("");
+  let fullText = "";
 
-  await randomDelay(200, 500);
-  sendEvent("text_delta", { content: fullText });
+  for (const chunk of chunks) {
+    sendEvent("text_delta", { content: chunk });
+    fullText += chunk;
+    await randomDelay(30, 100);
+  }
 
   // Store assistant message
   store.addSimpleChatMessage(chat.chatId, "assistant", fullText);
