@@ -259,8 +259,13 @@ class OptionsBuilder:
         Returns:
             更新された (mcp_servers, allowed_tools, system_prompt)
         """
-        # file-presentationは常に追加
-        file_presentation_server = create_file_presentation_mcp_server(cwd)
+        # file-presentationは常に追加（S3即時アップロードのためworkspace_serviceを渡す）
+        file_presentation_server = create_file_presentation_mcp_server(
+            cwd,
+            self.workspace_service,
+            context.tenant_id,
+            context.conversation_id,
+        )
         if file_presentation_server:
             mcp_servers["file-presentation"] = file_presentation_server
             allowed_tools.append("mcp__file-presentation__present_files")

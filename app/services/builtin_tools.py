@@ -37,12 +37,20 @@ BUILTIN_TOOL_DEFINITIONS = {
 }
 
 
-def create_present_files_handler(workspace_cwd: str = ""):
+def create_present_files_handler(
+    workspace_cwd: str = "",
+    workspace_service=None,
+    tenant_id: str = "",
+    conversation_id: str = "",
+):
     """
     present_filesツールのハンドラーを作成
 
     Args:
         workspace_cwd: ワークスペースのカレントディレクトリ
+        workspace_service: WorkspaceServiceインスタンス（即時S3アップロード用）
+        tenant_id: テナントID
+        conversation_id: 会話ID
 
     Returns:
         ツールハンドラー関数
@@ -112,6 +120,8 @@ def create_present_files_handler(workspace_cwd: str = ""):
                             source=str(path),
                             destination=str(dest_path)
                         )
+                        # コピー後のパスを更新
+                        path = dest_path
                     except Exception as copy_error:
                         logger.error(
                             "ファイル提示: ファイルコピー失敗",
@@ -132,6 +142,43 @@ def create_present_files_handler(workspace_cwd: str = ""):
                         relative_path = str(path.absolute().relative_to(Path(workspace_cwd).absolute()))
                     except ValueError:
                         relative_path = path.name
+
+                # 即座にS3にアップロード（workspace_serviceが利用可能な場合）
+                if workspace_service and tenant_id and conversation_id:
+                    try:
+                        # ファイル内容を読み込み
+                        file_content = path.read_bytes()
+                        content_type = mime_type or "application/octet-stream"
+
+                        # S3にアップロード
+                        await workspace_service.s3.upload(
+                            tenant_id,
+                            conversation_id,
+                            relative_path,
+                            file_content,
+                            content_type,
+                        )
+
+                        # DBに登録
+                        await workspace_service.register_ai_file(
+                            tenant_id,
+                            conversation_id,
+                            relative_path,
+                            is_presented=True,
+                        )
+
+                        logger.info(
+                            "ファイル提示: S3に即時アップロード完了",
+                            file_path=relative_path,
+                            size=len(file_content),
+                        )
+                    except Exception as upload_error:
+                        logger.error(
+                            "ファイル提示: S3アップロード失敗",
+                            file_path=relative_path,
+                            error=str(upload_error),
+                        )
+                        # アップロード失敗してもファイル情報は追加する
 
                 files_info.append({
                     "path": str(path.absolute()),
@@ -222,12 +269,20 @@ def get_all_builtin_tool_definitions() -> list[dict[str, Any]]:
     return list(BUILTIN_TOOL_DEFINITIONS.values())
 
 
-def create_file_presentation_mcp_server(workspace_cwd: str = ""):
+def create_file_presentation_mcp_server(
+    workspace_cwd: str = "",
+    workspace_service=None,
+    tenant_id: str = "",
+    conversation_id: str = "",
+):
     """
     ファイル提示用のSDK MCPサーバーを作成
 
     Args:
         workspace_cwd: ワークスペースのカレントディレクトリ
+        workspace_service: WorkspaceServiceインスタンス（即時S3アップロード用）
+        tenant_id: テナントID
+        conversation_id: 会話ID
 
     Returns:
         SDK MCPサーバー設定
@@ -251,7 +306,12 @@ def create_file_presentation_mcp_server(workspace_cwd: str = ""):
         """
         ファイルパスのリストを受け取り、ユーザーに提示する情報を返す
         """
-        handler = create_present_files_handler(workspace_cwd)
+        handler = create_present_files_handler(
+            workspace_cwd,
+            workspace_service,
+            tenant_id,
+            conversation_id,
+        )
         return await handler(args)
 
     # MCPサーバーとして登録
