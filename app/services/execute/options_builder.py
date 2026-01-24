@@ -11,8 +11,10 @@ from app.services.execute.aws_config import AWSConfig
 from app.services.execute.context import ExecutionContext, SDKOptions
 from app.services.builtin_tools import (
     create_file_presentation_mcp_server,
+    create_file_reader_mcp_server,
     FILE_PRESENTATION_PROMPT,
 )
+from app.services.file_reader_tools import FILE_READER_PROMPT
 from app.services.mcp_server_service import McpServerService
 from app.services.openapi_mcp_service import create_openapi_mcp_server
 from app.services.skill_service import SkillService
@@ -103,7 +105,7 @@ class OptionsBuilder:
 
         # ビルトインMCPサーバーの追加
         mcp_servers, allowed_tools, system_prompt = self._add_builtin_mcp_server(
-            cwd, mcp_servers, allowed_tools, system_prompt, builtin_servers
+            context, cwd, mcp_servers, allowed_tools, system_prompt, builtin_servers
         )
 
         # OpenAPI MCPサーバーの追加
@@ -236,6 +238,7 @@ class OptionsBuilder:
 
     def _add_builtin_mcp_server(
         self,
+        context: ExecutionContext,
         cwd: str,
         mcp_servers: dict,
         allowed_tools: list[str],
@@ -246,6 +249,7 @@ class OptionsBuilder:
         ビルトインMCPサーバーを追加
 
         Args:
+            context: 実行コンテキスト
             cwd: 作業ディレクトリ
             mcp_servers: MCPサーバー設定辞書
             allowed_tools: 許可ツールリスト
@@ -264,6 +268,26 @@ class OptionsBuilder:
             logger.info(
                 "ビルトインMCPサーバー追加完了",
                 server_name="file-presentation",
+            )
+
+        # file-readerは常に追加（全テナントでデフォルト利用可能）
+        file_reader_server = create_file_reader_mcp_server(
+            self.workspace_service,
+            context.tenant_id,
+            context.conversation_id,
+        )
+        if file_reader_server:
+            mcp_servers["file-reader"] = file_reader_server
+            allowed_tools.extend([
+                "mcp__file-reader__read_image_file",
+                "mcp__file-reader__read_pdf_file",
+                "mcp__file-reader__read_office_file",
+                "mcp__file-reader__list_workspace_files",
+            ])
+            system_prompt = f"{system_prompt}\n\n{FILE_READER_PROMPT}"
+            logger.info(
+                "ビルトインMCPサーバー追加完了",
+                server_name="file-reader",
             )
 
         return mcp_servers, allowed_tools, system_prompt

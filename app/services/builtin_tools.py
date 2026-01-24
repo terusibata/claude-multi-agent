@@ -273,3 +273,76 @@ FILE_PRESENTATION_PROMPT = """
 - **サブエージェント（Task）がファイルを作成した場合も、その完了後に必ず `mcp__file-presentation__present_files` を呼び出してください**
 - サブエージェントの結果からファイルパスを確認し、作成されたファイルを提示してください
 """
+
+
+def create_file_reader_mcp_server(
+    workspace_service,
+    tenant_id: str,
+    conversation_id: str,
+):
+    """
+    ファイル読み込み用のSDK MCPサーバーを作成
+
+    Args:
+        workspace_service: WorkspaceServiceインスタンス
+        tenant_id: テナントID
+        conversation_id: 会話ID
+
+    Returns:
+        SDK MCPサーバー設定
+    """
+    try:
+        from claude_agent_sdk import tool, create_sdk_mcp_server
+    except ImportError:
+        logger.warning("claude_agent_sdk not available, skipping file reader MCP server")
+        return None
+
+    from app.services.file_reader_tools import create_file_reader_handlers
+
+    handlers = create_file_reader_handlers(workspace_service, tenant_id, conversation_id)
+
+    @tool(
+        "read_image_file",
+        "ワークスペース内の画像ファイル（JPEG/PNG/GIF/WebP）を読み込みます。file_pathでファイルパスを指定してください。",
+        {"file_path": str},
+    )
+    async def read_image_file_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["read_image_file"](args)
+
+    @tool(
+        "read_pdf_file",
+        "ワークスペース内のPDFファイルを読み込みます。file_pathでファイルパスを指定してください。",
+        {"file_path": str},
+    )
+    async def read_pdf_file_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["read_pdf_file"](args)
+
+    @tool(
+        "read_office_file",
+        "ワークスペース内のOfficeファイル（Excel/Word/PowerPoint）を読み込み、テキストとして抽出します。file_pathでファイルパスを指定してください。Excelの場合はsheet_name（シート名）とmax_rows（最大行数、デフォルト1000）も指定可能です。",
+        {"file_path": str, "sheet_name": str, "max_rows": int},
+    )
+    async def read_office_file_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["read_office_file"](args)
+
+    @tool(
+        "list_workspace_files",
+        "ワークスペース内のファイル一覧を取得します。filter_typeで絞り込み可能（image/pdf/office/text/all）。",
+        {"filter_type": str},
+    )
+    async def list_workspace_files_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["list_workspace_files"](args)
+
+    # MCPサーバーとして登録
+    server = create_sdk_mcp_server(
+        name="file-reader",
+        version="1.0.0",
+        tools=[
+            read_image_file_tool,
+            read_pdf_file_tool,
+            read_office_file_tool,
+            list_workspace_files_tool,
+        ],
+    )
+
+    return server

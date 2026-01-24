@@ -27,6 +27,7 @@ from app.schemas.workspace import (
 )
 from app.services.workspace.s3_storage import S3StorageBackend
 from app.services.workspace.context_builder import AIContextBuilder
+from app.services.workspace.file_processors import FileTypeClassifier
 
 # 後方互換性のため例外クラスを再エクスポート
 from app.utils.exceptions import WorkspaceSecurityError
@@ -69,9 +70,11 @@ class WorkspaceService:
         Raises:
             FileSizeExceededError: ファイルサイズが制限を超えた場合
         """
-        max_size = settings.max_upload_file_size
         results = []
         for filename, content, content_type in files:
+            # ファイルタイプ別のサイズ制限を取得
+            max_size = FileTypeClassifier.get_max_file_size(filename, content_type)
+
             # ファイルサイズチェック
             if len(content) > max_size:
                 raise FileSizeExceededError(

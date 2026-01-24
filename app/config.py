@@ -72,8 +72,23 @@ class Settings(BaseSettings):
     # セキュリティ向上のため、アプリケーション専用ディレクトリを使用
     workspace_temp_dir: str = "/var/lib/aiagent/workspaces"
 
-    # ファイルアップロード制限
+    # ============================================
+    # ファイルアップロード制限（環境変数で変更可能）
+    # ============================================
+    # 全体の最大ファイルサイズ（フォールバック用）
     max_upload_file_size: int = 100 * 1024 * 1024  # 100MB
+
+    # 画像ファイル制限（JPEG/PNG/GIF/WebP）
+    max_image_file_size: int = 5 * 1024 * 1024  # 5MB
+
+    # PDFファイル制限
+    max_pdf_file_size: int = 20 * 1024 * 1024  # 20MB
+
+    # Officeファイル制限（Excel/Word/PowerPoint）
+    max_office_file_size: int = 30 * 1024 * 1024  # 30MB
+
+    # テキストファイル制限（CSV/JSON/MD等）
+    max_text_file_size: int = 5 * 1024 * 1024  # 5MB
 
     # ============================================
     # セキュリティ設定
