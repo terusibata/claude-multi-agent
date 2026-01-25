@@ -3,12 +3,15 @@
 SDKからのメッセージを処理してSSEイベントに変換（v2形式）
 """
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Generator
+from typing import TYPE_CHECKING, Any, Generator, Optional
 
 import structlog
 
 from app.services.execute.context import ExecutionContext, MessageLogEntry
 from app.services.execute.model_mapping import SubagentModelMapping
+from app.services.execute.progress_manager import ProgressManager
+from app.services.execute.progress_messages import get_initial_message
+from app.services.execute.tool_labels import get_tool_label
 from app.services.execute.tool_tracker import ToolTracker
 from app.utils.streaming import (
     SequenceCounter,
@@ -42,6 +45,7 @@ class MessageProcessor:
         tool_tracker: ToolTracker,
         settings: "Settings",
         seq_counter: SequenceCounter,
+        progress_manager: Optional[ProgressManager] = None,
     ):
         """
         初期化
@@ -51,11 +55,13 @@ class MessageProcessor:
             tool_tracker: ツールトラッカー
             settings: アプリケーション設定
             seq_counter: シーケンス番号カウンター
+            progress_manager: 進捗管理マネージャー（オプション）
         """
         self.context = context
         self.tool_tracker = tool_tracker
         self.settings = settings
         self.seq = seq_counter
+        self.progress_manager = progress_manager
 
     def process_system_message(
         self,
@@ -149,10 +155,11 @@ class MessageProcessor:
 
                 # 進捗イベント: テキスト生成中（メインエージェントのみ）
                 if not parent_agent_id:
+                    message = get_initial_message("generating")
                     yield format_progress_event(
                         seq=self.seq.next(),
                         progress_type="generating",
-                        message="レスポンスを生成中...",
+                        message=message,
                     )
 
                 # アシスタントイベント
@@ -176,10 +183,11 @@ class MessageProcessor:
 
                 # 進捗イベント: 思考中（メインエージェントのみ）
                 if not parent_agent_id:
+                    message = get_initial_message("thinking")
                     yield format_progress_event(
                         seq=self.seq.next(),
                         progress_type="thinking",
-                        message="思考中...",
+                        message=message,
                     )
 
                 # 思考イベント
@@ -270,12 +278,16 @@ class MessageProcessor:
         # 親エージェントIDを取得
         parent_agent_id = self.tool_tracker.current_subagent_id
 
+        # ユーザーフレンドリーなメッセージを取得
+        tool_label = get_tool_label(tool_name)
+        initial_message = get_initial_message("tool", tool_name)
+
         # 進捗イベント: ツール実行中（メインエージェントのみ）
         if not parent_tool_id:
             yield format_progress_event(
                 seq=self.seq.next(),
                 progress_type="tool",
-                message=f"ツール実行中: {tool_name}",
+                message=initial_message,
                 tool_use_id=tool_id,
                 tool_name=tool_name,
                 tool_status="pending",
@@ -292,10 +304,20 @@ class MessageProcessor:
         )
 
         # 進捗イベント: running
+        # ProgressManagerに現在のフェーズを設定（バックグラウンドティッカー用）
+        if self.progress_manager:
+            from app.services.execute.progress_manager import PhaseState
+            self.progress_manager._current_phase = PhaseState(
+                phase="tool",
+                tool_name=tool_name,
+                tool_use_id=tool_id,
+                tool_status="running",
+            )
+
         yield format_progress_event(
             seq=self.seq.next(),
             progress_type="tool",
-            message=f"{tool_name}を実行中...",
+            message=initial_message,
             tool_use_id=tool_id,
             tool_name=tool_name,
             tool_status="running",
@@ -387,6 +409,10 @@ class MessageProcessor:
 
         # 親エージェントID
         parent_agent_id = self.tool_tracker.current_subagent_id
+
+        # ProgressManagerのフェーズをクリア（ツール完了）
+        if self.progress_manager:
+            self.progress_manager._current_phase = None
 
         # 進捗イベント: completed / error
         yield format_progress_event(
