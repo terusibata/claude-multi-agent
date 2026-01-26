@@ -124,15 +124,15 @@ class AIContextBuilder:
         type_info = []
         if type_counts[FileCategory.IMAGE] > 0:
             type_info.append(
-                f"  - 画像: {type_counts[FileCategory.IMAGE]}件 → `read_image_file` で読み込み"
+                f"  - 画像: {type_counts[FileCategory.IMAGE]}件 → `inspect_image_file` で情報確認、`read_image_file` で視覚的読み込み"
             )
         if type_counts[FileCategory.PDF] > 0:
             type_info.append(
-                f"  - PDF: {type_counts[FileCategory.PDF]}件 → `read_pdf_file` で読み込み"
+                f"  - PDF: {type_counts[FileCategory.PDF]}件 → `inspect_pdf_file` で構造確認、`read_pdf_pages` でテキスト取得"
             )
         if type_counts[FileCategory.OFFICE] > 0:
             type_info.append(
-                f"  - Office: {type_counts[FileCategory.OFFICE]}件 → `read_office_file` で読み込み"
+                f"  - Office: {type_counts[FileCategory.OFFICE]}件 → `inspect_*` で構造確認、`read_*` でデータ取得"
             )
         if type_counts[FileCategory.TEXT] > 0:
             type_info.append(

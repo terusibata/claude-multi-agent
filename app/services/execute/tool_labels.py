@@ -28,11 +28,19 @@ BUILTIN_TOOL_LABELS: dict[str, str] = {
 BUILTIN_MCP_LABELS: dict[str, str] = {
     # file-presentation
     "mcp__file-presentation__present_files": "ファイル提示",
-    # file-reader
-    "mcp__file-reader__read_image_file": "画像読み込み",
-    "mcp__file-reader__read_pdf_file": "PDF読み込み",
-    "mcp__file-reader__read_office_file": "Officeファイル読み込み",
-    "mcp__file-reader__list_workspace_files": "ファイル一覧取得",
+    # file-tools
+    "mcp__file-tools__list_workspace_files": "ファイル一覧取得",
+    "mcp__file-tools__read_image_file": "画像読み込み",
+    "mcp__file-tools__inspect_excel_file": "Excel構造確認",
+    "mcp__file-tools__read_excel_sheet": "Excelデータ取得",
+    "mcp__file-tools__inspect_pdf_file": "PDF構造確認",
+    "mcp__file-tools__read_pdf_pages": "PDFテキスト取得",
+    "mcp__file-tools__convert_pdf_to_images": "PDF画像変換",
+    "mcp__file-tools__inspect_word_file": "Word構造確認",
+    "mcp__file-tools__read_word_section": "Wordテキスト取得",
+    "mcp__file-tools__inspect_pptx_file": "PowerPoint構造確認",
+    "mcp__file-tools__read_pptx_slides": "PowerPointテキスト取得",
+    "mcp__file-tools__inspect_image_file": "画像情報確認",
 }
 
 
