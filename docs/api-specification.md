@@ -300,7 +300,7 @@ curl -H "X-Request-ID: my-trace-id" http://localhost:8000/api/tenants
     "session_id": "sdk-session-id",
     "title": "プログラミングについての質問",
     "status": "active",
-    "enable_workspace": false,
+    "workspace_enabled": false,
     "created_at": "2024-01-01T00:00:00Z",
     "updated_at": "2024-01-01T00:00:00Z"
   }
@@ -317,7 +317,7 @@ curl -H "X-Request-ID: my-trace-id" http://localhost:8000/api/tenants
 {
   "user_id": "user-001",
   "model_id": "claude-sonnet-4",
-  "enable_workspace": false
+  "workspace_enabled": false
 }
 ```
 
@@ -325,7 +325,7 @@ curl -H "X-Request-ID: my-trace-id" http://localhost:8000/api/tenants
 |-----------|-----|------|------|
 | `user_id` | string | ○ | ユーザーID |
 | `model_id` | string | - | モデルID（省略時はテナントのデフォルト） |
-| `enable_workspace` | boolean | - | ワークスペースを有効にするか（デフォルト: false） |
+| `workspace_enabled` | boolean | - | ワークスペースを有効にするか（デフォルト: false） |
 
 **レスポンス:**
 
@@ -338,7 +338,7 @@ curl -H "X-Request-ID: my-trace-id" http://localhost:8000/api/tenants
   "session_id": null,
   "title": null,
   "status": "active",
-  "enable_workspace": false,
+  "workspace_enabled": false,
   "created_at": "2024-01-01T00:00:00Z",
   "updated_at": "2024-01-01T00:00:00Z"
 }
