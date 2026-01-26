@@ -283,13 +283,49 @@ def create_file_reader_handlers(
                     "is_error": True,
                 }
 
-            if ext in [".xlsx", ".xls"]:
+            # 古いOffice形式（.doc/.xls/.ppt）はサポートされていない
+            # python-docx / python-pptx は Open XML 形式（.docx/.pptx）のみ対応
+            # openpyxl は .xlsx のみ対応（.xls は xlrd が必要だが現在は未対応）
+            if ext == ".doc":
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": (
+                            f"古いWord形式（.doc）はサポートされていません: {filename}\n"
+                            ".docx形式に変換してから再度アップロードしてください。"
+                        ),
+                    }],
+                    "is_error": True,
+                }
+            elif ext == ".ppt":
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": (
+                            f"古いPowerPoint形式（.ppt）はサポートされていません: {filename}\n"
+                            ".pptx形式に変換してから再度アップロードしてください。"
+                        ),
+                    }],
+                    "is_error": True,
+                }
+            elif ext == ".xls":
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": (
+                            f"古いExcel形式（.xls）はサポートされていません: {filename}\n"
+                            ".xlsx形式に変換してから再度アップロードしてください。"
+                        ),
+                    }],
+                    "is_error": True,
+                }
+            elif ext == ".xlsx":
                 # Excelファイルの処理
                 text_content = await _extract_excel_content(content, sheet_name, max_rows)
-            elif ext in [".docx", ".doc"]:
+            elif ext == ".docx":
                 # Wordファイルの処理
                 text_content = await _extract_docx_content(content)
-            elif ext in [".pptx", ".ppt"]:
+            elif ext == ".pptx":
                 # PowerPointファイルの処理
                 text_content = await _extract_pptx_content(content)
             else:

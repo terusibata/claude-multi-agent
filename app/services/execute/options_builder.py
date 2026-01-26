@@ -78,10 +78,10 @@ class OptionsBuilder:
         skills = await self.skill_service.get_all_by_tenant(context.tenant_id)
         active_skills = [s for s in skills if s.status == "active"]
 
-        # スキルがある場合はSkillツールを追加
+        # スキルがある場合はSkillツールを明示的に追加
+        # Note: "*" で全ツールが許可されるが、Skillツールの有効化を明示するために追加
         if active_skills:
-            if "Skill" not in allowed_tools:
-                allowed_tools.append("Skill")
+            allowed_tools.append("Skill")
 
         # テナントのアクティブなMCPサーバーを取得
         all_mcp_servers = await self.mcp_service.get_all_by_tenant(context.tenant_id)

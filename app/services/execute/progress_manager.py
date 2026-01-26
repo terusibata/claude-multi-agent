@@ -6,8 +6,13 @@
 
 import asyncio
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import AsyncIterator, Callable, Optional
+
+
+def _utc_now() -> datetime:
+    """タイムゾーン対応のUTC現在時刻を取得（Python 3.12+ の非推奨対応）"""
+    return datetime.now(timezone.utc)
 
 import structlog
 
@@ -26,8 +31,8 @@ class PhaseState:
     tool_name: Optional[str] = None
     tool_use_id: Optional[str] = None
     tool_status: Optional[str] = None
-    started_at: datetime = field(default_factory=datetime.utcnow)
-    last_message_at: datetime = field(default_factory=datetime.utcnow)
+    started_at: datetime = field(default_factory=_utc_now)
+    last_message_at: datetime = field(default_factory=_utc_now)
     message_count: int = 0
 
 
@@ -86,7 +91,7 @@ class ProgressManager:
             初期progressイベント（send_initial=Trueの場合）
         """
         async with self._lock:
-            now = datetime.utcnow()
+            now = _utc_now()
             self._current_phase = PhaseState(
                 phase=phase,
                 tool_name=tool_name,
@@ -147,7 +152,7 @@ class ProgressManager:
             if not self._current_phase:
                 return None
 
-            now = datetime.utcnow()
+            now = _utc_now()
             elapsed = (now - self._current_phase.last_message_at).total_seconds()
 
             if elapsed >= self._interval:
@@ -250,3 +255,45 @@ class ProgressManager:
             except asyncio.QueueEmpty:
                 break
         return messages
+
+    def set_tool_phase(
+        self,
+        phase: str,
+        tool_name: Optional[str] = None,
+        tool_use_id: Optional[str] = None,
+        tool_status: Optional[str] = None,
+    ) -> None:
+        """
+        ツールフェーズを直接設定（同期版）
+
+        内部状態を設定するためのパブリックメソッド。
+        asyncioロックを使用しないので、同期コンテキストから呼び出し可能。
+
+        Args:
+            phase: フェーズ名（thinking, generating, tool）
+            tool_name: ツール名（phaseがtoolの場合）
+            tool_use_id: ツール使用ID
+            tool_status: ツールステータス
+        """
+        now = _utc_now()
+        self._current_phase = PhaseState(
+            phase=phase,
+            tool_name=tool_name,
+            tool_use_id=tool_use_id,
+            tool_status=tool_status,
+            started_at=now,
+            last_message_at=now,
+        )
+
+    def clear_phase(self) -> None:
+        """
+        フェーズをクリア（同期版）
+
+        内部状態をクリアするためのパブリックメソッド。
+        """
+        self._current_phase = None
+
+    @property
+    def current_phase(self) -> Optional[PhaseState]:
+        """現在のフェーズ状態を取得（読み取り専用）"""
+        return self._current_phase
