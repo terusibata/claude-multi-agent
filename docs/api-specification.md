@@ -285,6 +285,8 @@ curl -H "X-Request-ID: my-trace-id" http://localhost:8000/api/tenants
 |-----------|-----|------|
 | `status` | string | ステータスでフィルタ（active/archived） |
 | `user_id` | string | ユーザーIDでフィルタ |
+| `from_date` | string | 開始日時（ISO 8601形式、JSTデフォルト） |
+| `to_date` | string | 終了日時（ISO 8601形式、JSTデフォルト） |
 | `limit` | int | 取得件数 |
 | `offset` | int | オフセット |
 
@@ -668,8 +670,8 @@ MCPサーバーを削除（論理削除）
 
 | パラメータ | 型 | 説明 |
 |-----------|-----|------|
-| `from_date` | string | 開始日（YYYY-MM-DD） |
-| `to_date` | string | 終了日（YYYY-MM-DD） |
+| `from_date` | string | 開始日時（ISO 8601形式、JSTデフォルト） |
+| `to_date` | string | 終了日時（ISO 8601形式、JSTデフォルト） |
 | `group_by` | string | グループ化（day/week/month） |
 
 **レスポンス:**
@@ -697,8 +699,8 @@ MCPサーバーを削除（論理削除）
 
 | パラメータ | 型 | 必須 | 説明 |
 |-----------|-----|------|------|
-| `from_date` | string | ○ | 開始日 |
-| `to_date` | string | ○ | 終了日 |
+| `from_date` | string | ○ | 開始日時（ISO 8601形式、JSTデフォルト） |
+| `to_date` | string | ○ | 終了日時（ISO 8601形式、JSTデフォルト） |
 | `model_id` | string | - | モデルIDでフィルタ |
 | `user_id` | string | - | ユーザーIDでフィルタ |
 
@@ -730,3 +732,22 @@ MCPサーバーを削除（論理削除）
 - ファイルはAmazon S3に保存
 - 会話ごとに独立したワークスペース
 - テナント・会話間で完全に分離
+
+### 日時の取り扱い
+
+- 日時パラメータはISO 8601形式で指定
+- タイムゾーン情報がない場合、**JST（日本標準時、UTC+9）** として扱う
+- 内部的にはUTCに変換して処理
+- レスポンスの日時はUTCで返却
+
+**例:**
+```
+# JSTとして扱われる（タイムゾーン指定なし）
+from_date=2024-01-01T00:00:00
+
+# 明示的にJSTを指定
+from_date=2024-01-01T00:00:00+09:00
+
+# UTCを指定
+from_date=2024-01-01T00:00:00Z
+```

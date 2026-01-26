@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.conversation import Conversation
 from app.models.message_log import MessageLog
+from app.utils.timezone import to_utc
 
 
 class ConversationService:
@@ -46,8 +47,8 @@ class ConversationService:
             tenant_id: テナントID
             user_id: フィルタリング用ユーザーID
             status: フィルタリング用ステータス
-            from_date: 開始日時
-            to_date: 終了日時
+            from_date: 開始日時（タイムゾーンなしの場合JSTとして扱う）
+            to_date: 終了日時（タイムゾーンなしの場合JSTとして扱う）
             limit: 取得件数
             offset: オフセット
 
@@ -56,14 +57,18 @@ class ConversationService:
         """
         query = select(Conversation).where(Conversation.tenant_id == tenant_id)
 
+        # タイムゾーンなしの日時はJSTとして扱い、UTCに変換
+        from_date_utc = to_utc(from_date)
+        to_date_utc = to_utc(to_date)
+
         if user_id:
             query = query.where(Conversation.user_id == user_id)
         if status:
             query = query.where(Conversation.status == status)
-        if from_date:
-            query = query.where(Conversation.created_at >= from_date)
-        if to_date:
-            query = query.where(Conversation.created_at <= to_date)
+        if from_date_utc:
+            query = query.where(Conversation.created_at >= from_date_utc)
+        if to_date_utc:
+            query = query.where(Conversation.created_at <= to_date_utc)
 
         query = query.order_by(Conversation.updated_at.desc())
         query = query.limit(limit).offset(offset)
