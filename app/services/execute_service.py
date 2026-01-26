@@ -3,7 +3,7 @@
 Claude Agent SDKを使用したエージェント実行とストリーミング処理（v2形式）
 """
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, AsyncGenerator
 
@@ -286,7 +286,7 @@ class ExecuteService:
                         yield progress_event
 
                     context.message_seq += 1
-                    timestamp = datetime.utcnow()
+                    timestamp = datetime.now(timezone.utc)
 
                     # メッセージタイプ判定
                     msg_type = message_processor.determine_message_type(message)
@@ -365,7 +365,7 @@ class ExecuteService:
     async def _save_user_message(self, context: ExecutionContext) -> None:
         """ユーザーメッセージを保存"""
         context.message_seq += 1
-        user_message_timestamp = datetime.utcnow()
+        user_message_timestamp = datetime.now(timezone.utc)
 
         user_message_content = {
             "type": "user",

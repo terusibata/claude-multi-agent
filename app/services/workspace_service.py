@@ -6,7 +6,7 @@ S3ベースのワークスペース管理を行う。
 """
 import shutil
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from uuid import uuid4
@@ -461,7 +461,7 @@ class WorkspaceService:
             tenant_id: テナントID
             conversation_id: 会話ID
         """
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         local_path = self.get_workspace_local_path(conversation_id)
 
         await self.db.execute(
