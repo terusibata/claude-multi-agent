@@ -11,10 +11,10 @@ from app.services.execute.aws_config import AWSConfig
 from app.services.execute.context import ExecutionContext, SDKOptions
 from app.services.builtin_tools import (
     create_file_presentation_mcp_server,
-    create_file_reader_mcp_server,
+    create_file_tools_mcp_server,
     FILE_PRESENTATION_PROMPT,
 )
-from app.services.file_reader_tools import FILE_READER_PROMPT
+from app.services.workspace.file_tools import FILE_TOOLS_PROMPT
 from app.services.mcp_server_service import McpServerService
 from app.services.openapi_mcp_service import create_openapi_mcp_server
 from app.services.skill_service import SkillService
@@ -275,24 +275,38 @@ class OptionsBuilder:
                 server_name="file-presentation",
             )
 
-        # file-readerは常に追加（全テナントでデフォルト利用可能）
-        file_reader_server = create_file_reader_mcp_server(
+        # file-toolsは常に追加（全テナントでデフォルト利用可能）
+        file_tools_server = create_file_tools_mcp_server(
             self.workspace_service,
             context.tenant_id,
             context.conversation_id,
         )
-        if file_reader_server:
-            mcp_servers["file-reader"] = file_reader_server
+        if file_tools_server:
+            mcp_servers["file-tools"] = file_tools_server
             allowed_tools.extend([
-                "mcp__file-reader__read_image_file",
-                "mcp__file-reader__read_pdf_file",
-                "mcp__file-reader__read_office_file",
-                "mcp__file-reader__list_workspace_files",
+                # 共通
+                "mcp__file-tools__list_workspace_files",
+                "mcp__file-tools__read_image_file",
+                # Excel
+                "mcp__file-tools__inspect_excel_file",
+                "mcp__file-tools__read_excel_sheet",
+                # PDF
+                "mcp__file-tools__inspect_pdf_file",
+                "mcp__file-tools__read_pdf_pages",
+                "mcp__file-tools__convert_pdf_to_images",
+                # Word
+                "mcp__file-tools__inspect_word_file",
+                "mcp__file-tools__read_word_section",
+                # PowerPoint
+                "mcp__file-tools__inspect_pptx_file",
+                "mcp__file-tools__read_pptx_slides",
+                # 画像
+                "mcp__file-tools__inspect_image_file",
             ])
-            system_prompt = f"{system_prompt}\n\n{FILE_READER_PROMPT}"
+            system_prompt = f"{system_prompt}\n\n{FILE_TOOLS_PROMPT}"
             logger.info(
                 "ビルトインMCPサーバー追加完了",
-                server_name="file-reader",
+                server_name="file-tools",
             )
 
         return mcp_servers, allowed_tools, system_prompt

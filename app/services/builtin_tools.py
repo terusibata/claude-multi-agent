@@ -335,13 +335,13 @@ FILE_PRESENTATION_PROMPT = """
 """
 
 
-def create_file_reader_mcp_server(
+def create_file_tools_mcp_server(
     workspace_service,
     tenant_id: str,
     conversation_id: str,
 ):
     """
-    ファイル読み込み用のSDK MCPサーバーを作成
+    ファイル読み込み用のSDK MCPサーバーを作成（新版）
 
     Args:
         workspace_service: WorkspaceServiceインスタンス
@@ -354,37 +354,14 @@ def create_file_reader_mcp_server(
     try:
         from claude_agent_sdk import tool, create_sdk_mcp_server
     except ImportError:
-        logger.warning("claude_agent_sdk not available, skipping file reader MCP server")
+        logger.warning("claude_agent_sdk not available, skipping file tools MCP server")
         return None
 
-    from app.services.file_reader_tools import create_file_reader_handlers
+    from app.services.workspace.file_tools import create_file_tools_handlers
 
-    handlers = create_file_reader_handlers(workspace_service, tenant_id, conversation_id)
+    handlers = create_file_tools_handlers(workspace_service, tenant_id, conversation_id)
 
-    @tool(
-        "read_image_file",
-        "ワークスペース内の画像ファイル（JPEG/PNG/GIF/WebP）を読み込みます。file_pathでファイルパスを指定してください。",
-        {"file_path": str},
-    )
-    async def read_image_file_tool(args: dict[str, Any]) -> dict[str, Any]:
-        return await handlers["read_image_file"](args)
-
-    @tool(
-        "read_pdf_file",
-        "ワークスペース内のPDFファイルを読み込みます。file_pathでファイルパスを指定してください。",
-        {"file_path": str},
-    )
-    async def read_pdf_file_tool(args: dict[str, Any]) -> dict[str, Any]:
-        return await handlers["read_pdf_file"](args)
-
-    @tool(
-        "read_office_file",
-        "ワークスペース内のOfficeファイル（Excel/Word/PowerPoint）を読み込み、テキストとして抽出します。file_pathでファイルパスを指定してください。Excelの場合はsheet_name（シート名）とmax_rows（最大行数、デフォルト1000）も指定可能です。",
-        {"file_path": str, "sheet_name": str, "max_rows": int},
-    )
-    async def read_office_file_tool(args: dict[str, Any]) -> dict[str, Any]:
-        return await handlers["read_office_file"](args)
-
+    # 共通ツール
     @tool(
         "list_workspace_files",
         "ワークスペース内のファイル一覧を取得します。filter_typeで絞り込み可能（image/pdf/office/text/all）。",
@@ -393,15 +370,122 @@ def create_file_reader_mcp_server(
     async def list_workspace_files_tool(args: dict[str, Any]) -> dict[str, Any]:
         return await handlers["list_workspace_files"](args)
 
+    @tool(
+        "read_image_file",
+        "画像ファイルを視覚的に読み込みます（image content block）。file_pathでパスを指定。max_dimensionでリサイズ上限を指定可能（デフォルト: 1920）。",
+        {"file_path": str, "max_dimension": int},
+    )
+    async def read_image_file_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["read_image_file"](args)
+
+    # Excel ツール
+    @tool(
+        "inspect_excel_file",
+        "Excelファイルの構造を確認します。シート一覧、ヘッダー行、データサンプルを返します。",
+        {"file_path": str},
+    )
+    async def inspect_excel_file_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["inspect_excel_file"](args)
+
+    @tool(
+        "read_excel_sheet",
+        "Excelシートのデータを取得します。sheet_name（シート名）、start_row/end_row（行範囲）、columns（列指定: 'A:D'や'A,C,E'）を指定可能。",
+        {"file_path": str, "sheet_name": str, "start_row": int, "end_row": int, "columns": str},
+    )
+    async def read_excel_sheet_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["read_excel_sheet"](args)
+
+    # PDF ツール
+    @tool(
+        "inspect_pdf_file",
+        "PDFファイルの構造を確認します。ページ数、目次、各ページの概要を返します。",
+        {"file_path": str},
+    )
+    async def inspect_pdf_file_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["inspect_pdf_file"](args)
+
+    @tool(
+        "read_pdf_pages",
+        "PDFページのテキストを抽出します。pagesで範囲指定（'1-5'や'1,3,5'形式）。",
+        {"file_path": str, "pages": str},
+    )
+    async def read_pdf_pages_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["read_pdf_pages"](args)
+
+    @tool(
+        "convert_pdf_to_images",
+        "PDFページを画像に変換してワークスペースに保存します。pagesで範囲指定（最大5ページ）、dpiで解像度指定（デフォルト: 150）。保存されたパスを返します。",
+        {"file_path": str, "pages": str, "dpi": int},
+    )
+    async def convert_pdf_to_images_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["convert_pdf_to_images"](args)
+
+    # Word ツール
+    @tool(
+        "inspect_word_file",
+        "Wordファイルの構造を確認します。見出し一覧、段落数、冒頭プレビューを返します。",
+        {"file_path": str},
+    )
+    async def inspect_word_file_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["inspect_word_file"](args)
+
+    @tool(
+        "read_word_section",
+        "Wordファイルのセクションを取得します。headingで見出しを指定するか、start_paragraph/end_paragraphで段落範囲を指定。",
+        {"file_path": str, "heading": str, "start_paragraph": int, "end_paragraph": int},
+    )
+    async def read_word_section_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["read_word_section"](args)
+
+    # PowerPoint ツール
+    @tool(
+        "inspect_pptx_file",
+        "PowerPointファイルの構造を確認します。スライド一覧、各スライドの要素数を返します。",
+        {"file_path": str},
+    )
+    async def inspect_pptx_file_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["inspect_pptx_file"](args)
+
+    @tool(
+        "read_pptx_slides",
+        "PowerPointスライドのテキストを取得します。slidesで範囲指定（'1-5'や'1,3,5'形式）、include_notesでノートを含めるか指定。",
+        {"file_path": str, "slides": str, "include_notes": bool},
+    )
+    async def read_pptx_slides_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["read_pptx_slides"](args)
+
+    # 画像 ツール
+    @tool(
+        "inspect_image_file",
+        "画像ファイルのメタデータを確認します。解像度、ファイルサイズ、EXIF情報を返します。",
+        {"file_path": str},
+    )
+    async def inspect_image_file_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["inspect_image_file"](args)
+
     # MCPサーバーとして登録
     server = create_sdk_mcp_server(
-        name="file-reader",
-        version="1.0.0",
+        name="file-tools",
+        version="2.0.0",
         tools=[
-            read_image_file_tool,
-            read_pdf_file_tool,
-            read_office_file_tool,
+            # 共通
             list_workspace_files_tool,
+            read_image_file_tool,
+            # Excel
+            inspect_excel_file_tool,
+            read_excel_sheet_tool,
+            # PDF
+            inspect_pdf_file_tool,
+            read_pdf_pages_tool,
+            convert_pdf_to_images_tool,
+            # Word
+            inspect_word_file_tool,
+            read_word_section_tool,
+            # PowerPoint
+            inspect_pptx_file_tool,
+            read_pptx_slides_tool,
+            # 画像
+            inspect_image_file_tool,
         ],
     )
 
