@@ -114,7 +114,7 @@ S3_WORKSPACE_PREFIX=workspaces/
 
 ### 会話作成時に有効化
 
-会話を作成する際に `enable_workspace: true` を指定してワークスペースを有効化します：
+会話を作成する際に `workspace_enabled: true` を指定してワークスペースを有効化します：
 
 ```bash
 curl -X POST http://localhost:8000/api/tenants/tenant-001/conversations \
@@ -122,7 +122,7 @@ curl -X POST http://localhost:8000/api/tenants/tenant-001/conversations \
   -d '{
     "user_id": "user-001",
     "model_id": "claude-sonnet-4",
-    "enable_workspace": true
+    "workspace_enabled": true
   }'
 ```
 
@@ -134,7 +134,7 @@ curl -X POST http://localhost:8000/api/tenants/tenant-001/conversations \
   "user_id": "user-001",
   "model_id": "claude-sonnet-4",
   "status": "active",
-  "enable_workspace": true,
+  "workspace_enabled": true,
   "created_at": "2024-01-01T00:00:00Z"
 }
 ```
@@ -211,7 +211,7 @@ const response = await fetch(
 
 ファイルがアップロードされると、自動的にS3に保存されます。
 
-**注意**: ファイルをアップロードする場合、会話作成時に `enable_workspace: true` を指定しておく必要があります。
+**注意**: ファイルをアップロードする場合、会話作成時に `workspace_enabled: true` を指定しておく必要があります。
 
 ---
 
@@ -353,7 +353,7 @@ workspaces/tenant-001/550e8400-uuid/analysis/report.xlsx
 
 ## エージェント実行フロー
 
-1. **会話作成**: `enable_workspace: true` で会話を作成
+1. **会話作成**: `workspace_enabled: true` で会話を作成
 2. **ファイルアップロード**: `/stream` APIでファイルをS3にアップロード
 3. **S3→ローカル同期**: 実行前にS3から一時ローカルディレクトリにファイルを同期
 4. **エージェント実行**: ローカルディレクトリでファイル操作を実行
@@ -397,7 +397,7 @@ AIはファイルの内容を読まなくても、どのファイルが利用可
 
 | メソッド | パス | 説明 |
 |---------|------|------|
-| POST | /tenants/{tenant_id}/conversations | 会話作成（`enable_workspace: true`で有効化） |
+| POST | /tenants/{tenant_id}/conversations | 会話作成（`workspace_enabled: true`で有効化） |
 | POST | /tenants/{tenant_id}/conversations/{conversation_id}/stream | ストリーミング実行（ファイル添付可） |
 | GET | /tenants/{tenant_id}/conversations/{conversation_id}/files | ファイル一覧 |
 | GET | /tenants/{tenant_id}/conversations/{conversation_id}/files/download?path=xxx | ファイルダウンロード |

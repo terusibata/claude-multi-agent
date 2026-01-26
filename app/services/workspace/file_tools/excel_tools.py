@@ -31,6 +31,24 @@ async def inspect_excel_file_handler(
     """
     file_path = args.get("file_path", "")
 
+    # 古いOffice形式（.xls）のチェック
+    if file_path.lower().endswith(".xls"):
+        return {
+            "content": [{
+                "type": "text",
+                "text": (
+                    f"エラー: '{file_path}' は古いExcel形式（.xls）です。\n\n"
+                    "このツールは .xlsx（Office Open XML）形式のみ対応しています。\n"
+                    ".xls（BIFF形式）ファイルは openpyxl では読み取れません。\n\n"
+                    "対処方法:\n"
+                    "1. Microsoft Excel で .xlsx 形式に変換して再アップロード\n"
+                    "2. LibreOffice Calc で .xlsx 形式に変換して再アップロード\n"
+                    "3. オンライン変換ツールを使用"
+                ),
+            }],
+            "is_error": True,
+        }
+
     try:
         from openpyxl import load_workbook
     except ImportError:
@@ -129,6 +147,24 @@ async def read_excel_sheet_handler(
     start_row = args.get("start_row", 1)
     end_row = args.get("end_row", 100)
     columns_spec = args.get("columns")
+
+    # 古いOffice形式（.xls）のチェック
+    if file_path.lower().endswith(".xls"):
+        return {
+            "content": [{
+                "type": "text",
+                "text": (
+                    f"エラー: '{file_path}' は古いExcel形式（.xls）です。\n\n"
+                    "このツールは .xlsx（Office Open XML）形式のみ対応しています。\n"
+                    ".xls（BIFF形式）ファイルは openpyxl では読み取れません。\n\n"
+                    "対処方法:\n"
+                    "1. Microsoft Excel で .xlsx 形式に変換して再アップロード\n"
+                    "2. LibreOffice Calc で .xlsx 形式に変換して再アップロード\n"
+                    "3. オンライン変換ツールを使用"
+                ),
+            }],
+            "is_error": True,
+        }
 
     try:
         from openpyxl import load_workbook

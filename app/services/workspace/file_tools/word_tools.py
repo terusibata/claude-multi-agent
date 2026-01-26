@@ -31,6 +31,24 @@ async def inspect_word_file_handler(
     """
     file_path = args.get("file_path", "")
 
+    # 古いOffice形式（.doc）のチェック
+    if file_path.lower().endswith(".doc"):
+        return {
+            "content": [{
+                "type": "text",
+                "text": (
+                    f"エラー: '{file_path}' は古いWord形式（.doc）です。\n\n"
+                    "このツールは .docx（Office Open XML）形式のみ対応しています。\n"
+                    ".doc（バイナリ形式）ファイルは python-docx では読み取れません。\n\n"
+                    "対処方法:\n"
+                    "1. Microsoft Word で .docx 形式に変換して再アップロード\n"
+                    "2. LibreOffice で .docx 形式に変換して再アップロード\n"
+                    "3. オンライン変換ツールを使用"
+                ),
+            }],
+            "is_error": True,
+        }
+
     try:
         from docx import Document
         from docx.opc.exceptions import PackageNotFoundError
@@ -146,6 +164,24 @@ async def read_word_section_handler(
     heading = args.get("heading")
     start_paragraph = args.get("start_paragraph", 1)
     end_paragraph = args.get("end_paragraph")
+
+    # 古いOffice形式（.doc）のチェック
+    if file_path.lower().endswith(".doc"):
+        return {
+            "content": [{
+                "type": "text",
+                "text": (
+                    f"エラー: '{file_path}' は古いWord形式（.doc）です。\n\n"
+                    "このツールは .docx（Office Open XML）形式のみ対応しています。\n"
+                    ".doc（バイナリ形式）ファイルは python-docx では読み取れません。\n\n"
+                    "対処方法:\n"
+                    "1. Microsoft Word で .docx 形式に変換して再アップロード\n"
+                    "2. LibreOffice で .docx 形式に変換して再アップロード\n"
+                    "3. オンライン変換ツールを使用"
+                ),
+            }],
+            "is_error": True,
+        }
 
     try:
         from docx import Document

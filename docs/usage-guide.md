@@ -142,7 +142,7 @@ curl -X POST http://localhost:8000/api/tenants/tenant-001/conversations \
   -d '{
     "user_id": "user-001",
     "model_id": "claude-sonnet-4",
-    "enable_workspace": false
+    "workspace_enabled": false
   }'
 ```
 
@@ -154,7 +154,7 @@ curl -X POST http://localhost:8000/api/tenants/tenant-001/conversations \
   "user_id": "user-001",
   "model_id": "claude-sonnet-4",
   "status": "active",
-  "enable_workspace": false,
+  "workspace_enabled": false,
   "created_at": "2024-01-01T00:00:00Z"
 }
 ```
@@ -234,14 +234,14 @@ S3_WORKSPACE_PREFIX=workspaces/
 
 ### ワークスペースの有効化
 
-会話作成時に `enable_workspace: true` を指定：
+会話作成時に `workspace_enabled: true` を指定：
 
 ```bash
 curl -X POST http://localhost:8000/api/tenants/tenant-001/conversations \
   -H "Content-Type: application/json" \
   -d '{
     "user_id": "user-001",
-    "enable_workspace": true
+    "workspace_enabled": true
   }'
 ```
 
