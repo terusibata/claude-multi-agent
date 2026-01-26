@@ -3,7 +3,7 @@
 エージェント実行に必要なパラメータをまとめたデータクラス
 """
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from app.models.model import Model
@@ -81,7 +81,7 @@ class ToolExecutionInfo:
     def __post_init__(self):
         """初期化後の処理"""
         if self.started_at is None:
-            self.started_at = datetime.utcnow()
+            self.started_at = datetime.now(timezone.utc)
 
     def complete(
         self,
@@ -97,7 +97,7 @@ class ToolExecutionInfo:
         """
         self.status = "error" if is_error else "completed"
         self.is_error = is_error
-        self.completed_at = datetime.utcnow()
+        self.completed_at = datetime.now(timezone.utc)
 
         if isinstance(result, str):
             self.result_preview = result[:200] + "..." if len(result) > 200 else result
@@ -146,7 +146,7 @@ class MessageLogEntry:
     def __post_init__(self):
         """初期化後の処理"""
         if self.timestamp is None:
-            self.timestamp = datetime.utcnow()
+            self.timestamp = datetime.now(timezone.utc)
 
     def to_dict(self) -> dict[str, Any]:
         """辞書形式に変換（DB保存用）"""

@@ -1,0 +1,125 @@
+"""
+画像ファイル用ツール
+
+inspect_image_file: メタデータ確認（解像度、サイズ）
+※ read_image_file は common.py に実装
+"""
+
+import io
+from typing import TYPE_CHECKING, Any
+
+import structlog
+
+from app.services.workspace.file_processors import FileCategory, FileTypeClassifier
+
+if TYPE_CHECKING:
+    from app.services.workspace_service import WorkspaceService
+
+logger = structlog.get_logger(__name__)
+
+
+async def inspect_image_file_handler(
+    workspace_service: "WorkspaceService",
+    tenant_id: str,
+    conversation_id: str,
+    args: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    画像ファイルのメタデータを確認
+
+    Args:
+        args:
+            file_path: ファイルパス
+    """
+    file_path = args.get("file_path", "")
+
+    try:
+        content, filename, content_type = await workspace_service.download_file(
+            tenant_id, conversation_id, file_path
+        )
+
+        # 画像ファイルかチェック
+        category = FileTypeClassifier.get_category(filename, content_type)
+        if category != FileCategory.IMAGE:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"このファイルは画像ではありません: {filename} ({content_type})",
+                }],
+                "is_error": True,
+            }
+
+        result_lines = [
+            f"# 画像情報: {filename}",
+            f"ファイルサイズ: {len(content) / 1024:.1f} KB",
+            f"MIMEタイプ: {content_type}",
+        ]
+
+        # Pillowで詳細情報を取得
+        try:
+            from PIL import Image
+            from PIL.ExifTags import TAGS
+
+            img = Image.open(io.BytesIO(content))
+
+            result_lines.append(f"解像度: {img.width} x {img.height} px")
+            result_lines.append(f"カラーモード: {img.mode}")
+            result_lines.append(f"フォーマット: {img.format}")
+
+            # DPI情報
+            dpi = img.info.get("dpi")
+            if dpi:
+                result_lines.append(f"DPI: {dpi[0]} x {dpi[1]}")
+
+            # アニメーション（GIF）
+            if hasattr(img, "n_frames") and img.n_frames > 1:
+                result_lines.append(f"フレーム数: {img.n_frames}")
+
+            # EXIF情報（簡易版）
+            if hasattr(img, "_getexif") and img._getexif():
+                exif = img._getexif()
+                result_lines.append("")
+                result_lines.append("## EXIF情報")
+
+                important_tags = {
+                    "Make": "カメラメーカー",
+                    "Model": "カメラ機種",
+                    "DateTime": "撮影日時",
+                    "ExposureTime": "シャッタースピード",
+                    "FNumber": "絞り値",
+                    "ISOSpeedRatings": "ISO感度",
+                }
+
+                for tag_id, value in exif.items():
+                    tag_name = TAGS.get(tag_id, str(tag_id))
+                    if tag_name in important_tags:
+                        result_lines.append(f"- {important_tags[tag_name]}: {value}")
+
+            img.close()
+
+        except ImportError:
+            result_lines.append("")
+            result_lines.append("※ Pillowがインストールされていないため、詳細情報を取得できません。")
+        except Exception as e:
+            logger.warning("画像詳細情報取得エラー", error=str(e))
+            result_lines.append("")
+            result_lines.append(f"※ 詳細情報の取得に失敗: {str(e)}")
+
+        result_text = "\n".join(result_lines)
+        result_text += "\n\n---\n"
+        result_text += "画像を視覚的に確認するには `read_image_file` を使用してください。"
+
+        return {
+            "content": [{"type": "text", "text": result_text}],
+        }
+    except FileNotFoundError:
+        return {
+            "content": [{"type": "text", "text": f"ファイルが見つかりません: {file_path}"}],
+            "is_error": True,
+        }
+    except Exception as e:
+        logger.error("画像情報取得エラー", error=str(e), file_path=file_path)
+        return {
+            "content": [{"type": "text", "text": f"読み込みエラー: {str(e)}"}],
+            "is_error": True,
+        }

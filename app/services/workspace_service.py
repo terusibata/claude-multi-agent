@@ -5,7 +5,8 @@ S3ベースのワークスペース管理を行う。
 会話専用ワークスペースのファイル操作はS3を経由する。
 """
 import shutil
-from datetime import datetime
+import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from uuid import uuid4
@@ -27,6 +28,7 @@ from app.schemas.workspace import (
 )
 from app.services.workspace.s3_storage import S3StorageBackend
 from app.services.workspace.context_builder import AIContextBuilder
+from app.services.workspace.file_processors import FileTypeClassifier
 
 # 後方互換性のため例外クラスを再エクスポート
 from app.utils.exceptions import WorkspaceSecurityError
@@ -69,9 +71,11 @@ class WorkspaceService:
         Raises:
             FileSizeExceededError: ファイルサイズが制限を超えた場合
         """
-        max_size = settings.max_upload_file_size
         results = []
         for filename, content, content_type in files:
+            # ファイルタイプ別のサイズ制限を取得
+            max_size = FileTypeClassifier.get_max_file_size(filename, content_type)
+
             # ファイルサイズチェック
             if len(content) > max_size:
                 raise FileSizeExceededError(
@@ -366,17 +370,28 @@ class WorkspaceService:
         """
         local_dir = self.get_workspace_local_path(conversation_id)
 
-        def log_error(func, path, exc_info):
-            """削除エラー時のコールバック"""
-            logger.warning(
-                "ローカルワークスペース削除エラー",
-                conversation_id=conversation_id,
-                path=path,
-                error=str(exc_info[1]) if exc_info else "Unknown error",
-            )
-
         if Path(local_dir).exists():
-            shutil.rmtree(local_dir, onerror=log_error)
+            # Python 3.12+では onerror は非推奨、onexc を使用
+            if sys.version_info >= (3, 12):
+                def log_error_onexc(func, path, exc):
+                    """削除エラー時のコールバック（Python 3.12+用）"""
+                    logger.warning(
+                        "ローカルワークスペース削除エラー",
+                        conversation_id=conversation_id,
+                        path=path,
+                        error=str(exc),
+                    )
+                shutil.rmtree(local_dir, onexc=log_error_onexc)
+            else:
+                def log_error_onerror(func, path, exc_info):
+                    """削除エラー時のコールバック（Python 3.11以前用）"""
+                    logger.warning(
+                        "ローカルワークスペース削除エラー",
+                        conversation_id=conversation_id,
+                        path=path,
+                        error=str(exc_info[1]) if exc_info else "Unknown error",
+                    )
+                shutil.rmtree(local_dir, onerror=log_error_onerror)
             logger.info("ローカルワークスペース削除完了", conversation_id=conversation_id)
         else:
             logger.debug("ローカルワークスペースは存在しません", conversation_id=conversation_id)
@@ -446,7 +461,7 @@ class WorkspaceService:
             tenant_id: テナントID
             conversation_id: 会話ID
         """
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         local_path = self.get_workspace_local_path(conversation_id)
 
         await self.db.execute(

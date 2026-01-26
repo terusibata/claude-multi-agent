@@ -5,6 +5,7 @@ AIに提供するワークスペースコンテキストを生成
 from typing import Optional
 
 from app.schemas.workspace import WorkspaceContextForAI, WorkspaceFileList, WorkspaceInfo
+from app.services.workspace.file_processors import FileCategory, FileTypeClassifier
 
 
 class AIContextBuilder:
@@ -62,6 +63,7 @@ class AIContextBuilder:
             指示テキスト
         """
         file_list_text = self._format_file_list(files)
+        type_summary = self._build_file_type_summary(files)
 
         return f"""
 ## ワークスペース情報
@@ -70,6 +72,9 @@ class AIContextBuilder:
 
 ### 利用可能なファイル:
 {file_list_text}
+
+### ファイルタイプ別サマリ:
+{type_summary}
 
 ### ガイドライン:
 1. ファイルの読み取り: Readツールでワークスペース内のファイルを読み取れます
@@ -89,6 +94,52 @@ class AIContextBuilder:
 - 「python xxx.py で実行できます」のような実行方法の案内は不要です
 - ユーザーはこの環境でコマンドを実行できません。代わりにダウンロードして利用します
 """
+
+    def _build_file_type_summary(self, files: list[dict]) -> str:
+        """
+        ファイルタイプ別のサマリを構築
+
+        Args:
+            files: ファイル情報リスト
+
+        Returns:
+            サマリテキスト
+        """
+        if not files:
+            return "（ファイルなし）"
+
+        # ファイルタイプ別にカウント
+        type_counts: dict[FileCategory, int] = {
+            FileCategory.IMAGE: 0,
+            FileCategory.PDF: 0,
+            FileCategory.OFFICE: 0,
+            FileCategory.TEXT: 0,
+        }
+
+        for f in files:
+            category = FileTypeClassifier.get_category(f["path"], f.get("type"))
+            type_counts[category] = type_counts.get(category, 0) + 1
+
+        # サマリテキストを構築
+        type_info = []
+        if type_counts[FileCategory.IMAGE] > 0:
+            type_info.append(
+                f"  - 画像: {type_counts[FileCategory.IMAGE]}件 → `inspect_image_file` で情報確認、`read_image_file` で視覚的読み込み"
+            )
+        if type_counts[FileCategory.PDF] > 0:
+            type_info.append(
+                f"  - PDF: {type_counts[FileCategory.PDF]}件 → `inspect_pdf_file` で構造確認、`read_pdf_pages` でテキスト取得"
+            )
+        if type_counts[FileCategory.OFFICE] > 0:
+            type_info.append(
+                f"  - Office: {type_counts[FileCategory.OFFICE]}件 → `inspect_*` で構造確認、`read_*` でデータ取得"
+            )
+        if type_counts[FileCategory.TEXT] > 0:
+            type_info.append(
+                f"  - テキスト: {type_counts[FileCategory.TEXT]}件 → `Read` ツールで読み込み"
+            )
+
+        return "\n".join(type_info) if type_info else "（ファイルなし）"
 
     def _format_file_list(self, files: list[dict]) -> str:
         """ファイルリストをテキスト形式にフォーマット"""

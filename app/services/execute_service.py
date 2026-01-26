@@ -3,7 +3,7 @@
 Claude Agent SDKを使用したエージェント実行とストリーミング処理（v2形式）
 """
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, AsyncGenerator
 
@@ -24,6 +24,7 @@ from app.services.execute import (
     TitleGenerator,
     ToolTracker,
 )
+from app.services.execute.progress_manager import ProgressManager
 from app.services.model_service import ModelService
 from app.services.mcp_server_service import McpServerService
 from app.services.conversation_service import ConversationService
@@ -252,8 +253,16 @@ class ExecuteService:
         # ユーザーメッセージを保存
         await self._save_user_message(context)
 
+        # 進捗管理マネージャーを初期化
+        progress_manager = ProgressManager(
+            seq_provider=seq_counter.next,
+            interval_seconds=3.0,
+        )
+
         # メッセージプロセッサを初期化
-        message_processor = MessageProcessor(context, tool_tracker, settings, seq_counter)
+        message_processor = MessageProcessor(
+            context, tool_tracker, settings, seq_counter, progress_manager
+        )
 
         # SDK実行
         logger.info(
@@ -267,67 +276,82 @@ class ExecuteService:
         async with ClaudeSDKClient(options=sdk_options) as client:
             await client.query(context.request.user_input)
 
-            async for message in client.receive_response():
-                context.message_seq += 1
-                timestamp = datetime.utcnow()
+            # バックグラウンドティッカーを起動
+            await progress_manager.start_ticker()
 
-                # メッセージタイプ判定
-                msg_type = message_processor.determine_message_type(message)
-                logger.debug("メッセージ受信", seq=context.message_seq, type=msg_type)
+            try:
+                async for message in client.receive_response():
+                    # キューに溜まった進捗メッセージを送信
+                    for progress_event in progress_manager.drain_queue():
+                        yield progress_event
 
-                # ログエントリ作成
-                log_entry = MessageLogEntry(
-                    message_type=msg_type,
-                    subtype=getattr(message, "subtype", None),
-                    timestamp=timestamp,
-                )
+                    context.message_seq += 1
+                    timestamp = datetime.now(timezone.utc)
 
-                # メッセージタイプ別処理
-                if isinstance(message, SystemMessage):
-                    async for event in self._wrap_generator(
-                        message_processor.process_system_message(message, log_entry)
-                    ):
-                        yield event
+                    # メッセージタイプ判定
+                    msg_type = message_processor.determine_message_type(message)
+                    logger.debug("メッセージ受信", seq=context.message_seq, type=msg_type)
 
-                    # セッションID更新
-                    if context.session_id and message.subtype == "init":
-                        await self._update_session_id(context)
-
-                elif isinstance(message, AssistantMessage):
-                    # ターン番号を内部的に追跡（ログ用）
-                    sdk_turn_number += 1
-
-                    async for event in self._wrap_generator(
-                        message_processor.process_assistant_message(
-                            message, log_entry,
-                            TextBlock, ToolUseBlock, ThinkingBlock, ToolResultBlock,
-                        )
-                    ):
-                        yield event
-
-                elif isinstance(message, UserMessage):
-                    async for event in self._wrap_generator(
-                        message_processor.process_user_message(
-                            message, log_entry, ToolResultBlock
-                        )
-                    ):
-                        yield event
-
-                elif isinstance(message, ResultMessage):
-                    # 実行完了後のワークスペース同期処理
-                    if context.workspace_enabled:
-                        await self._sync_workspace_after_execution(context)
-
-                    result_events = await self._handle_result_message(
-                        message, context, tool_tracker, log_entry, seq_counter
+                    # ログエントリ作成
+                    log_entry = MessageLogEntry(
+                        message_type=msg_type,
+                        subtype=getattr(message, "subtype", None),
+                        timestamp=timestamp,
                     )
-                    for event in result_events:
-                        yield event
 
-                # メッセージログ保存（DB & コンテキスト）
-                saved = await self._save_message_log(context, msg_type, message, log_entry)
-                if saved:
-                    context.message_logs.append(log_entry.to_dict())
+                    # メッセージタイプ別処理
+                    if isinstance(message, SystemMessage):
+                        async for event in self._wrap_generator(
+                            message_processor.process_system_message(message, log_entry)
+                        ):
+                            yield event
+
+                        # セッションID更新
+                        if context.session_id and message.subtype == "init":
+                            await self._update_session_id(context)
+
+                    elif isinstance(message, AssistantMessage):
+                        # ターン番号を内部的に追跡（ログ用）
+                        sdk_turn_number += 1
+
+                        async for event in self._wrap_generator(
+                            message_processor.process_assistant_message(
+                                message, log_entry,
+                                TextBlock, ToolUseBlock, ThinkingBlock, ToolResultBlock,
+                            )
+                        ):
+                            yield event
+
+                    elif isinstance(message, UserMessage):
+                        async for event in self._wrap_generator(
+                            message_processor.process_user_message(
+                                message, log_entry, ToolResultBlock
+                            )
+                        ):
+                            yield event
+
+                    elif isinstance(message, ResultMessage):
+                        # ティッカーを停止（完了処理前）
+                        await progress_manager.stop_ticker()
+
+                        # 実行完了後のワークスペース同期処理
+                        if context.workspace_enabled:
+                            await self._sync_workspace_after_execution(context)
+
+                        result_events = await self._handle_result_message(
+                            message, context, tool_tracker, log_entry, seq_counter
+                        )
+                        for event in result_events:
+                            yield event
+
+                    # メッセージログ保存（DB & コンテキスト）
+                    saved = await self._save_message_log(context, msg_type, message, log_entry)
+                    if saved:
+                        context.message_logs.append(log_entry.to_dict())
+
+            finally:
+                # 確実にティッカーを停止
+                await progress_manager.stop_ticker()
 
     async def _wrap_generator(self, gen):
         """同期ジェネレータを非同期で処理"""
@@ -341,7 +365,7 @@ class ExecuteService:
     async def _save_user_message(self, context: ExecutionContext) -> None:
         """ユーザーメッセージを保存"""
         context.message_seq += 1
-        user_message_timestamp = datetime.utcnow()
+        user_message_timestamp = datetime.now(timezone.utc)
 
         user_message_content = {
             "type": "user",

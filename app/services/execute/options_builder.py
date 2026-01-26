@@ -11,8 +11,10 @@ from app.services.execute.aws_config import AWSConfig
 from app.services.execute.context import ExecutionContext, SDKOptions
 from app.services.builtin_tools import (
     create_file_presentation_mcp_server,
+    create_file_tools_mcp_server,
     FILE_PRESENTATION_PROMPT,
 )
+from app.services.workspace.file_tools import FILE_TOOLS_PROMPT
 from app.services.mcp_server_service import McpServerService
 from app.services.openapi_mcp_service import create_openapi_mcp_server
 from app.services.skill_service import SkillService
@@ -69,17 +71,14 @@ class OptionsBuilder:
             workspace_enabled=context.workspace_enabled,
         )
 
-        # 許可するツールリストの構築（全ツール許可）
+        # 許可するツールリストの構築
+        # ["*"]で全ツールを許可するため、個別のツール追加は不要
+        # ただし、将来的に許可ツールを制限する場合はここで追加が必要になる
         allowed_tools = ["*"]
 
         # テナントのアクティブなスキルを取得
         skills = await self.skill_service.get_all_by_tenant(context.tenant_id)
         active_skills = [s for s in skills if s.status == "active"]
-
-        # スキルがある場合はSkillツールを追加
-        if active_skills:
-            if "Skill" not in allowed_tools:
-                allowed_tools.append("Skill")
 
         # テナントのアクティブなMCPサーバーを取得
         all_mcp_servers = await self.mcp_service.get_all_by_tenant(context.tenant_id)
@@ -103,7 +102,7 @@ class OptionsBuilder:
 
         # ビルトインMCPサーバーの追加
         mcp_servers, allowed_tools, system_prompt = self._add_builtin_mcp_server(
-            cwd, mcp_servers, allowed_tools, system_prompt, builtin_servers
+            context, cwd, mcp_servers, allowed_tools, system_prompt, builtin_servers
         )
 
         # OpenAPI MCPサーバーの追加
@@ -236,6 +235,7 @@ class OptionsBuilder:
 
     def _add_builtin_mcp_server(
         self,
+        context: ExecutionContext,
         cwd: str,
         mcp_servers: dict,
         allowed_tools: list[str],
@@ -246,6 +246,7 @@ class OptionsBuilder:
         ビルトインMCPサーバーを追加
 
         Args:
+            context: 実行コンテキスト
             cwd: 作業ディレクトリ
             mcp_servers: MCPサーバー設定辞書
             allowed_tools: 許可ツールリスト
@@ -255,8 +256,13 @@ class OptionsBuilder:
         Returns:
             更新された (mcp_servers, allowed_tools, system_prompt)
         """
-        # file-presentationは常に追加
-        file_presentation_server = create_file_presentation_mcp_server(cwd)
+        # file-presentationは常に追加（S3即時アップロードのためworkspace_serviceを渡す）
+        file_presentation_server = create_file_presentation_mcp_server(
+            cwd,
+            self.workspace_service,
+            context.tenant_id,
+            context.conversation_id,
+        )
         if file_presentation_server:
             mcp_servers["file-presentation"] = file_presentation_server
             allowed_tools.append("mcp__file-presentation__present_files")
@@ -264,6 +270,40 @@ class OptionsBuilder:
             logger.info(
                 "ビルトインMCPサーバー追加完了",
                 server_name="file-presentation",
+            )
+
+        # file-toolsは常に追加（全テナントでデフォルト利用可能）
+        file_tools_server = create_file_tools_mcp_server(
+            self.workspace_service,
+            context.tenant_id,
+            context.conversation_id,
+        )
+        if file_tools_server:
+            mcp_servers["file-tools"] = file_tools_server
+            allowed_tools.extend([
+                # 共通
+                "mcp__file-tools__list_workspace_files",
+                "mcp__file-tools__read_image_file",
+                # Excel
+                "mcp__file-tools__inspect_excel_file",
+                "mcp__file-tools__read_excel_sheet",
+                # PDF
+                "mcp__file-tools__inspect_pdf_file",
+                "mcp__file-tools__read_pdf_pages",
+                "mcp__file-tools__convert_pdf_to_images",
+                # Word
+                "mcp__file-tools__inspect_word_file",
+                "mcp__file-tools__read_word_section",
+                # PowerPoint
+                "mcp__file-tools__inspect_pptx_file",
+                "mcp__file-tools__read_pptx_slides",
+                # 画像
+                "mcp__file-tools__inspect_image_file",
+            ])
+            system_prompt = f"{system_prompt}\n\n{FILE_TOOLS_PROMPT}"
+            logger.info(
+                "ビルトインMCPサーバー追加完了",
+                server_name="file-tools",
             )
 
         return mcp_servers, allowed_tools, system_prompt

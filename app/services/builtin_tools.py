@@ -37,12 +37,20 @@ BUILTIN_TOOL_DEFINITIONS = {
 }
 
 
-def create_present_files_handler(workspace_cwd: str = ""):
+def create_present_files_handler(
+    workspace_cwd: str = "",
+    workspace_service=None,
+    tenant_id: str = "",
+    conversation_id: str = "",
+):
     """
     present_filesツールのハンドラーを作成
 
     Args:
         workspace_cwd: ワークスペースのカレントディレクトリ
+        workspace_service: WorkspaceServiceインスタンス（即時S3アップロード用）
+        tenant_id: テナントID
+        conversation_id: 会話ID
 
     Returns:
         ツールハンドラー関数
@@ -112,6 +120,8 @@ def create_present_files_handler(workspace_cwd: str = ""):
                             source=str(path),
                             destination=str(dest_path)
                         )
+                        # コピー後のパスを更新
+                        path = dest_path
                     except Exception as copy_error:
                         logger.error(
                             "ファイル提示: ファイルコピー失敗",
@@ -132,6 +142,43 @@ def create_present_files_handler(workspace_cwd: str = ""):
                         relative_path = str(path.absolute().relative_to(Path(workspace_cwd).absolute()))
                     except ValueError:
                         relative_path = path.name
+
+                # 即座にS3にアップロード（workspace_serviceが利用可能な場合）
+                if workspace_service and tenant_id and conversation_id:
+                    try:
+                        # ファイル内容を読み込み
+                        file_content = path.read_bytes()
+                        content_type = mime_type or "application/octet-stream"
+
+                        # S3にアップロード
+                        await workspace_service.s3.upload(
+                            tenant_id,
+                            conversation_id,
+                            relative_path,
+                            file_content,
+                            content_type,
+                        )
+
+                        # DBに登録
+                        await workspace_service.register_ai_file(
+                            tenant_id,
+                            conversation_id,
+                            relative_path,
+                            is_presented=True,
+                        )
+
+                        logger.info(
+                            "ファイル提示: S3に即時アップロード完了",
+                            file_path=relative_path,
+                            size=len(file_content),
+                        )
+                    except Exception as upload_error:
+                        logger.error(
+                            "ファイル提示: S3アップロード失敗",
+                            file_path=relative_path,
+                            error=str(upload_error),
+                        )
+                        # アップロード失敗してもファイル情報は追加する
 
                 files_info.append({
                     "path": str(path.absolute()),
@@ -222,12 +269,20 @@ def get_all_builtin_tool_definitions() -> list[dict[str, Any]]:
     return list(BUILTIN_TOOL_DEFINITIONS.values())
 
 
-def create_file_presentation_mcp_server(workspace_cwd: str = ""):
+def create_file_presentation_mcp_server(
+    workspace_cwd: str = "",
+    workspace_service=None,
+    tenant_id: str = "",
+    conversation_id: str = "",
+):
     """
     ファイル提示用のSDK MCPサーバーを作成
 
     Args:
         workspace_cwd: ワークスペースのカレントディレクトリ
+        workspace_service: WorkspaceServiceインスタンス（即時S3アップロード用）
+        tenant_id: テナントID
+        conversation_id: 会話ID
 
     Returns:
         SDK MCPサーバー設定
@@ -251,7 +306,12 @@ def create_file_presentation_mcp_server(workspace_cwd: str = ""):
         """
         ファイルパスのリストを受け取り、ユーザーに提示する情報を返す
         """
-        handler = create_present_files_handler(workspace_cwd)
+        handler = create_present_files_handler(
+            workspace_cwd,
+            workspace_service,
+            tenant_id,
+            conversation_id,
+        )
         return await handler(args)
 
     # MCPサーバーとして登録
@@ -273,3 +333,160 @@ FILE_PRESENTATION_PROMPT = """
 - **サブエージェント（Task）がファイルを作成した場合も、その完了後に必ず `mcp__file-presentation__present_files` を呼び出してください**
 - サブエージェントの結果からファイルパスを確認し、作成されたファイルを提示してください
 """
+
+
+def create_file_tools_mcp_server(
+    workspace_service,
+    tenant_id: str,
+    conversation_id: str,
+):
+    """
+    ファイル読み込み用のSDK MCPサーバーを作成（新版）
+
+    Args:
+        workspace_service: WorkspaceServiceインスタンス
+        tenant_id: テナントID
+        conversation_id: 会話ID
+
+    Returns:
+        SDK MCPサーバー設定
+    """
+    try:
+        from claude_agent_sdk import tool, create_sdk_mcp_server
+    except ImportError:
+        logger.warning("claude_agent_sdk not available, skipping file tools MCP server")
+        return None
+
+    from app.services.workspace.file_tools import create_file_tools_handlers
+
+    handlers = create_file_tools_handlers(workspace_service, tenant_id, conversation_id)
+
+    # 共通ツール
+    @tool(
+        "list_workspace_files",
+        "ワークスペース内のファイル一覧を取得します。filter_typeで絞り込み可能（image/pdf/office/text/all）。",
+        {"filter_type": str},
+    )
+    async def list_workspace_files_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["list_workspace_files"](args)
+
+    @tool(
+        "read_image_file",
+        "画像ファイルを視覚的に読み込みます（image content block）。file_pathでパスを指定。max_dimensionでリサイズ上限を指定可能（デフォルト: 1920）。",
+        {"file_path": str, "max_dimension": int},
+    )
+    async def read_image_file_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["read_image_file"](args)
+
+    # Excel ツール
+    @tool(
+        "inspect_excel_file",
+        "Excelファイルの構造を確認します。シート一覧、ヘッダー行、データサンプルを返します。",
+        {"file_path": str},
+    )
+    async def inspect_excel_file_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["inspect_excel_file"](args)
+
+    @tool(
+        "read_excel_sheet",
+        "Excelシートのデータを取得します。sheet_name（シート名）、start_row/end_row（行範囲）、columns（列指定: 'A:D'や'A,C,E'）を指定可能。",
+        {"file_path": str, "sheet_name": str, "start_row": int, "end_row": int, "columns": str},
+    )
+    async def read_excel_sheet_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["read_excel_sheet"](args)
+
+    # PDF ツール
+    @tool(
+        "inspect_pdf_file",
+        "PDFファイルの構造を確認します。ページ数、目次、各ページの概要を返します。",
+        {"file_path": str},
+    )
+    async def inspect_pdf_file_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["inspect_pdf_file"](args)
+
+    @tool(
+        "read_pdf_pages",
+        "PDFページのテキストを抽出します。pagesで範囲指定（'1-5'や'1,3,5'形式）。",
+        {"file_path": str, "pages": str},
+    )
+    async def read_pdf_pages_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["read_pdf_pages"](args)
+
+    @tool(
+        "convert_pdf_to_images",
+        "PDFページを画像に変換してワークスペースに保存します。pagesで範囲指定（最大5ページ）、dpiで解像度指定（デフォルト: 150）。保存されたパスを返します。",
+        {"file_path": str, "pages": str, "dpi": int},
+    )
+    async def convert_pdf_to_images_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["convert_pdf_to_images"](args)
+
+    # Word ツール
+    @tool(
+        "inspect_word_file",
+        "Wordファイルの構造を確認します。見出し一覧、段落数、冒頭プレビューを返します。",
+        {"file_path": str},
+    )
+    async def inspect_word_file_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["inspect_word_file"](args)
+
+    @tool(
+        "read_word_section",
+        "Wordファイルのセクションを取得します。headingで見出しを指定するか、start_paragraph/end_paragraphで段落範囲を指定。",
+        {"file_path": str, "heading": str, "start_paragraph": int, "end_paragraph": int},
+    )
+    async def read_word_section_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["read_word_section"](args)
+
+    # PowerPoint ツール
+    @tool(
+        "inspect_pptx_file",
+        "PowerPointファイルの構造を確認します。スライド一覧、各スライドの要素数を返します。",
+        {"file_path": str},
+    )
+    async def inspect_pptx_file_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["inspect_pptx_file"](args)
+
+    @tool(
+        "read_pptx_slides",
+        "PowerPointスライドのテキストを取得します。slidesで範囲指定（'1-5'や'1,3,5'形式）、include_notesでノートを含めるか指定。",
+        {"file_path": str, "slides": str, "include_notes": bool},
+    )
+    async def read_pptx_slides_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["read_pptx_slides"](args)
+
+    # 画像 ツール
+    @tool(
+        "inspect_image_file",
+        "画像ファイルのメタデータを確認します。解像度、ファイルサイズ、EXIF情報を返します。",
+        {"file_path": str},
+    )
+    async def inspect_image_file_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["inspect_image_file"](args)
+
+    # MCPサーバーとして登録
+    server = create_sdk_mcp_server(
+        name="file-tools",
+        version="2.0.0",
+        tools=[
+            # 共通
+            list_workspace_files_tool,
+            read_image_file_tool,
+            # Excel
+            inspect_excel_file_tool,
+            read_excel_sheet_tool,
+            # PDF
+            inspect_pdf_file_tool,
+            read_pdf_pages_tool,
+            convert_pdf_to_images_tool,
+            # Word
+            inspect_word_file_tool,
+            read_word_section_tool,
+            # PowerPoint
+            inspect_pptx_file_tool,
+            read_pptx_slides_tool,
+            # 画像
+            inspect_image_file_tool,
+        ],
+    )
+
+    return server
