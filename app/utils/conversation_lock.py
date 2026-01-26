@@ -5,7 +5,7 @@
 """
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import structlog
@@ -68,7 +68,7 @@ class ConversationLockManager:
                 lock, acquired_at, lock_timeout = self._locks[conversation_id]
 
                 # ロックがタイムアウトしているか確認
-                if datetime.utcnow() - acquired_at > timedelta(seconds=lock_timeout):
+                if datetime.now(timezone.utc) - acquired_at > timedelta(seconds=lock_timeout):
                     # タイムアウトしたロックを解放
                     logger.warning(
                         "タイムアウトした会話ロックを強制解放",
@@ -85,7 +85,7 @@ class ConversationLockManager:
 
             # 新しいロックを作成
             lock = asyncio.Lock()
-            self._locks[conversation_id] = (lock, datetime.utcnow(), timeout)
+            self._locks[conversation_id] = (lock, datetime.now(timezone.utc), timeout)
 
         # ロックを取得
         try:
@@ -157,7 +157,7 @@ class ConversationLockManager:
         lock, acquired_at, timeout = self._locks[conversation_id]
 
         # タイムアウトチェック
-        if datetime.utcnow() - acquired_at > timedelta(seconds=timeout):
+        if datetime.now(timezone.utc) - acquired_at > timedelta(seconds=timeout):
             return False
 
         return lock.locked()
@@ -171,7 +171,7 @@ class ConversationLockManager:
         """
         async with self._manager_lock:
             expired = []
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
 
             for conversation_id, (lock, acquired_at, timeout) in self._locks.items():
                 if now - acquired_at > timedelta(seconds=timeout):

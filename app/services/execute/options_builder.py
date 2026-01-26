@@ -71,17 +71,14 @@ class OptionsBuilder:
             workspace_enabled=context.workspace_enabled,
         )
 
-        # 許可するツールリストの構築（全ツール許可）
+        # 許可するツールリストの構築
+        # ["*"]で全ツールを許可するため、個別のツール追加は不要
+        # ただし、将来的に許可ツールを制限する場合はここで追加が必要になる
         allowed_tools = ["*"]
 
         # テナントのアクティブなスキルを取得
         skills = await self.skill_service.get_all_by_tenant(context.tenant_id)
         active_skills = [s for s in skills if s.status == "active"]
-
-        # スキルがある場合はSkillツールを追加
-        if active_skills:
-            if "Skill" not in allowed_tools:
-                allowed_tools.append("Skill")
 
         # テナントのアクティブなMCPサーバーを取得
         all_mcp_servers = await self.mcp_service.get_all_by_tenant(context.tenant_id)

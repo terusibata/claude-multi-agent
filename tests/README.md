@@ -94,7 +94,6 @@ pytest --junitxml=test-results.xml --cov=app --cov-report=xml
 ```
 tests/
 ├── conftest.py                      # 共通fixture定義
-├── pytest.ini                       # pytest設定
 ├── README.md                        # このファイル
 │
 ├── api/                             # API統合テスト

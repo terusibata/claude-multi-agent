@@ -20,7 +20,7 @@ Server-Sent Events形式でのストリーミング送信
 """
 import json
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from sse_starlette.sse import ServerSentEvent
@@ -59,7 +59,7 @@ class SequenceCounter:
 
 def _get_timestamp() -> str:
     """現在のタイムスタンプをISO形式で取得"""
-    return datetime.utcnow().isoformat() + "Z"
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _create_event(event_type: str, seq: int, data: dict[str, Any]) -> dict:

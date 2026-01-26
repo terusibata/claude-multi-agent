@@ -2,6 +2,7 @@
 シンプルチャットサービス
 SDKを使わない直接Bedrock呼び出しによるチャット管理
 """
+import asyncio
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import AsyncGenerator, Optional
@@ -359,9 +360,12 @@ class SimpleChatService:
             await self._save_message(chat.chat_id, "assistant", assistant_response)
 
             # タイトル生成（初回のみ）
+            # イベントループのブロックを防止するため、同期的なBedrock呼び出しを別スレッドで実行
             title = None
             if is_first_message and assistant_response:
-                title = self.title_generator.generate(user_message, assistant_response)
+                title = await asyncio.to_thread(
+                    self.title_generator.generate, user_message, assistant_response
+                )
                 await self.update_chat_title(chat.chat_id, chat.tenant_id, title)
 
             # コスト計算

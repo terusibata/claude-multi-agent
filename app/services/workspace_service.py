@@ -5,7 +5,8 @@ S3ベースのワークスペース管理を行う。
 会話専用ワークスペースのファイル操作はS3を経由する。
 """
 import shutil
-from datetime import datetime
+import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from uuid import uuid4
@@ -369,17 +370,28 @@ class WorkspaceService:
         """
         local_dir = self.get_workspace_local_path(conversation_id)
 
-        def log_error(func, path, exc_info):
-            """削除エラー時のコールバック"""
-            logger.warning(
-                "ローカルワークスペース削除エラー",
-                conversation_id=conversation_id,
-                path=path,
-                error=str(exc_info[1]) if exc_info else "Unknown error",
-            )
-
         if Path(local_dir).exists():
-            shutil.rmtree(local_dir, onerror=log_error)
+            # Python 3.12+では onerror は非推奨、onexc を使用
+            if sys.version_info >= (3, 12):
+                def log_error_onexc(func, path, exc):
+                    """削除エラー時のコールバック（Python 3.12+用）"""
+                    logger.warning(
+                        "ローカルワークスペース削除エラー",
+                        conversation_id=conversation_id,
+                        path=path,
+                        error=str(exc),
+                    )
+                shutil.rmtree(local_dir, onexc=log_error_onexc)
+            else:
+                def log_error_onerror(func, path, exc_info):
+                    """削除エラー時のコールバック（Python 3.11以前用）"""
+                    logger.warning(
+                        "ローカルワークスペース削除エラー",
+                        conversation_id=conversation_id,
+                        path=path,
+                        error=str(exc_info[1]) if exc_info else "Unknown error",
+                    )
+                shutil.rmtree(local_dir, onerror=log_error_onerror)
             logger.info("ローカルワークスペース削除完了", conversation_id=conversation_id)
         else:
             logger.debug("ローカルワークスペースは存在しません", conversation_id=conversation_id)
@@ -449,7 +461,7 @@ class WorkspaceService:
             tenant_id: テナントID
             conversation_id: 会話ID
         """
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         local_path = self.get_workspace_local_path(conversation_id)
 
         await self.db.execute(

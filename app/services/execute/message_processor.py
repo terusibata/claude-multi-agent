@@ -155,11 +155,11 @@ class MessageProcessor:
 
                 # 進捗イベント: テキスト生成中（メインエージェントのみ）
                 if not parent_agent_id:
-                    message = get_initial_message("generating")
+                    progress_message = get_initial_message("generating")
                     yield format_progress_event(
                         seq=self.seq.next(),
                         progress_type="generating",
-                        message=message,
+                        message=progress_message,
                     )
 
                 # アシスタントイベント
@@ -183,11 +183,11 @@ class MessageProcessor:
 
                 # 進捗イベント: 思考中（メインエージェントのみ）
                 if not parent_agent_id:
-                    message = get_initial_message("thinking")
+                    progress_message = get_initial_message("thinking")
                     yield format_progress_event(
                         seq=self.seq.next(),
                         progress_type="thinking",
-                        message=message,
+                        message=progress_message,
                     )
 
                 # 思考イベント
@@ -306,9 +306,7 @@ class MessageProcessor:
         # 進捗イベント: running
         # ProgressManagerに現在のフェーズを設定（バックグラウンドティッカー用）
         if self.progress_manager:
-            from app.services.execute.progress_manager import PhaseState
-            self.progress_manager._current_phase = PhaseState(
-                phase="tool",
+            self.progress_manager.set_tool_phase(
                 tool_name=tool_name,
                 tool_use_id=tool_id,
                 tool_status="running",
@@ -412,7 +410,7 @@ class MessageProcessor:
 
         # ProgressManagerのフェーズをクリア（ツール完了）
         if self.progress_manager:
-            self.progress_manager._current_phase = None
+            self.progress_manager.clear_phase()
 
         # 進捗イベント: completed / error
         yield format_progress_event(

@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.model import Model
 from app.models.tool_execution_log import ToolExecutionLog
 from app.models.usage_log import UsageLog
+from app.utils.timezone import to_utc
 
 
 class UsageService:
@@ -107,8 +108,8 @@ class UsageService:
         Args:
             tenant_id: テナントID
             user_id: フィルタリング用ユーザーID
-            from_date: 開始日時
-            to_date: 終了日時
+            from_date: 開始日時（タイムゾーンなしの場合JSTとして扱う）
+            to_date: 終了日時（タイムゾーンなしの場合JSTとして扱う）
             limit: 取得件数
             offset: オフセット
 
@@ -117,12 +118,16 @@ class UsageService:
         """
         query = select(UsageLog).where(UsageLog.tenant_id == tenant_id)
 
+        # タイムゾーンなしの日時はJSTとして扱い、UTCに変換
+        from_date_utc = to_utc(from_date)
+        to_date_utc = to_utc(to_date)
+
         if user_id:
             query = query.where(UsageLog.user_id == user_id)
-        if from_date:
-            query = query.where(UsageLog.executed_at >= from_date)
-        if to_date:
-            query = query.where(UsageLog.executed_at <= to_date)
+        if from_date_utc:
+            query = query.where(UsageLog.executed_at >= from_date_utc)
+        if to_date_utc:
+            query = query.where(UsageLog.executed_at <= to_date_utc)
 
         query = query.order_by(UsageLog.executed_at.desc())
         query = query.limit(limit).offset(offset)
@@ -142,13 +147,17 @@ class UsageService:
 
         Args:
             tenant_id: テナントID
-            from_date: 開始日時
-            to_date: 終了日時
+            from_date: 開始日時（タイムゾーンなしの場合JSTとして扱う）
+            to_date: 終了日時（タイムゾーンなしの場合JSTとして扱う）
             group_by: グループ化単位 (day / week / month)
 
         Returns:
             使用状況サマリーリスト
         """
+        # タイムゾーンなしの日時はJSTとして扱い、UTCに変換
+        from_date_utc = to_utc(from_date)
+        to_date_utc = to_utc(to_date)
+
         # グループ化関数の決定
         if group_by == "month":
             date_trunc = func.date_trunc("month", UsageLog.executed_at)
@@ -170,10 +179,10 @@ class UsageService:
             func.count(UsageLog.usage_log_id).label("execution_count"),
         ).where(UsageLog.tenant_id == tenant_id)
 
-        if from_date:
-            query = query.where(UsageLog.executed_at >= from_date)
-        if to_date:
-            query = query.where(UsageLog.executed_at <= to_date)
+        if from_date_utc:
+            query = query.where(UsageLog.executed_at >= from_date_utc)
+        if to_date_utc:
+            query = query.where(UsageLog.executed_at <= to_date_utc)
 
         query = query.group_by(date_trunc).order_by(date_trunc)
 
@@ -208,14 +217,18 @@ class UsageService:
 
         Args:
             tenant_id: テナントID
-            from_date: 開始日時
-            to_date: 終了日時
+            from_date: 開始日時（タイムゾーンなしの場合JSTとして扱う）
+            to_date: 終了日時（タイムゾーンなしの場合JSTとして扱う）
             model_id: フィルタリング用モデルID
             user_id: フィルタリング用ユーザーID
 
         Returns:
             コストレポート
         """
+        # タイムゾーンなしの日時はJSTとして扱い、UTCに変換
+        from_date_utc = to_utc(from_date)
+        to_date_utc = to_utc(to_date)
+
         # モデル別集計
         model_query = select(
             UsageLog.model_id,
@@ -230,8 +243,8 @@ class UsageService:
         ).where(
             and_(
                 UsageLog.tenant_id == tenant_id,
-                UsageLog.executed_at >= from_date,
-                UsageLog.executed_at <= to_date,
+                UsageLog.executed_at >= from_date_utc,
+                UsageLog.executed_at <= to_date_utc,
             )
         )
 
@@ -344,24 +357,28 @@ class UsageService:
             tenant_id: テナントID（権限チェック用）
             session_id: フィルタリング用セッションID
             tool_name: フィルタリング用ツール名
-            from_date: 開始日時
-            to_date: 終了日時
+            from_date: 開始日時（タイムゾーンなしの場合JSTとして扱う）
+            to_date: 終了日時（タイムゾーンなしの場合JSTとして扱う）
             limit: 取得件数
             offset: オフセット
 
         Returns:
             ツール実行ログリスト
         """
+        # タイムゾーンなしの日時はJSTとして扱い、UTCに変換
+        from_date_utc = to_utc(from_date)
+        to_date_utc = to_utc(to_date)
+
         query = select(ToolExecutionLog)
 
         if session_id:
             query = query.where(ToolExecutionLog.session_id == session_id)
         if tool_name:
             query = query.where(ToolExecutionLog.tool_name == tool_name)
-        if from_date:
-            query = query.where(ToolExecutionLog.executed_at >= from_date)
-        if to_date:
-            query = query.where(ToolExecutionLog.executed_at <= to_date)
+        if from_date_utc:
+            query = query.where(ToolExecutionLog.executed_at >= from_date_utc)
+        if to_date_utc:
+            query = query.where(ToolExecutionLog.executed_at <= to_date_utc)
 
         query = query.order_by(ToolExecutionLog.executed_at.desc())
         query = query.limit(limit).offset(offset)

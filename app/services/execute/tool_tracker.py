@@ -3,7 +3,7 @@
 ツールの実行状態を追跡管理
 """
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Optional
 
@@ -103,7 +103,7 @@ class ToolTracker:
         self._active_subagents[tool_use_id] = {
             "agent_type": agent_type,
             "description": description,
-            "started_at": datetime.utcnow(),
+            "started_at": datetime.now(timezone.utc),
             "model_alias": model_alias,
             "model_id": model_id or "unknown",
         }
@@ -173,7 +173,7 @@ class ToolTracker:
             model_id=info.get("model_id", "unknown"),
             description=info["description"],
             started_at=info["started_at"],
-            completed_at=datetime.utcnow(),
+            completed_at=datetime.now(timezone.utc),
             input_tokens=usage.get("input_tokens", 0) if usage else 0,
             output_tokens=usage.get("output_tokens", 0) if usage else 0,
             cache_creation_5m_tokens=cache_5m,
@@ -286,7 +286,7 @@ class ToolTracker:
             tool_use_id=tool_use_id,
             tool_name=tool_name,
             tool_input=tool_input,
-            started_at=datetime.utcnow(),
+            started_at=datetime.now(timezone.utc),
             parent_tool_use_id=parent_tool_id,
         )
         self._pending_tools[tool_use_id] = tool_info

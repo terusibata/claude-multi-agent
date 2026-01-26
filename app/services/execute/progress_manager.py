@@ -6,7 +6,7 @@
 
 import asyncio
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import AsyncIterator, Callable, Optional
 
 import structlog
@@ -18,6 +18,11 @@ from app.utils.streaming import format_progress_event
 logger = structlog.get_logger(__name__)
 
 
+def _utc_now() -> datetime:
+    """UTC現在時刻を取得（Python 3.12+非推奨対応）"""
+    return datetime.now(timezone.utc)
+
+
 @dataclass
 class PhaseState:
     """フェーズの状態"""
@@ -26,8 +31,8 @@ class PhaseState:
     tool_name: Optional[str] = None
     tool_use_id: Optional[str] = None
     tool_status: Optional[str] = None
-    started_at: datetime = field(default_factory=datetime.utcnow)
-    last_message_at: datetime = field(default_factory=datetime.utcnow)
+    started_at: datetime = field(default_factory=_utc_now)
+    last_message_at: datetime = field(default_factory=_utc_now)
     message_count: int = 0
 
 
@@ -64,6 +69,44 @@ class ProgressManager:
         """フェーズがアクティブかどうか"""
         return self._current_phase is not None
 
+    @property
+    def current_phase(self) -> Optional[PhaseState]:
+        """現在のフェーズ状態を取得（読み取り専用）"""
+        return self._current_phase
+
+    def set_tool_phase(
+        self,
+        tool_name: str,
+        tool_use_id: str,
+        tool_status: str = "running",
+    ) -> None:
+        """
+        ツールフェーズを設定（同期版）
+
+        バックグラウンドティッカー用に現在のフェーズを設定する。
+        ロックを使用しないため、ティッカーループからの読み取りと
+        競合する可能性があるが、PhaseStateの設定は単一代入なので安全。
+
+        Args:
+            tool_name: ツール名
+            tool_use_id: ツール使用ID
+            tool_status: ツールステータス（デフォルト: "running"）
+        """
+        self._current_phase = PhaseState(
+            phase="tool",
+            tool_name=tool_name,
+            tool_use_id=tool_use_id,
+            tool_status=tool_status,
+        )
+
+    def clear_phase(self) -> None:
+        """
+        現在のフェーズをクリア（同期版）
+
+        ツール完了時などにフェーズをクリアする。
+        """
+        self._current_phase = None
+
     async def start_phase(
         self,
         phase: str,
@@ -86,7 +129,7 @@ class ProgressManager:
             初期progressイベント（send_initial=Trueの場合）
         """
         async with self._lock:
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             self._current_phase = PhaseState(
                 phase=phase,
                 tool_name=tool_name,
@@ -147,7 +190,7 @@ class ProgressManager:
             if not self._current_phase:
                 return None
 
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             elapsed = (now - self._current_phase.last_message_at).total_seconds()
 
             if elapsed >= self._interval:

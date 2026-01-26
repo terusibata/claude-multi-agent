@@ -31,6 +31,24 @@ async def inspect_pptx_file_handler(
     """
     file_path = args.get("file_path", "")
 
+    # 古いOffice形式（.ppt）のチェック
+    if file_path.lower().endswith(".ppt"):
+        return {
+            "content": [{
+                "type": "text",
+                "text": (
+                    f"エラー: '{file_path}' は古いPowerPoint形式（.ppt）です。\n\n"
+                    "このツールは .pptx（Office Open XML）形式のみ対応しています。\n"
+                    ".ppt（バイナリ形式）ファイルは python-pptx では読み取れません。\n\n"
+                    "対処方法:\n"
+                    "1. Microsoft PowerPoint で .pptx 形式に変換して再アップロード\n"
+                    "2. LibreOffice Impress で .pptx 形式に変換して再アップロード\n"
+                    "3. オンライン変換ツールを使用"
+                ),
+            }],
+            "is_error": True,
+        }
+
     try:
         from pptx import Presentation
         from pptx.util import Inches
@@ -148,6 +166,24 @@ async def read_pptx_slides_handler(
     file_path = args.get("file_path", "")
     slides_spec = args.get("slides", "1-10")
     include_notes = args.get("include_notes", True)
+
+    # 古いOffice形式（.ppt）のチェック
+    if file_path.lower().endswith(".ppt"):
+        return {
+            "content": [{
+                "type": "text",
+                "text": (
+                    f"エラー: '{file_path}' は古いPowerPoint形式（.ppt）です。\n\n"
+                    "このツールは .pptx（Office Open XML）形式のみ対応しています。\n"
+                    ".ppt（バイナリ形式）ファイルは python-pptx では読み取れません。\n\n"
+                    "対処方法:\n"
+                    "1. Microsoft PowerPoint で .pptx 形式に変換して再アップロード\n"
+                    "2. LibreOffice Impress で .pptx 形式に変換して再アップロード\n"
+                    "3. オンライン変換ツールを使用"
+                ),
+            }],
+            "is_error": True,
+        }
 
     try:
         from pptx import Presentation
