@@ -28,7 +28,7 @@ def upgrade() -> None:
         sa.Column('tenant_id', sa.String(100), sa.ForeignKey('tenants.tenant_id'), nullable=False, index=True),
         sa.Column('user_id', sa.String(100), nullable=False, index=True),
         sa.Column('model_id', sa.String(100), sa.ForeignKey('models.model_id'), nullable=False),
-        sa.Column('application_type', sa.String(100), nullable=False, index=True),
+        sa.Column('application_type', sa.String(100), nullable=False),
         sa.Column('system_prompt', sa.Text, nullable=False),
         sa.Column('title', sa.String(500), nullable=True),
         sa.Column('status', sa.String(20), nullable=False, server_default='active'),
@@ -58,20 +58,20 @@ def upgrade() -> None:
     )
 
     # ===========================================
-    # インデックス作成
+    # インデックス作成 (if_not_exists=Trueで冪等性を確保)
     # ===========================================
-    op.create_index('ix_simple_chats_tenant_user', 'simple_chats', ['tenant_id', 'user_id'])
-    op.create_index('ix_simple_chats_created_at', 'simple_chats', ['created_at'])
-    op.create_index('ix_simple_chats_application_type', 'simple_chats', ['application_type'])
-    op.create_index('ix_simple_chat_messages_chat_seq', 'simple_chat_messages', ['chat_id', 'message_seq'])
+    op.create_index('ix_simple_chats_tenant_user', 'simple_chats', ['tenant_id', 'user_id'], if_not_exists=True)
+    op.create_index('ix_simple_chats_created_at', 'simple_chats', ['created_at'], if_not_exists=True)
+    op.create_index('ix_simple_chats_application_type', 'simple_chats', ['application_type'], if_not_exists=True)
+    op.create_index('ix_simple_chat_messages_chat_seq', 'simple_chat_messages', ['chat_id', 'message_seq'], if_not_exists=True)
 
 
 def downgrade() -> None:
-    # インデックス削除
-    op.drop_index('ix_simple_chat_messages_chat_seq')
-    op.drop_index('ix_simple_chats_application_type')
-    op.drop_index('ix_simple_chats_created_at')
-    op.drop_index('ix_simple_chats_tenant_user')
+    # インデックス削除 (if_exists=Trueで冪等性を確保)
+    op.drop_index('ix_simple_chat_messages_chat_seq', if_exists=True)
+    op.drop_index('ix_simple_chats_application_type', if_exists=True)
+    op.drop_index('ix_simple_chats_created_at', if_exists=True)
+    op.drop_index('ix_simple_chats_tenant_user', if_exists=True)
 
     # usage_logsからsimple_chat_idカラム削除
     op.drop_column('usage_logs', 'simple_chat_id')
