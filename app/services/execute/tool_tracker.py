@@ -82,6 +82,21 @@ class ToolTracker:
         """アクティブなサブエージェント数"""
         return len(self._active_subagents)
 
+    @property
+    def current_subagent_id(self) -> Optional[str]:
+        """
+        現在のサブエージェントIDを取得
+
+        並列実行の場合、最後に開始されたサブエージェントのIDを返す
+        メインエージェントの場合はNoneを返す
+
+        Returns:
+            サブエージェントID（メインエージェントの場合はNone）
+        """
+        if not self._active_subagents:
+            return None
+        return list(self._active_subagents.keys())[-1]
+
     def start_subagent(
         self,
         tool_use_id: str,
