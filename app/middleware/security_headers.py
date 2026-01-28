@@ -23,6 +23,19 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     - Permissions-Policy: ブラウザ機能の制限
     """
 
+    # ドキュメントエンドポイント（Swagger UI用にCSPを緩和）
+    DOCS_PATHS = {"/docs", "/redoc", "/openapi.json"}
+
+    # Swagger UI用のCSP（FastAPIはCDNからリソースを読み込む）
+    DOCS_CSP = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "img-src 'self' data: https://fastapi.tiangolo.com; "
+        "font-src 'self' https://cdn.jsdelivr.net; "
+        "frame-ancestors 'none'"
+    )
+
     # デフォルトのセキュリティヘッダー
     DEFAULT_HEADERS = {
         # MIME Sniffing対策
@@ -92,6 +105,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         for header, value in self.headers.items():
             # 既存のヘッダーは上書きしない
             if header not in response.headers:
-                response.headers[header] = value
+                # ドキュメントエンドポイントにはSwagger UI用のCSPを適用
+                if header == "Content-Security-Policy" and request.url.path in self.DOCS_PATHS:
+                    response.headers[header] = self.DOCS_CSP
+                else:
+                    response.headers[header] = value
 
         return response
