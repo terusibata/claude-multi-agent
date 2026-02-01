@@ -18,6 +18,10 @@ class ConversationResponse(BaseModel):
     title: Optional[str] = None
     status: str
     workspace_enabled: bool = False
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    estimated_context_tokens: int = 0
+    context_limit_reached: bool = False
     created_at: datetime
     updated_at: datetime
 
