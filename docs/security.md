@@ -278,12 +278,28 @@ REDIS_MAX_CONNECTIONS=20
 |--------|-----------|------|
 | `REDIS_URL` | `redis://localhost:6379/0` | Redis接続URL |
 | `REDIS_MAX_CONNECTIONS` | `20` | 最大接続数 |
+| `REDIS_PASSWORD` | (空) | Redis認証パスワード（本番推奨） |
+| `REDIS_SOCKET_TIMEOUT` | `5.0` | ソケットタイムアウト（秒） |
+| `REDIS_SOCKET_CONNECT_TIMEOUT` | `5.0` | 接続タイムアウト（秒） |
 
 ## 本番環境チェックリスト
 
-- [ ] `API_KEYS`を設定
+### 必須設定
+
 - [ ] `APP_ENV=production`を設定
+- [ ] `API_KEYS`を設定（16文字以上、未設定だと起動時エラー）
+- [ ] `DATABASE_URL`を本番用に設定（デフォルトパスワード`aiagent_password`は禁止）
 - [ ] `CORS_ORIGINS`を本番ドメインに限定
+
+### 推奨設定
+
+- [ ] `REDIS_PASSWORD`を設定してRedis認証を有効化
 - [ ] `HSTS_ENABLED=true`を確認
+- [ ] `METRICS_ENABLED=true`でPrometheusメトリクスを有効化
+
+### インフラ確認
+
+- [ ] PostgreSQLが正常に稼働していることを確認
 - [ ] Redisが正常に稼働していることを確認
-- [ ] ヘルスチェックエンドポイントの監視を設定
+- [ ] ヘルスチェックエンドポイント（`/health/ready`）の監視を設定
+- [ ] `/metrics`エンドポイントをPrometheusでスクレイピング設定
