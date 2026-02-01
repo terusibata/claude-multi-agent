@@ -78,7 +78,10 @@ app/
 │   └── workspace.py  # ワークスペースAPI
 ├── infrastructure/   # インフラストラクチャ層
 │   ├── redis.py      # Redis接続管理
-│   └── distributed_lock.py # 分散ロック
+│   ├── distributed_lock.py # 分散ロック
+│   ├── shutdown.py   # グレースフルシャットダウン
+│   ├── retry.py      # リトライユーティリティ
+│   └── metrics.py    # Prometheusメトリクス
 ├── middleware/       # ミドルウェア
 │   ├── auth.py       # API認証
 │   ├── rate_limit.py # レート制限
@@ -199,13 +202,14 @@ AI実行系API（一般ユーザー向け）のみにレート制限が適用さ
 
 ## API概要
 
-### ヘルスチェック
+### ヘルスチェック・監視
 
 | メソッド | パス | 説明 |
 |---------|------|------|
 | GET | `/health` | 詳細ヘルスチェック（DB, Redis, S3接続確認） |
 | GET | `/health/live` | Kubernetes liveness probe |
 | GET | `/health/ready` | Kubernetes readiness probe |
+| GET | `/metrics` | Prometheusメトリクス（本番環境では認証必要） |
 
 ### テナント管理
 
@@ -261,11 +265,14 @@ AI実行系API（一般ユーザー向け）のみにレート制限が適用さ
 
 | 変数名 | 説明 | デフォルト |
 |--------|------|----------|
-| DATABASE_URL | PostgreSQL接続URL | - |
+| DATABASE_URL | PostgreSQL接続URL（本番ではデフォルトパスワード禁止） | - |
 | REDIS_URL | Redis接続URL | redis://localhost:6379/0 |
+| REDIS_PASSWORD | Redis認証パスワード（本番では推奨） | - |
 | APP_ENV | 環境（development/production） | development |
 | APP_PORT | アプリケーションポート | 8000 |
 | LOG_LEVEL | ログレベル | INFO |
+| SHUTDOWN_TIMEOUT | グレースフルシャットダウンのタイムアウト（秒） | 30.0 |
+| METRICS_ENABLED | Prometheusメトリクスの有効化 | true |
 
 ### AWS設定
 
@@ -283,12 +290,20 @@ AI実行系API（一般ユーザー向け）のみにレート制限が適用さ
 
 | 変数名 | 説明 | デフォルト |
 |--------|------|----------|
-| API_KEYS | APIキー（カンマ区切り、本番では必須） | (空) |
+| API_KEYS | APIキー（カンマ区切り、**本番では必須**） | (空) |
 | RATE_LIMIT_ENABLED | レート制限の有効化 | true |
 | RATE_LIMIT_REQUESTS | ウィンドウあたりのリクエスト数 | 100 |
 | RATE_LIMIT_PERIOD | ウィンドウサイズ（秒） | 60 |
 | CORS_ORIGINS | CORS許可オリジン（カンマ区切り） | http://localhost:3000,http://localhost:3001 |
 | HSTS_ENABLED | HSTSの有効化 | true |
+
+### 本番環境の必須設定
+
+本番環境（`APP_ENV=production`）では以下の設定が必須です：
+
+- **API_KEYS**: 16文字以上のAPIキーを設定（未設定だと起動時エラー）
+- **DATABASE_URL**: デフォルトパスワード（`aiagent_password`）は使用禁止
+- **REDIS_PASSWORD**: Redis認証の設定を推奨
 
 ### AWS IAMポリシー要件
 

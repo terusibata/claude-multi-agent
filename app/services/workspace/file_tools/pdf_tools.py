@@ -274,36 +274,43 @@ async def convert_pdf_to_images_handler(
                 continue
 
             page = doc[page_num - 1]
+            pix = None
 
-            # 画像に変換
-            mat = pymupdf.Matrix(zoom, zoom)
-            pix = page.get_pixmap(matrix=mat)
+            try:
+                # 画像に変換
+                mat = pymupdf.Matrix(zoom, zoom)
+                pix = page.get_pixmap(matrix=mat)
 
-            # PNG形式でバイトに変換
-            img_bytes = pix.tobytes("png")
+                # PNG形式でバイトに変換
+                img_bytes = pix.tobytes("png")
 
-            # 保存パス
-            output_path = f"generated/{base_name}_page_{page_num}.png"
+                # 保存パス
+                output_path = f"generated/{base_name}_page_{page_num}.png"
 
-            # ワークスペースに保存（S3にアップロード）
-            await workspace_service.s3.upload(
-                tenant_id,
-                conversation_id,
-                output_path,
-                img_bytes,
-                "image/png",
-            )
+                # ワークスペースに保存（S3にアップロード）
+                await workspace_service.s3.upload(
+                    tenant_id,
+                    conversation_id,
+                    output_path,
+                    img_bytes,
+                    "image/png",
+                )
 
-            # DBに登録
-            await workspace_service.register_ai_file(
-                tenant_id,
-                conversation_id,
-                output_path,
-                is_presented=False,
-            )
+                # DBに登録
+                await workspace_service.register_ai_file(
+                    tenant_id,
+                    conversation_id,
+                    output_path,
+                    is_presented=False,
+                )
 
-            saved_paths.append(output_path)
-            logger.info("PDF→画像変換完了", page=page_num, path=output_path)
+                saved_paths.append(output_path)
+                logger.info("PDF→画像変換完了", page=page_num, path=output_path)
+
+            finally:
+                # Pixmapのメモリを明示的に解放
+                if pix is not None:
+                    pix = None
 
         doc.close()
 

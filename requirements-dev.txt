@@ -1,0 +1,23 @@
+# AIエージェントバックエンド 開発依存パッケージ
+# 本番依存関係を含む
+-r requirements.txt
+
+# テスト
+pytest==9.0.2
+pytest-asyncio==1.1.0
+pytest-cov==7.0.0
+pytest-xdist==3.8.0
+testcontainers==4.14.0
+factory-boy==3.3.3
+moto[s3]==5.1.19
+freezegun==1.5.5
+
+# 開発ツール
+black==25.12.0
+isort==7.0.0
+mypy==1.19.1
+ruff==0.9.10
+
+# 型スタブ
+types-PyYAML
+types-redis

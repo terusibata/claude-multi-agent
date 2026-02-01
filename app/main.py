@@ -2,23 +2,34 @@
 AIエージェントバックエンド メインアプリケーション
 AWS Bedrock + Claude Agent SDKを利用したマルチテナント対応AIエージェントシステム
 """
+import asyncio
 import logging
 import os
 import sys
 from contextlib import asynccontextmanager
 
 import structlog
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 from app import __version__
 from app.api import api_router
 from app.api.health import router as health_router
 from app.config import get_settings
-from app.database import close_db
-from app.infrastructure.redis import close_redis_pool
+from app.database import close_db, get_pool_status
+from app.infrastructure.metrics import (
+    get_active_connections,
+    get_db_pool_gauge,
+    get_error_counter,
+    get_metrics_registry,
+    get_request_counter,
+    get_request_duration,
+    measure_time,
+)
+from app.infrastructure.redis import close_redis_pool, get_pool_info
+from app.infrastructure.shutdown import get_shutdown_manager
 from app.middleware.auth import AuthMiddleware
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.security_headers import SecurityHeadersMiddleware
@@ -38,7 +49,7 @@ settings = get_settings()
 logging.basicConfig(
     format="%(message)s",
     stream=sys.stdout,
-    level=logging.INFO,
+    level=settings.log_level_int,
 )
 
 # ログ設定（structlog contextvars対応）
@@ -70,8 +81,22 @@ async def lifespan(app: FastAPI):
     アプリケーションのライフサイクル管理
     起動時・終了時の処理を定義
     """
+    # シャットダウンマネージャーを取得
+    shutdown_manager = get_shutdown_manager()
+
     # 起動時
-    logger.info("アプリケーション起動中...", version=__version__)
+    logger.info(
+        "アプリケーション起動中...",
+        version=__version__,
+        environment=settings.app_env,
+    )
+
+    # シグナルハンドラーを設定
+    try:
+        loop = asyncio.get_running_loop()
+        shutdown_manager.setup_signal_handlers(loop)
+    except Exception as e:
+        logger.warning("シグナルハンドラー設定エラー", error=str(e))
 
     # AWS Bedrock環境変数の設定
     os.environ["CLAUDE_CODE_USE_BEDROCK"] = settings.claude_code_use_bedrock
@@ -82,12 +107,9 @@ async def lifespan(app: FastAPI):
     if settings.aws_secret_access_key:
         os.environ["AWS_SECRET_ACCESS_KEY"] = settings.aws_secret_access_key
 
-    # データベース初期化は Alembic マイグレーションで実施
-    logger.info("データベースマイグレーションは alembic upgrade head で実行してください")
-
     # セキュリティ設定のログ出力
     if settings.api_keys_list:
-        logger.info("API認証が有効化されています")
+        logger.info("API認証が有効化されています", key_count=len(settings.api_keys_list))
     else:
         logger.warning(
             "API認証が無効化されています",
@@ -101,14 +123,34 @@ async def lifespan(app: FastAPI):
             period=settings.rate_limit_period,
         )
 
-    logger.info("アプリケーション起動完了", environment=settings.app_env)
+    if settings.metrics_enabled:
+        logger.info("メトリクス収集が有効化されています")
+
+    logger.info(
+        "アプリケーション起動完了",
+        environment=settings.app_env,
+        port=settings.app_port,
+    )
 
     yield
 
     # 終了時
     logger.info("アプリケーション終了中...")
-    await close_db()
-    await close_redis_pool()
+
+    # グレースフルシャットダウンを実行
+    await shutdown_manager.graceful_shutdown()
+
+    # リソースをクリーンアップ
+    try:
+        await close_db()
+    except Exception as e:
+        logger.error("DBクローズエラー", error=str(e))
+
+    try:
+        await close_redis_pool()
+    except Exception as e:
+        logger.error("Redisクローズエラー", error=str(e))
+
     logger.info("アプリケーション終了完了")
 
 
@@ -190,6 +232,7 @@ def _get_request_id(request: Request) -> str | None:
 @app.exception_handler(NotFoundError)
 async def not_found_error_handler(request: Request, exc: NotFoundError):
     """リソース未検出エラーハンドラー"""
+    get_error_counter().inc(type="not_found", code=ErrorCodes.NOT_FOUND)
     return JSONResponse(
         status_code=status.HTTP_404_NOT_FOUND,
         content=create_error_response(
@@ -204,6 +247,7 @@ async def not_found_error_handler(request: Request, exc: NotFoundError):
 @app.exception_handler(ValidationError)
 async def validation_error_handler(request: Request, exc: ValidationError):
     """バリデーションエラーハンドラー"""
+    get_error_counter().inc(type="validation", code=ErrorCodes.VALIDATION_ERROR)
     return JSONResponse(
         status_code=status.HTTP_400_BAD_REQUEST,
         content=create_error_response(
@@ -218,6 +262,7 @@ async def validation_error_handler(request: Request, exc: ValidationError):
 @app.exception_handler(SecurityError)
 async def security_error_handler(request: Request, exc: SecurityError):
     """セキュリティエラーハンドラー"""
+    get_error_counter().inc(type="security", code=exc.error_code)
     logger.warning(
         "セキュリティエラー",
         error_code=exc.error_code,
@@ -236,6 +281,7 @@ async def security_error_handler(request: Request, exc: SecurityError):
 @app.exception_handler(AppError)
 async def app_error_handler(request: Request, exc: AppError):
     """アプリケーションエラーハンドラー"""
+    get_error_counter().inc(type="app", code=exc.error_code)
     return JSONResponse(
         status_code=status.HTTP_400_BAD_REQUEST,
         content=create_error_response(
@@ -249,6 +295,7 @@ async def app_error_handler(request: Request, exc: AppError):
 @app.exception_handler(RequestValidationError)
 async def request_validation_error_handler(request: Request, exc: RequestValidationError):
     """リクエストバリデーションエラーハンドラー"""
+    get_error_counter().inc(type="request_validation", code=ErrorCodes.VALIDATION_ERROR)
     details = []
     for error in exc.errors():
         loc = error.get("loc", [])
@@ -279,6 +326,7 @@ async def request_validation_error_handler(request: Request, exc: RequestValidat
 @app.exception_handler(Exception)
 async def general_exception_handler(request: Request, exc: Exception):
     """一般エラーハンドラー"""
+    get_error_counter().inc(type="internal", code=ErrorCodes.INTERNAL_ERROR)
     logger.error(
         "内部エラー",
         error=str(exc),
@@ -311,6 +359,43 @@ async def root():
     }
 
 
+# メトリクスエンドポイント
+@app.get("/metrics", tags=["監視"], include_in_schema=settings.is_development)
+async def metrics():
+    """
+    Prometheusメトリクスエンドポイント
+
+    アプリケーションメトリクスをPrometheus形式で返します。
+    """
+    if not settings.metrics_enabled:
+        return PlainTextResponse("Metrics disabled", status_code=404)
+
+    # DBプール状態を更新
+    try:
+        pool_status = get_pool_status()
+        db_gauge = get_db_pool_gauge()
+        db_gauge.set(pool_status.get("checked_in", 0), state="idle")
+        db_gauge.set(pool_status.get("checked_out", 0), state="active")
+        db_gauge.set(pool_status.get("overflow", 0), state="overflow")
+    except Exception:
+        pass
+
+    # Redisプール状態を更新
+    try:
+        redis_info = get_pool_info()
+        if redis_info.get("initialized"):
+            connections_gauge = get_active_connections()
+            connections_gauge.set(redis_info.get("max_connections", 0), type="redis_max")
+    except Exception:
+        pass
+
+    registry = get_metrics_registry()
+    return PlainTextResponse(
+        registry.export_prometheus(),
+        media_type="text/plain; version=0.0.4; charset=utf-8"
+    )
+
+
 # ヘルスチェックルーターを登録（ルートレベル）
 app.include_router(health_router)
 
@@ -326,4 +411,7 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=settings.app_port,
         reload=settings.is_development,
+        workers=settings.uvicorn_workers if not settings.is_development else 1,
+        timeout_keep_alive=settings.uvicorn_timeout_keep_alive,
+        timeout_notify=settings.uvicorn_timeout_notify,
     )

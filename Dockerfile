@@ -1,11 +1,30 @@
 # AIエージェントバックエンド Dockerfile
-FROM python:3.11-slim
+# マルチステージビルドで本番イメージを最適化
 
-# システム依存パッケージのインストール
+# ==========================================
+# ビルドステージ
+# ==========================================
+FROM python:3.11-slim AS builder
+
+# ビルド用依存パッケージのインストール
 RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
-    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# 依存パッケージをビルド
+WORKDIR /build
+COPY requirements.txt .
+RUN pip install --user --no-cache-dir -r requirements.txt
+
+# ==========================================
+# 本番ステージ
+# ==========================================
+FROM python:3.11-slim AS production
+
+# 実行時に必要な最小限のパッケージのみインストール
+RUN apt-get update && apt-get install -y \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Node.js のインストール（Claude Agent SDKに必要）
@@ -13,37 +32,41 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
+# 非rootユーザーの作成
+RUN useradd -m -u 1000 appuser
+
 # 作業ディレクトリの設定
 WORKDIR /app
 
-# 依存パッケージのインストール
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# ビルドステージからPythonパッケージをコピー
+COPY --from=builder --chown=appuser:appuser /root/.local /home/appuser/.local
 
 # アプリケーションコードのコピー
-COPY . .
+COPY --chown=appuser:appuser app/ /app/app/
+COPY --chown=appuser:appuser alembic/ /app/alembic/
+COPY --chown=appuser:appuser alembic.ini /app/
+COPY --chown=appuser:appuser entrypoint.sh /app/
 
 # エントリーポイントスクリプトに実行権限を付与
 RUN chmod +x /app/entrypoint.sh
 
 # Skills ディレクトリの作成
-RUN mkdir -p /skills
+RUN mkdir -p /skills && chown appuser:appuser /skills
 
 # ワークスペース用ディレクトリの作成
-RUN mkdir -p /var/lib/aiagent/workspaces
+RUN mkdir -p /var/lib/aiagent/workspaces && chown -R appuser:appuser /var/lib/aiagent
 
-# 非rootユーザーの作成
-RUN useradd -m -u 1000 appuser && \
-    chown -R appuser:appuser /app /skills /var/lib/aiagent
+# ユーザー切り替え
 USER appuser
 
 # 環境変数の設定
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
+ENV PATH=/home/appuser/.local/bin:$PATH
 
 # ヘルスチェック
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:8000/health/live || exit 1
 
 # ポート公開
 EXPOSE 8000
@@ -51,5 +74,21 @@ EXPOSE 8000
 # エントリーポイント（マイグレーション自動実行）
 ENTRYPOINT ["/app/entrypoint.sh"]
 
-# アプリケーション起動
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# アプリケーション起動（本番用設定）
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4", "--timeout-keep-alive", "65"]
+
+# ==========================================
+# 開発ステージ
+# ==========================================
+FROM production AS development
+
+USER root
+
+# 開発用依存パッケージをインストール
+COPY requirements-dev.txt /tmp/
+RUN pip install --no-cache-dir -r /tmp/requirements-dev.txt
+
+USER appuser
+
+# 開発用のコマンド（auto-reload有効）
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
