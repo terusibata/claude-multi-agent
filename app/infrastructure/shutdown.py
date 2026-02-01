@@ -165,11 +165,19 @@ class ShutdownManager:
 _shutdown_manager: Optional[ShutdownManager] = None
 
 
-def get_shutdown_manager() -> ShutdownManager:
-    """シャットダウンマネージャーのシングルトンインスタンスを取得"""
+def get_shutdown_manager(shutdown_timeout: Optional[float] = None) -> ShutdownManager:
+    """
+    シャットダウンマネージャーのシングルトンインスタンスを取得
+
+    Args:
+        shutdown_timeout: シャットダウンタイムアウト（初回のみ有効）
+    """
     global _shutdown_manager
     if _shutdown_manager is None:
-        _shutdown_manager = ShutdownManager()
+        from app.config import get_settings
+        settings = get_settings()
+        timeout = shutdown_timeout or settings.shutdown_timeout
+        _shutdown_manager = ShutdownManager(shutdown_timeout=timeout)
     return _shutdown_manager
 
 

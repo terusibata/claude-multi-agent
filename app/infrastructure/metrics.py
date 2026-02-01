@@ -161,13 +161,20 @@ class MetricsRegistry:
                 lines.append(f"# TYPE {name} histogram")
                 for key, bucket_counts in metric._counts.items():
                     label_str = self._format_labels(metric.labels, key)
-                    cumulative = 0
-                    for bucket, count in sorted(bucket_counts.items()):
-                        cumulative += count
-                        if bucket == float('inf'):
-                            lines.append(f'{name}_bucket{{{label_str.strip("{}") + "," if label_str else ""} le="+Inf"}} {cumulative}')
+                    # observe()で既に累積カウントが保存されているため、そのまま出力
+                    for bucket in sorted(bucket_counts.keys()):
+                        count = bucket_counts[bucket]
+                        if label_str:
+                            label_inner = label_str.strip("{}")
+                            if bucket == float('inf'):
+                                lines.append(f'{name}_bucket{{{label_inner}, le="+Inf"}} {count}')
+                            else:
+                                lines.append(f'{name}_bucket{{{label_inner}, le="{bucket}"}} {count}')
                         else:
-                            lines.append(f'{name}_bucket{{{label_str.strip("{}") + "," if label_str else ""} le="{bucket}"}} {cumulative}')
+                            if bucket == float('inf'):
+                                lines.append(f'{name}_bucket{{le="+Inf"}} {count}')
+                            else:
+                                lines.append(f'{name}_bucket{{le="{bucket}"}} {count}')
                     total = metric._totals.get(key, 0)
                     sum_val = metric._sums.get(key, 0)
                     lines.append(f"{name}_sum{label_str} {sum_val}")
