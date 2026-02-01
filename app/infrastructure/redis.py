@@ -2,7 +2,7 @@
 Redis接続管理
 分散ロック、キャッシュ、レート制限に使用
 """
-import asyncio
+import time
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Optional
 
@@ -28,14 +28,19 @@ async def get_redis_pool() -> ConnectionPool:
     global _redis_pool
     if _redis_pool is None:
         _redis_pool = ConnectionPool.from_url(
-            settings.redis_url,
+            settings.redis_url_with_auth,
             max_connections=settings.redis_max_connections,
             decode_responses=True,
-            socket_connect_timeout=5.0,
-            socket_timeout=5.0,
+            socket_connect_timeout=settings.redis_socket_connect_timeout,
+            socket_timeout=settings.redis_socket_timeout,
             retry_on_timeout=True,
+            health_check_interval=30,
         )
-        logger.info("Redis接続プール作成", url=settings.redis_url_masked)
+        logger.info(
+            "Redis接続プール作成",
+            url=settings.redis_url_masked,
+            max_connections=settings.redis_max_connections,
+        )
     return _redis_pool
 
 
@@ -71,25 +76,48 @@ async def close_redis_pool() -> None:
     """
     global _redis_pool
     if _redis_pool is not None:
+        logger.info("Redis接続プールをクローズ中...")
         await _redis_pool.aclose()
         _redis_pool = None
-        logger.info("Redis接続プールクローズ")
+        logger.info("Redis接続プールクローズ完了")
 
 
-async def check_redis_health() -> tuple[bool, Optional[str]]:
+async def check_redis_health() -> tuple[bool, Optional[str], float]:
     """
     Redisの接続状態をチェック
 
     Returns:
-        (healthy: bool, error_message: Optional[str])
+        (healthy: bool, error_message: Optional[str], latency_ms: float)
     """
+    start = time.perf_counter()
     try:
         async with redis_client() as redis:
             await redis.ping()
-        return True, None
+        latency = (time.perf_counter() - start) * 1000
+        return True, None, latency
     except ConnectionError as e:
-        return False, f"Redis connection error: {str(e)}"
+        latency = (time.perf_counter() - start) * 1000
+        return False, f"Redis connection error: {str(e)}", latency
     except RedisError as e:
-        return False, f"Redis error: {str(e)}"
+        latency = (time.perf_counter() - start) * 1000
+        return False, f"Redis error: {str(e)}", latency
     except Exception as e:
-        return False, f"Unexpected error: {str(e)}"
+        latency = (time.perf_counter() - start) * 1000
+        return False, f"Unexpected error: {str(e)}", latency
+
+
+def get_pool_info() -> dict:
+    """
+    Redisプールの情報を取得
+
+    Returns:
+        プール情報の辞書
+    """
+    global _redis_pool
+    if _redis_pool is None:
+        return {"initialized": False}
+
+    return {
+        "initialized": True,
+        "max_connections": _redis_pool.max_connections,
+    }

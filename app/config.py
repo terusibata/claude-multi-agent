@@ -5,8 +5,9 @@
 import re
 from functools import lru_cache
 from typing import Optional
+from urllib.parse import urlparse
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,38 +19,55 @@ class Settings(BaseSettings):
     # ============================================
     database_url: str = "postgresql+asyncpg://aiagent:aiagent_password@localhost:5432/aiagent"
 
+    # コネクションプール設定
+    db_pool_size: int = 20
+    db_max_overflow: int = 40
+    db_pool_timeout: int = 30  # 秒
+    db_pool_recycle: int = 3600  # 1時間
+    db_connect_timeout: int = 10  # 秒
+    db_command_timeout: int = 60  # 秒
+
     # ============================================
     # Redis設定
     # ============================================
     redis_url: str = "redis://localhost:6379/0"
     redis_max_connections: int = 20
+    redis_socket_timeout: float = 5.0
+    redis_socket_connect_timeout: float = 5.0
+    # Redis認証（本番環境では設定必須）
+    redis_password: Optional[str] = None
+
+    @property
+    def redis_url_with_auth(self) -> str:
+        """認証情報付きRedis URL"""
+        if self.redis_password:
+            # redis://host:port/db -> redis://:password@host:port/db
+            if "://:@" not in self.redis_url and "://:" not in self.redis_url:
+                return self.redis_url.replace("://", f"://:{self.redis_password}@")
+        return self.redis_url
 
     @property
     def redis_url_masked(self) -> str:
         """パスワードをマスクしたRedis URL"""
-        # redis://:password@host:port/db のパスワード部分をマスク
-        return re.sub(r"://:[^@]+@", "://***@", self.redis_url)
+        return re.sub(r"://:[^@]+@", "://***@", self.redis_url_with_auth)
 
     # ============================================
     # AWS Bedrock設定
     # ============================================
-    # Bedrockを使用するかどうか
     claude_code_use_bedrock: str = "1"
-
-    # AWSリージョン
     aws_region: str = "us-west-2"
-
-    # AWS認証情報（開発環境用、本番ではIAMロールを使用）
     aws_access_key_id: Optional[str] = None
     aws_secret_access_key: Optional[str] = None
     aws_session_token: Optional[str] = None
 
-    # モデル設定（global.プレフィックス = クロスリージョン推論）
-    # Sonnetモデル（メインエージェント用）
+    # Bedrockリトライ設定
+    bedrock_max_retries: int = 3
+    bedrock_retry_base_delay: float = 1.0
+    bedrock_retry_max_delay: float = 10.0
+
+    # モデル設定
     anthropic_sonnet_model: str = "global.anthropic.claude-sonnet-4-5-20250929-v1:0"
-    # Haikuモデル（サブエージェント用）
     anthropic_haiku_model: str = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
-    # SDKが使用するサブエージェントのデフォルトモデルエイリアス
     claude_code_subagent_model: str = "haiku"
 
     # ============================================
@@ -59,6 +77,9 @@ class Settings(BaseSettings):
     app_port: int = 8000
     log_level: str = "INFO"
 
+    # シャットダウン設定
+    shutdown_timeout: float = 30.0
+
     # Skills保存ベースパス
     skills_base_path: str = "/skills"
 
@@ -67,45 +88,28 @@ class Settings(BaseSettings):
     # ============================================
     s3_bucket_name: str = ""
     s3_workspace_prefix: str = "workspaces/"
-
-    # ローカルワークスペース一時ディレクトリ
-    # セキュリティ向上のため、アプリケーション専用ディレクトリを使用
     workspace_temp_dir: str = "/var/lib/aiagent/workspaces"
 
+    # S3チャンク設定（メモリ最適化）
+    s3_chunk_size: int = 8 * 1024 * 1024  # 8MB
+
     # ============================================
-    # ファイルアップロード制限（環境変数で変更可能）
+    # ファイルアップロード制限
     # ============================================
-    # 全体の最大ファイルサイズ（フォールバック用）
     max_upload_file_size: int = 100 * 1024 * 1024  # 100MB
-
-    # 画像ファイル制限（JPEG/PNG/GIF/WebP）
     max_image_file_size: int = 5 * 1024 * 1024  # 5MB
-
-    # PDFファイル制限
     max_pdf_file_size: int = 20 * 1024 * 1024  # 20MB
-
-    # Officeファイル制限（Excel/Word/PowerPoint）
     max_office_file_size: int = 30 * 1024 * 1024  # 30MB
-
-    # テキストファイル制限（CSV/JSON/MD等）
     max_text_file_size: int = 5 * 1024 * 1024  # 5MB
 
     # ============================================
     # セキュリティ設定
     # ============================================
-    # CORS許可オリジン
     cors_origins: str = "http://localhost:3000,http://localhost:3001"
-
-    # CORS許可メソッド（カンマ区切り、デフォルトは必要なもののみ）
     cors_methods: str = "GET,POST,PUT,DELETE,OPTIONS"
-
-    # CORS許可ヘッダー（カンマ区切り）
-    # X-User-ID, X-Tenant-ID: AI実行系API用（一般ユーザー）
-    # X-Admin-ID: 管理系API用（管理者）
     cors_headers: str = "Content-Type,Authorization,X-API-Key,X-Request-ID,X-Tenant-ID,X-User-ID,X-Admin-ID"
 
-    # API認証キー（カンマ区切りで複数指定可能）
-    # 空の場合は認証が無効化される（開発環境用）
+    # API認証キー（本番環境では必須）
     api_keys: str = ""
 
     # レート制限
@@ -117,11 +121,70 @@ class Settings(BaseSettings):
     hsts_enabled: bool = True
     hsts_max_age: int = 31536000  # 1年
 
+    # ============================================
+    # メトリクス設定
+    # ============================================
+    metrics_enabled: bool = True
+
+    # ============================================
+    # Uvicorn設定
+    # ============================================
+    uvicorn_workers: int = 1
+    uvicorn_timeout_keep_alive: int = 65
+    uvicorn_timeout_notify: int = 30
+
+    # ============================================
+    # バリデーション
+    # ============================================
+
     @field_validator("cors_origins")
     @classmethod
-    def parse_cors_origins(cls, v: str) -> str:
+    def validate_cors_origins(cls, v: str) -> str:
         """CORS originsのバリデーション"""
+        if not v:
+            return v
+        for origin in v.split(","):
+            origin = origin.strip()
+            if origin and origin != "*":
+                parsed = urlparse(origin)
+                if parsed.scheme not in ("http", "https"):
+                    raise ValueError(f"無効なCORSオリジン: {origin}")
         return v
+
+    @field_validator("api_keys")
+    @classmethod
+    def validate_api_keys_format(cls, v: str) -> str:
+        """APIキーの形式をバリデーション"""
+        if not v:
+            return v
+        for key in v.split(","):
+            key = key.strip()
+            if key and len(key) < 16:
+                raise ValueError("APIキーは16文字以上である必要があります")
+        return v
+
+    @model_validator(mode="after")
+    def validate_production_settings(self) -> "Settings":
+        """本番環境の設定を検証"""
+        if self.is_production:
+            # 本番環境ではAPIキーが必須
+            if not self.api_keys_list:
+                raise ValueError("本番環境ではAPI_KEYSの設定が必須です")
+
+            # 本番環境ではデフォルトのDBパスワードは禁止
+            if "aiagent_password" in self.database_url:
+                raise ValueError("本番環境ではデフォルトのデータベースパスワードは使用できません")
+
+            # 本番環境ではlocalhostのCORSオリジンを警告
+            if "localhost" in self.cors_origins:
+                import warnings
+                warnings.warn("本番環境でlocalhostのCORSオリジンが設定されています")
+
+        return self
+
+    # ============================================
+    # プロパティ
+    # ============================================
 
     @property
     def cors_origins_list(self) -> list[str]:
@@ -153,11 +216,17 @@ class Settings(BaseSettings):
         """開発環境かどうか"""
         return self.app_env == "development"
 
+    @property
+    def log_level_int(self) -> int:
+        """ログレベルを数値で取得"""
+        import logging
+        return getattr(logging, self.log_level.upper(), logging.INFO)
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
-        extra="ignore"  # 追加の環境変数を無視
+        extra="ignore"
     )
 
 

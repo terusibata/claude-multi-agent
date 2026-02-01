@@ -1,15 +1,39 @@
 """
 Bedrock チャットクライアント
-AWS Bedrock Converse API を直接呼び出すクライアント
+AWS Bedrock Converse API を直接呼び出すクライアント（リトライ機能付き）
 """
+import time
 from dataclasses import dataclass
 from typing import AsyncGenerator, Optional
 
 import structlog
+from botocore.exceptions import ClientError, EndpointConnectionError
 
+from app.config import get_settings
+from app.infrastructure.metrics import get_bedrock_requests, get_bedrock_tokens
+from app.infrastructure.retry import RetryConfig, retry_sync
 from app.services.execute.aws_config import AWSConfig
 
 logger = structlog.get_logger(__name__)
+settings = get_settings()
+
+
+# Bedrock用のリトライ設定
+def get_bedrock_retry_config() -> RetryConfig:
+    """Bedrock用リトライ設定を取得"""
+    return RetryConfig(
+        max_attempts=settings.bedrock_max_retries,
+        base_delay=settings.bedrock_retry_base_delay,
+        max_delay=settings.bedrock_retry_max_delay,
+        exponential_base=2.0,
+        jitter=True,
+        retryable_exceptions=(
+            ClientError,
+            EndpointConnectionError,
+            ConnectionError,
+            TimeoutError,
+        ),
+    )
 
 
 @dataclass
@@ -28,6 +52,7 @@ class BedrockChatClient:
     AWS Bedrock Converse API を直接呼び出すクライアント
 
     Claude Agent SDK を使わず、純粋にBedrock APIでチャットを行う
+    リトライ機能とメトリクス収集付き
     """
 
     def __init__(self, aws_config: AWSConfig):
@@ -38,6 +63,7 @@ class BedrockChatClient:
             aws_config: AWS設定
         """
         self.aws_config = aws_config
+        self._retry_config = get_bedrock_retry_config()
 
     def _format_messages(
         self,
@@ -59,6 +85,40 @@ class BedrockChatClient:
                 "content": [{"text": msg["content"]}],
             })
         return formatted
+
+    def _call_converse_stream(
+        self,
+        client,
+        request_params: dict,
+    ):
+        """
+        converse_stream APIを呼び出し（リトライ対象）
+
+        Args:
+            client: Bedrock クライアント
+            request_params: リクエストパラメータ
+
+        Returns:
+            APIレスポンス
+        """
+        return client.converse_stream(**request_params)
+
+    def _call_converse(
+        self,
+        client,
+        request_params: dict,
+    ):
+        """
+        converse APIを呼び出し（リトライ対象）
+
+        Args:
+            client: Bedrock クライアント
+            request_params: リクエストパラメータ
+
+        Returns:
+            APIレスポンス
+        """
+        return client.converse(**request_params)
 
     async def stream_chat(
         self,
@@ -82,6 +142,8 @@ class BedrockChatClient:
             StreamChunk: ストリーミングチャンク
         """
         client = self.aws_config.create_bedrock_client()
+        metrics = get_bedrock_requests()
+        tokens_metric = get_bedrock_tokens()
 
         # リクエストパラメータ構築
         request_params = {
@@ -100,12 +162,19 @@ class BedrockChatClient:
             message_count=len(messages),
         )
 
-        try:
-            # converse_stream APIを呼び出し
-            response = client.converse_stream(**request_params)
+        start_time = time.perf_counter()
+        input_tokens = 0
+        output_tokens = 0
 
-            input_tokens = 0
-            output_tokens = 0
+        try:
+            # リトライ付きでAPI呼び出し
+            response = retry_sync(
+                self._call_converse_stream,
+                client,
+                request_params,
+                config=self._retry_config,
+                operation_name="Bedrock converse_stream",
+            )
 
             # ストリームを処理
             for event in response.get("stream", []):
@@ -134,19 +203,30 @@ class BedrockChatClient:
                         output_tokens=output_tokens,
                     )
 
+            duration = time.perf_counter() - start_time
             logger.info(
                 "Bedrock Converse Stream完了",
                 model_id=model_id,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
+                duration_seconds=round(duration, 2),
             )
 
+            # メトリクス記録
+            metrics.inc(model=model_id, status="success")
+            tokens_metric.inc(input_tokens, model=model_id, type="input")
+            tokens_metric.inc(output_tokens, model=model_id, type="output")
+
         except Exception as e:
+            duration = time.perf_counter() - start_time
             logger.error(
                 "Bedrock Converse Streamエラー",
                 model_id=model_id,
                 error=str(e),
+                error_type=type(e).__name__,
+                duration_seconds=round(duration, 2),
             )
+            metrics.inc(model=model_id, status="error")
             raise
 
     def chat_sync(
@@ -171,6 +251,8 @@ class BedrockChatClient:
             (応答テキスト, 入力トークン数, 出力トークン数)
         """
         client = self.aws_config.create_bedrock_client()
+        metrics = get_bedrock_requests()
+        tokens_metric = get_bedrock_tokens()
 
         request_params = {
             "modelId": model_id,
@@ -188,28 +270,57 @@ class BedrockChatClient:
             message_count=len(messages),
         )
 
-        response = client.converse(**request_params)
+        start_time = time.perf_counter()
 
-        # レスポンスからテキストを抽出
-        content = response.get("output", {}).get("message", {}).get("content", [])
-        text = ""
-        for block in content:
-            if "text" in block:
-                text += block["text"]
+        try:
+            # リトライ付きでAPI呼び出し
+            response = retry_sync(
+                self._call_converse,
+                client,
+                request_params,
+                config=self._retry_config,
+                operation_name="Bedrock converse",
+            )
 
-        # 使用量を取得
-        usage = response.get("usage", {})
-        input_tokens = usage.get("inputTokens", 0)
-        output_tokens = usage.get("outputTokens", 0)
+            # レスポンスからテキストを抽出
+            content = response.get("output", {}).get("message", {}).get("content", [])
+            text = ""
+            for block in content:
+                if "text" in block:
+                    text += block["text"]
 
-        logger.info(
-            "Bedrock Converse完了",
-            model_id=model_id,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-        )
+            # 使用量を取得
+            usage = response.get("usage", {})
+            input_tokens = usage.get("inputTokens", 0)
+            output_tokens = usage.get("outputTokens", 0)
 
-        return text, input_tokens, output_tokens
+            duration = time.perf_counter() - start_time
+            logger.info(
+                "Bedrock Converse完了",
+                model_id=model_id,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                duration_seconds=round(duration, 2),
+            )
+
+            # メトリクス記録
+            metrics.inc(model=model_id, status="success")
+            tokens_metric.inc(input_tokens, model=model_id, type="input")
+            tokens_metric.inc(output_tokens, model=model_id, type="output")
+
+            return text, input_tokens, output_tokens
+
+        except Exception as e:
+            duration = time.perf_counter() - start_time
+            logger.error(
+                "Bedrock Converseエラー",
+                model_id=model_id,
+                error=str(e),
+                error_type=type(e).__name__,
+                duration_seconds=round(duration, 2),
+            )
+            metrics.inc(model=model_id, status="error")
+            raise
 
 
 class SimpleChatTitleGenerator:

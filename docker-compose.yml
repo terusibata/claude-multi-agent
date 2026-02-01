@@ -29,28 +29,33 @@ services:
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
     restart: unless-stopped
-    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      ${REDIS_PASSWORD:+--requirepass ${REDIS_PASSWORD}}
 
-  # AIエージェントバックエンド
+  # AIエージェントバックエンド（開発環境）
   backend:
     build:
       context: .
       dockerfile: Dockerfile
+      target: development
     container_name: claude-multi-agent
     env_file:
       - .env
     environment:
       # データベース設定
       DATABASE_URL: postgresql+asyncpg://${DB_USER:-aiagent}:${DB_PASSWORD:-aiagent_password}@db:5432/${DB_NAME:-aiagent}
-
       # Redis設定
       REDIS_URL: redis://redis:6379/0
-
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       # アプリケーション設定
       APP_ENV: ${APP_ENV:-development}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -68,25 +73,33 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
-  # 本番環境用バックエンド（リロードなし）
+  # 本番環境用バックエンド
   backend-prod:
     build:
       context: .
       dockerfile: Dockerfile
+      target: production
     container_name: claude-multi-agent-prod
     profiles:
       - production
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://${DB_USER:-aiagent}:${DB_PASSWORD:-aiagent_password}@db:5432/${DB_NAME:-aiagent}
+      # データベース設定
+      DATABASE_URL: postgresql+asyncpg://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}
+      # Redis設定（本番では認証必須）
       REDIS_URL: redis://redis:6379/0
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      # アプリケーション設定
       APP_ENV: production
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_LEVEL: ${LOG_LEVEL:-WARNING}
       SKILLS_BASE_PATH: /skills
       WORKSPACE_TEMP_DIR: /var/lib/aiagent/workspaces
+      # 本番設定
+      API_KEYS: ${API_KEYS}
+      METRICS_ENABLED: "true"
+      SHUTDOWN_TIMEOUT: "30.0"
     volumes:
       - skills_data:/skills
       - workspaces_data:/var/lib/aiagent/workspaces
@@ -101,8 +114,13 @@ services:
     deploy:
       resources:
         limits:
+          cpus: '4'
+          memory: 8G
+        reservations:
           cpus: '2'
           memory: 4G
+    # グレースフルシャットダウン
+    stop_grace_period: 30s
 
 volumes:
   postgres_data:
