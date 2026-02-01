@@ -35,16 +35,40 @@ interface ModelResponse {
   display_name: string;                // UIで表示する名称
   bedrock_model_id: string;            // AWS BedrockのモデルID
   model_region: string | null;         // モデルのデプロイリージョン
+
+  // Context Window設定
+  context_window: number;              // Context Window上限（トークン）
+  max_output_tokens: number;           // 最大出力トークン数
+  supports_extended_context: boolean;  // 拡張Context Window（1M等）対応可否
+  extended_context_window: number | null; // 拡張Context Window上限
+
+  // 料金設定
   input_token_price: string;           // 入力トークン単価 (USD/1Kトークン)
   output_token_price: string;          // 出力トークン単価 (USD/1Kトークン)
   cache_creation_5m_price: string;     // 5分キャッシュ作成単価 (USD/1Kトークン)
   cache_creation_1h_price: string;     // 1時間キャッシュ作成単価 (USD/1Kトークン)
   cache_read_price: string;            // キャッシュ読込単価 (USD/1Kトークン)
+
   status: "active" | "deprecated";     // ステータス
   created_at: string;                  // 作成日時（ISO 8601）
   updated_at: string;                  // 更新日時（ISO 8601）
 }
 ```
+
+### Context Window設定の説明
+
+| フィールド | 説明 | デフォルト値 |
+|-----------|------|-------------|
+| `context_window` | モデルのContext Window上限（入力+出力の合計） | 200000 |
+| `max_output_tokens` | 1回のレスポンスで生成可能な最大トークン数 | 64000 |
+| `supports_extended_context` | 1M Context Window等の拡張機能に対応しているか | false |
+| `extended_context_window` | 拡張Context Window使用時の上限 | null |
+
+**Context Windowの使用例:**
+
+- Claude Sonnet 4.5: 200,000トークン（拡張: 1,000,000トークン）
+- Claude Opus 4.5: 200,000トークン
+- Claude Haiku 4.5: 200,000トークン
 
 ### 料金体系の説明
 

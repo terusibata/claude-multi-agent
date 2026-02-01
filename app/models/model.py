@@ -6,7 +6,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import DECIMAL, DateTime, Enum, String, func
+from sqlalchemy import DECIMAL, Boolean, DateTime, Enum, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -38,6 +38,32 @@ class Model(Base):
 
     # モデルのデプロイリージョン（オプション）
     model_region: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
+    # Context Window上限（トークン）
+    # Claude 4.5系は200,000トークンがデフォルト
+    context_window: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=200000,
+        comment="Context Window上限（トークン）"
+    )
+
+    # 最大出力トークン数
+    # Claude 4.5系は64,000トークンがデフォルト
+    max_output_tokens: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=64000,
+        comment="最大出力トークン数"
+    )
+
+    # 拡張Context Window対応可否（1M beta等）
+    supports_extended_context: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False,
+        comment="拡張Context Window（1M等）対応可否"
+    )
+
+    # 拡張Context Window時の上限（対応している場合のみ）
+    extended_context_window: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, default=None,
+        comment="拡張Context Window上限（トークン）"
+    )
 
     # 入力トークン単価 (USD/1Kトークン) - AWS Bedrock公式価格形式
     input_token_price: Mapped[Decimal] = mapped_column(

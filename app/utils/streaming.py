@@ -13,6 +13,7 @@ Server-Sent Events形式でのストリーミング送信
 - progress: 進捗更新（状態・ターン・ツール統合）
 - title: タイトル生成
 - ping: ハートビート
+- context_status: コンテキスト使用状況（警告レベル・継続可否）
 - done: 完了
 - error: エラー
 
@@ -395,6 +396,56 @@ def format_ping_event(seq: int, elapsed_ms: int) -> dict:
         イベントデータ
     """
     return _create_event("ping", seq, {"elapsed_ms": elapsed_ms})
+
+
+def format_context_status_event(
+    seq: int,
+    current_context_tokens: int,
+    max_context_tokens: int,
+    usage_percent: float,
+    warning_level: str,
+    can_continue: bool,
+    message: str | None = None,
+    recommended_action: str | None = None,
+) -> dict:
+    """
+    コンテキスト使用状況イベントをフォーマット
+
+    実行完了後、doneイベントの直前に送信される。
+    フロントエンドはこのイベントを受信して、ユーザーに警告を表示したり、
+    入力欄を無効化したりすることができる。
+
+    Args:
+        seq: シーケンス番号
+        current_context_tokens: 現在のコンテキストトークン数
+        max_context_tokens: モデルのContext Window上限
+        usage_percent: 使用率（%）
+        warning_level: 警告レベル
+            - "normal": 通常（< 70%）
+            - "warning": 警告（70-85%）- 新しいチャット推奨
+            - "critical": 重大（85-95%）- 次の返信でエラーの可能性
+            - "blocked": ブロック（> 95%）- 送信不可
+        can_continue: 次のメッセージを送信可能か
+        message: ユーザー向けメッセージ（日本語）
+        recommended_action: 推奨アクション（"new_chat" など）
+
+    Returns:
+        イベントデータ
+    """
+    data: dict[str, Any] = {
+        "current_context_tokens": current_context_tokens,
+        "max_context_tokens": max_context_tokens,
+        "usage_percent": round(usage_percent, 1),
+        "warning_level": warning_level,
+        "can_continue": can_continue,
+    }
+
+    if message:
+        data["message"] = message
+    if recommended_action:
+        data["recommended_action"] = recommended_action
+
+    return _create_event("context_status", seq, data)
 
 
 def format_done_event(

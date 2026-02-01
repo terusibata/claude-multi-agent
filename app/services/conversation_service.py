@@ -196,6 +196,45 @@ class ConversationService:
             conversation_id, tenant_id, title=title
         )
 
+    async def update_conversation_context_status(
+        self,
+        conversation_id: str,
+        tenant_id: str,
+        total_input_tokens: int,
+        total_output_tokens: int,
+        estimated_context_tokens: int,
+        context_limit_reached: bool,
+    ) -> Optional[Conversation]:
+        """
+        会話のコンテキスト状況を更新
+
+        実行終了時に呼び出され、トークン使用状況と制限到達フラグを更新。
+
+        Args:
+            conversation_id: 会話ID
+            tenant_id: テナントID
+            total_input_tokens: 累積入力トークン数
+            total_output_tokens: 累積出力トークン数
+            estimated_context_tokens: 推定コンテキストトークン数
+            context_limit_reached: コンテキスト制限到達フラグ
+
+        Returns:
+            更新された会話（存在しない場合はNone）
+        """
+        conversation = await self.get_conversation_by_id(conversation_id, tenant_id)
+        if not conversation:
+            return None
+
+        conversation.total_input_tokens = total_input_tokens
+        conversation.total_output_tokens = total_output_tokens
+        conversation.estimated_context_tokens = estimated_context_tokens
+        conversation.context_limit_reached = context_limit_reached
+
+        self.db.add(conversation)
+        await self.db.flush()
+
+        return conversation
+
     async def archive_conversation(
         self,
         conversation_id: str,

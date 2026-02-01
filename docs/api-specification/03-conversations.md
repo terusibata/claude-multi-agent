@@ -43,10 +43,28 @@ interface ConversationResponse {
   title: string | null;           // 会話タイトル（AI自動生成）
   status: "active" | "archived";  // ステータス
   workspace_enabled: boolean;     // ワークスペース有効フラグ
+
+  // コンテキスト使用状況
+  total_input_tokens: number;     // 累積入力トークン数
+  total_output_tokens: number;    // 累積出力トークン数
+  estimated_context_tokens: number; // 推定コンテキストトークン数
+  context_limit_reached: boolean; // コンテキスト制限到達フラグ
+
   created_at: string;             // 作成日時（ISO 8601）
   updated_at: string;             // 更新日時（ISO 8601）
 }
 ```
+
+### コンテキスト使用状況の説明
+
+| フィールド | 説明 |
+|-----------|------|
+| `total_input_tokens` | この会話での累積入力トークン数 |
+| `total_output_tokens` | この会話での累積出力トークン数 |
+| `estimated_context_tokens` | 次回リクエスト時の推定コンテキストサイズ |
+| `context_limit_reached` | `true`の場合、この会話は送信不可（新しいチャットが必要） |
+
+**注意**: `context_limit_reached: true` の会話に対してストリーミング実行を行うと、`context_limit_exceeded`エラーが返されます。フロントエンドは事前にこのフラグをチェックし、ユーザーに新しいチャットを開始するよう促すUIを表示すべきです。
 
 ### MessageLogResponse
 
