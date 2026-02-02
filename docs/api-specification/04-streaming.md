@@ -102,6 +102,7 @@ data: {"seq": <number>, "timestamp": "<ISO8601>", ...}
 | `progress` | 進捗更新 | 処理状態変更時 |
 | `title` | タイトル生成 | タイトル自動生成時 |
 | `ping` | ハートビート | 10秒ごと |
+| `context_status` | コンテキスト使用状況 | done直前（実行終了時） |
 | `done` | 完了 | 実行完了時 |
 | `error` | エラー | エラー発生時 |
 
@@ -145,11 +146,11 @@ interface ThinkingEvent {
   seq: number;
   timestamp: string;
   content: string;               // 思考内容
-  parent_agent_id?: string;      // 親エージェントID（サブエージェント内の場合）
+  parent_agent_id?: string;      // 親エージェントID（サブエージェント内の場合のみ）
 }
 ```
 
-**例:**
+**メインエージェントの場合**（`parent_agent_id` は省略）:
 ```json
 {
   "seq": 2,
@@ -158,34 +159,38 @@ interface ThinkingEvent {
 }
 ```
 
+**サブエージェント内の場合**:
+```json
+{
+  "seq": 14,
+  "timestamp": "2024-01-15T10:30:12.456Z",
+  "content": "コードベースを分析中...",
+  "parent_agent_id": "tu_subagent_001"
+}
+```
+
+> **注**: `parent_agent_id` はサブエージェント内の場合のみ含まれます。メインエージェントの場合はフィールド自体が省略されます。
+
 ### 3. assistant（アシスタントメッセージ）
 
-AIからのテキスト応答やツール使用を含みます。
+AIからのテキスト応答を含みます。`content_blocks` には `text` タイプのブロックのみが含まれます。
+ツール使用は別途 `tool_call` イベントとして送信されます。
 
 ```typescript
 interface AssistantEvent {
   seq: number;
   timestamp: string;
-  content_blocks: ContentBlock[];    // コンテンツブロックのリスト
-  parent_agent_id?: string;          // 親エージェントID
+  content_blocks: TextBlock[];       // テキストブロックのリスト
+  parent_agent_id?: string;          // 親エージェントID（サブエージェント内の場合のみ）
 }
-
-type ContentBlock = TextBlock | ToolUseBlock;
 
 interface TextBlock {
   type: "text";
   text: string;
 }
-
-interface ToolUseBlock {
-  type: "tool_use";
-  id: string;          // ツール使用ID
-  name: string;        // ツール名
-  input: object;       // ツール入力
-}
 ```
 
-**例:**
+**メインエージェントの場合**（`parent_agent_id` は省略）:
 ```json
 {
   "seq": 3,
@@ -194,18 +199,27 @@ interface ToolUseBlock {
     {
       "type": "text",
       "text": "CSVファイルを分析します。まずファイルの内容を確認させてください。"
-    },
-    {
-      "type": "tool_use",
-      "id": "tu_abc123",
-      "name": "Read",
-      "input": {
-        "file_path": "/workspace/data.csv"
-      }
     }
   ]
 }
 ```
+
+**サブエージェント内の場合**:
+```json
+{
+  "seq": 16,
+  "timestamp": "2024-01-15T10:30:15.789Z",
+  "content_blocks": [
+    {
+      "type": "text",
+      "text": "ファイルを確認しました。"
+    }
+  ],
+  "parent_agent_id": "tu_subagent_001"
+}
+```
+
+> **注**: `parent_agent_id` はサブエージェント内の場合のみ含まれます。メインエージェントの場合はフィールド自体が省略されます。
 
 ### 4. tool_call（ツール呼び出し開始）
 
@@ -219,11 +233,11 @@ interface ToolCallEvent {
   tool_name: string;             // ツール名
   input: object;                 // 入力パラメータ（500文字で切り詰め）
   summary: string;               // サマリー
-  parent_agent_id?: string;      // 親エージェントID
+  parent_agent_id?: string;      // 親エージェントID（サブエージェント内の場合のみ）
 }
 ```
 
-**例:**
+**メインエージェントの場合**（`parent_agent_id` は省略）:
 ```json
 {
   "seq": 4,
@@ -236,6 +250,23 @@ interface ToolCallEvent {
   "summary": "ファイルを読み取ります"
 }
 ```
+
+**サブエージェント内の場合**:
+```json
+{
+  "seq": 17,
+  "timestamp": "2024-01-15T10:30:16.012Z",
+  "tool_use_id": "tu_def456",
+  "tool_name": "Grep",
+  "input": {
+    "pattern": "function"
+  },
+  "summary": "パターン検索",
+  "parent_agent_id": "tu_subagent_001"
+}
+```
+
+> **注**: `parent_agent_id` はサブエージェント内の場合のみ含まれます。
 
 ### 5. tool_result（ツール実行結果）
 
@@ -250,11 +281,11 @@ interface ToolResultEvent {
   status: "completed" | "error"; // ステータス
   content: string;               // 結果内容（プレビュー）
   is_error: boolean;             // エラーかどうか
-  parent_agent_id?: string;      // 親エージェントID
+  parent_agent_id?: string;      // 親エージェントID（サブエージェント内の場合のみ）
 }
 ```
 
-**例:**
+**メインエージェントの場合**（`parent_agent_id` は省略）:
 ```json
 {
   "seq": 5,
@@ -266,6 +297,22 @@ interface ToolResultEvent {
   "is_error": false
 }
 ```
+
+**サブエージェント内の場合**:
+```json
+{
+  "seq": 18,
+  "timestamp": "2024-01-15T10:30:16.789Z",
+  "tool_use_id": "tu_def456",
+  "tool_name": "Grep",
+  "status": "completed",
+  "content": "3件のマッチが見つかりました",
+  "is_error": false,
+  "parent_agent_id": "tu_subagent_001"
+}
+```
+
+> **注**: `parent_agent_id` はサブエージェント内の場合のみ含まれます。
 
 ### 6. subagent_start（サブエージェント開始）
 
@@ -334,11 +381,39 @@ interface ProgressEvent {
   tool_use_id?: string;                      // ツール使用ID（tool タイプ時）
   tool_name?: string;                        // ツール名
   tool_status?: "pending" | "running" | "completed" | "error";
-  parent_agent_id?: string;                  // 親エージェントID
+  parent_agent_id?: string;                  // 親エージェントID（サブエージェント内の場合のみ）
 }
 ```
 
-**例:**
+**進捗タイプ:**
+
+| type | 説明 | 追加フィールド |
+|------|------|---------------|
+| `thinking` | AI思考中 | なし |
+| `generating` | テキスト生成中 | なし |
+| `tool` | ツール実行中 | `tool_use_id`, `tool_name`, `tool_status` |
+
+**thinking タイプの例:**
+```json
+{
+  "seq": 2,
+  "timestamp": "2024-01-15T10:30:01.567Z",
+  "type": "thinking",
+  "message": "考えています..."
+}
+```
+
+**generating タイプの例:**
+```json
+{
+  "seq": 3,
+  "timestamp": "2024-01-15T10:30:02.567Z",
+  "type": "generating",
+  "message": "回答を作成しています..."
+}
+```
+
+**tool タイプの例**（メインエージェント）:
 ```json
 {
   "seq": 6,
@@ -350,6 +425,22 @@ interface ProgressEvent {
   "tool_status": "running"
 }
 ```
+
+**tool タイプの例**（サブエージェント内）:
+```json
+{
+  "seq": 19,
+  "timestamp": "2024-01-15T10:30:17.567Z",
+  "type": "tool",
+  "message": "パターン検索中...",
+  "tool_use_id": "tu_def456",
+  "tool_name": "Grep",
+  "tool_status": "running",
+  "parent_agent_id": "tu_subagent_001"
+}
+```
+
+> **注**: `parent_agent_id` はサブエージェント内の場合のみ含まれます。
 
 ### 9. title（タイトル生成）
 
@@ -393,7 +484,59 @@ interface PingEvent {
 }
 ```
 
-### 11. done（完了）
+### 11. context_status（コンテキスト使用状況）
+
+コンテキスト使用状況イベント。**`done`イベントの直前**に送信されます。
+フロントエンドはこのイベントを受信して、ユーザーに警告を表示したり、入力欄を無効化したりできます。
+
+```typescript
+interface ContextStatusEvent {
+  seq: number;
+  timestamp: string;
+  current_context_tokens: number;   // 現在のコンテキストトークン数
+  max_context_tokens: number;       // モデルのContext Window上限
+  usage_percent: number;            // 使用率（%）
+  warning_level: WarningLevel;      // 警告レベル
+  can_continue: boolean;            // 次のメッセージを送信可能か
+  message?: string;                 // ユーザー向けメッセージ
+  recommended_action?: string;      // 推奨アクション
+}
+
+type WarningLevel = 'normal' | 'warning' | 'critical' | 'blocked';
+```
+
+**警告レベル:**
+
+| warning_level | 使用率 | can_continue | UI表示 |
+|---------------|--------|--------------|--------|
+| `normal` | < 70% | true | なし |
+| `warning` | 70-85% | true | 黄色バナー「新しいチャット推奨」 |
+| `critical` | 85-95% | true | オレンジバナー「次の返信でエラーの可能性」 |
+| `blocked` | ≥ 95% | **false** | 赤バナー「送信不可」+ 入力欄無効化 |
+
+**例:**
+```json
+{
+  "seq": 49,
+  "timestamp": "2024-01-15T10:31:55.123Z",
+  "current_context_tokens": 150000,
+  "max_context_tokens": 200000,
+  "usage_percent": 75.0,
+  "warning_level": "warning",
+  "can_continue": true,
+  "message": "会話が長くなっています。新しいチャットを開始することをおすすめします。",
+  "recommended_action": "new_chat"
+}
+```
+
+**フロントエンド実装ガイド:**
+
+`can_continue: false` の場合：
+1. 入力欄を無効化する
+2. 「新しいチャットを開始」ボタンを強調表示
+3. 会話はリードオンリーとして表示
+
+### 12. done（完了）
 
 実行完了時に送信されます。**これが最後のイベントです。**
 
@@ -448,7 +591,7 @@ interface UsageInfo {
 }
 ```
 
-### 12. error（エラー）
+### 13. error（エラー）
 
 エラー発生時に送信されます。
 
@@ -456,20 +599,61 @@ interface UsageInfo {
 interface ErrorEvent {
   seq: number;
   timestamp: string;
-  error_type: string;            // エラータイプ
+  error_type: ErrorType;         // エラータイプ
   message: string;               // エラーメッセージ
   recoverable: boolean;          // 回復可能かどうか
 }
+
+type ErrorType =
+  | 'conversation_locked'
+  | 'sdk_not_installed'
+  | 'model_validation_error'
+  | 'options_error'
+  | 'execution_error'
+  | 'context_limit_exceeded'
+  | 'background_execution_error'
+  | 'background_task_error'
+  | 'timeout_error';
 ```
+
+**error_type の種類:**
+
+| error_type | 説明 | recoverable |
+|------------|------|-------------|
+| `conversation_locked` | 会話がロック中（他で実行中） | true |
+| `sdk_not_installed` | SDKがインストールされていない | false |
+| `model_validation_error` | モデルバリデーションエラー | false |
+| `options_error` | SDK オプション構築エラー | false |
+| `execution_error` | 実行中のエラー | false |
+| `context_limit_exceeded` | コンテキスト制限超過（新しいチャットが必要） | false |
+| `background_execution_error` | バックグラウンド実行エラー | false |
+| `background_task_error` | バックグラウンドタスクエラー | false |
+| `timeout_error` | タイムアウト | true |
+
+**`context_limit_exceeded` エラー発生時のUI対応:**
+- このエラーは会話のコンテキストがモデルの上限に達した場合に発生
+- 「新しいチャットを開始してください」というメッセージを表示
+- 入力欄を無効化し、新規会話作成ボタンを強調表示
 
 **例:**
 ```json
 {
   "seq": 8,
   "timestamp": "2024-01-15T10:30:15.789Z",
-  "error_type": "tool_execution_error",
+  "error_type": "execution_error",
   "message": "ファイルが見つかりません: /workspace/missing.csv",
-  "recoverable": true
+  "recoverable": false
+}
+```
+
+**コンテキスト制限超過の例:**
+```json
+{
+  "seq": 1,
+  "timestamp": "2024-01-15T10:35:00.789Z",
+  "error_type": "context_limit_exceeded",
+  "message": "コンテキストトークン数が上限を超えました。新しいチャットを開始してください。",
+  "recoverable": false
 }
 ```
 
@@ -721,12 +905,16 @@ function useStreaming(tenantId: string, conversationId: string): UseStreamingRes
 │                                                                 │
 │  ping ───────► 接続維持（通常は無視してOK）                       │
 │                                                                 │
+│  context_status ► コンテキスト使用状況を確認                      │
+│                   can_continue=falseなら入力を無効化              │
+│                                                                 │
 │  done ───────► 最終結果を表示                                    │
 │                使用量・コストを記録                               │
 │                ストリーム終了                                    │
 │                                                                 │
 │  error ──────► エラー表示                                        │
 │                recoverable=true なら再試行可能                   │
+│                context_limit_exceeded なら新しいチャットを促す    │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```

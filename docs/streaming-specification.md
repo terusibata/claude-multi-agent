@@ -97,19 +97,20 @@ data: {"seq": 99, "timestamp": "...", "status": "success", ...}
 
 Extended Thinking（思考プロセス）イベント。
 
+**メインエージェントの場合**（`parent_agent_id` は省略）:
+
 ```json
 {
   "event": "thinking",
   "data": {
     "seq": 2,
     "timestamp": "2024-01-01T00:00:00.000000Z",
-    "content": "ユーザーの要求を分析しています...",
-    "parent_agent_id": null
+    "content": "ユーザーの要求を分析しています..."
   }
 }
 ```
 
-サブエージェント内の場合：
+**サブエージェント内の場合**（`parent_agent_id` を含む）:
 
 ```json
 {
@@ -123,9 +124,14 @@ Extended Thinking（思考プロセス）イベント。
 }
 ```
 
+> **注**: `parent_agent_id` はサブエージェント内の場合のみ含まれます。メインエージェントの場合はフィールド自体が省略されます。
+
 ### assistant イベント
 
-テキストコンテンツイベント。
+テキストコンテンツイベント。`content_blocks` には `text` タイプのブロックのみが含まれます。
+ツール使用は別途 `tool_call` イベントとして送信されます。
+
+**メインエージェントの場合**:
 
 ```json
 {
@@ -138,15 +144,37 @@ Extended Thinking（思考プロセス）イベント。
         "type": "text",
         "text": "こんにちは！お手伝いします。"
       }
-    ],
-    "parent_agent_id": null
+    ]
   }
 }
 ```
 
+**サブエージェント内の場合**:
+
+```json
+{
+  "event": "assistant",
+  "data": {
+    "seq": 16,
+    "timestamp": "2024-01-01T00:00:00.000000Z",
+    "content_blocks": [
+      {
+        "type": "text",
+        "text": "ファイルを確認しました。"
+      }
+    ],
+    "parent_agent_id": "task-tool-uuid"
+  }
+}
+```
+
+> **注**: `parent_agent_id` はサブエージェント内の場合のみ含まれます。
+
 ### tool_call イベント
 
 ツール呼び出しイベント。
+
+**メインエージェントの場合**:
 
 ```json
 {
@@ -159,15 +187,37 @@ Extended Thinking（思考プロセス）イベント。
     "input": {
       "file_path": "/path/to/file.py"
     },
-    "summary": "ファイルを読み取り: file.py",
-    "parent_agent_id": null
+    "summary": "ファイルを読み取り: file.py"
   }
 }
 ```
 
+**サブエージェント内の場合**:
+
+```json
+{
+  "event": "tool_call",
+  "data": {
+    "seq": 17,
+    "timestamp": "2024-01-01T00:00:00.000000Z",
+    "tool_use_id": "tool-use-uuid-2",
+    "tool_name": "Grep",
+    "input": {
+      "pattern": "function"
+    },
+    "summary": "パターン検索: function",
+    "parent_agent_id": "task-tool-uuid"
+  }
+}
+```
+
+> **注**: `parent_agent_id` はサブエージェント内の場合のみ含まれます。
+
 ### tool_result イベント
 
 ツール実行結果イベント。
+
+**メインエージェントの場合**:
 
 ```json
 {
@@ -179,11 +229,30 @@ Extended Thinking（思考プロセス）イベント。
     "tool_name": "Read",
     "status": "completed",
     "content": "ファイルの内容プレビュー...",
-    "is_error": false,
-    "parent_agent_id": null
+    "is_error": false
   }
 }
 ```
+
+**サブエージェント内の場合**:
+
+```json
+{
+  "event": "tool_result",
+  "data": {
+    "seq": 18,
+    "timestamp": "2024-01-01T00:00:00.000000Z",
+    "tool_use_id": "tool-use-uuid-2",
+    "tool_name": "Grep",
+    "status": "completed",
+    "content": "3件のマッチが見つかりました",
+    "is_error": false,
+    "parent_agent_id": "task-tool-uuid"
+  }
+}
+```
+
+> **注**: `parent_agent_id` はサブエージェント内の場合のみ含まれます。
 
 ### subagent_start イベント
 
@@ -255,6 +324,8 @@ Extended Thinking（思考プロセス）イベント。
 
 #### tool（ツール実行）
 
+**メインエージェントの場合**:
+
 ```json
 {
   "event": "progress",
@@ -265,11 +336,30 @@ Extended Thinking（思考プロセス）イベント。
     "message": "Readを実行中...",
     "tool_use_id": "tool-use-uuid",
     "tool_name": "Read",
-    "tool_status": "running",
-    "parent_agent_id": null
+    "tool_status": "running"
   }
 }
 ```
+
+**サブエージェント内の場合**:
+
+```json
+{
+  "event": "progress",
+  "data": {
+    "seq": 19,
+    "timestamp": "2024-01-01T00:00:00.000000Z",
+    "type": "tool",
+    "message": "Grepを実行中...",
+    "tool_use_id": "tool-use-uuid-2",
+    "tool_name": "Grep",
+    "tool_status": "running",
+    "parent_agent_id": "task-tool-uuid"
+  }
+}
+```
+
+> **注**: `parent_agent_id` はサブエージェント内の場合のみ含まれます。
 
 ツールステータス:
 - `pending`: 受付済み
