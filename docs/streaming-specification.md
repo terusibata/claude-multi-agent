@@ -27,8 +27,8 @@ Server-Sent Events (SSE) 形式でストリーミングします。全てのイ�
 event: init
 data: {"seq": 1, "timestamp": "...", "session_id": "...", ...}
 
-event: thinking
-data: {"seq": 2, "timestamp": "...", "content": "..."}
+event: progress
+data: {"seq": 2, "timestamp": "...", "type": "generating", "message": "..."}
 
 event: assistant
 data: {"seq": 3, "timestamp": "...", "content_blocks": [...]}
@@ -95,7 +95,12 @@ data: {"seq": 99, "timestamp": "...", "status": "success", ...}
 
 ### thinking イベント
 
-Extended Thinking（思考プロセス）イベント。
+> **注**: 現在Extended Thinkingは有効化されていないため、このイベントは送信されません。
+> 将来的にExtended Thinkingを有効化した場合に使用されます。
+
+Extended Thinking（思考プロセス）イベント。Claude SDKの `thinking` オプションが有効な場合のみ送信されます。
+
+**メインエージェントの場合**（`parent_agent_id` は省略）:
 
 ```json
 {
@@ -103,13 +108,12 @@ Extended Thinking（思考プロセス）イベント。
   "data": {
     "seq": 2,
     "timestamp": "2024-01-01T00:00:00.000000Z",
-    "content": "ユーザーの要求を分析しています...",
-    "parent_agent_id": null
+    "content": "ユーザーの要求を分析しています..."
   }
 }
 ```
 
-サブエージェント内の場合：
+**サブエージェント内の場合**（`parent_agent_id` を含む）:
 
 ```json
 {
@@ -123,9 +127,14 @@ Extended Thinking（思考プロセス）イベント。
 }
 ```
 
+> **注**: `parent_agent_id` はサブエージェント内の場合のみ含まれます。メインエージェントの場合はフィールド自体が省略されます。
+
 ### assistant イベント
 
-テキストコンテンツイベント。
+テキストコンテンツイベント。`content_blocks` には `text` タイプのブロックのみが含まれます。
+ツール使用は別途 `tool_call` イベントとして送信されます。
+
+**メインエージェントの場合**:
 
 ```json
 {
@@ -138,15 +147,37 @@ Extended Thinking（思考プロセス）イベント。
         "type": "text",
         "text": "こんにちは！お手伝いします。"
       }
-    ],
-    "parent_agent_id": null
+    ]
   }
 }
 ```
 
+**サブエージェント内の場合**:
+
+```json
+{
+  "event": "assistant",
+  "data": {
+    "seq": 16,
+    "timestamp": "2024-01-01T00:00:00.000000Z",
+    "content_blocks": [
+      {
+        "type": "text",
+        "text": "ファイルを確認しました。"
+      }
+    ],
+    "parent_agent_id": "task-tool-uuid"
+  }
+}
+```
+
+> **注**: `parent_agent_id` はサブエージェント内の場合のみ含まれます。
+
 ### tool_call イベント
 
 ツール呼び出しイベント。
+
+**メインエージェントの場合**:
 
 ```json
 {
@@ -159,15 +190,37 @@ Extended Thinking（思考プロセス）イベント。
     "input": {
       "file_path": "/path/to/file.py"
     },
-    "summary": "ファイルを読み取り: file.py",
-    "parent_agent_id": null
+    "summary": "ファイルを読み取り: file.py"
   }
 }
 ```
 
+**サブエージェント内の場合**:
+
+```json
+{
+  "event": "tool_call",
+  "data": {
+    "seq": 17,
+    "timestamp": "2024-01-01T00:00:00.000000Z",
+    "tool_use_id": "tool-use-uuid-2",
+    "tool_name": "Grep",
+    "input": {
+      "pattern": "function"
+    },
+    "summary": "パターン検索: function",
+    "parent_agent_id": "task-tool-uuid"
+  }
+}
+```
+
+> **注**: `parent_agent_id` はサブエージェント内の場合のみ含まれます。
+
 ### tool_result イベント
 
 ツール実行結果イベント。
+
+**メインエージェントの場合**:
 
 ```json
 {
@@ -179,11 +232,30 @@ Extended Thinking（思考プロセス）イベント。
     "tool_name": "Read",
     "status": "completed",
     "content": "ファイルの内容プレビュー...",
-    "is_error": false,
-    "parent_agent_id": null
+    "is_error": false
   }
 }
 ```
+
+**サブエージェント内の場合**:
+
+```json
+{
+  "event": "tool_result",
+  "data": {
+    "seq": 18,
+    "timestamp": "2024-01-01T00:00:00.000000Z",
+    "tool_use_id": "tool-use-uuid-2",
+    "tool_name": "Grep",
+    "status": "completed",
+    "content": "3件のマッチが見つかりました",
+    "is_error": false,
+    "parent_agent_id": "task-tool-uuid"
+  }
+}
+```
+
+> **注**: `parent_agent_id` はサブエージェント内の場合のみ含まれます。
 
 ### subagent_start イベント
 
@@ -223,21 +295,10 @@ Extended Thinking（思考プロセス）イベント。
 
 ### progress イベント
 
-統合型の進捗イベント。複数のタイプ（thinking, generating, tool）を1つのイベント形式で通知します。
+統合型の進捗イベント。複数のタイプ（generating, tool）を1つのイベント形式で通知します。
 
-#### thinking（思考中）
-
-```json
-{
-  "event": "progress",
-  "data": {
-    "seq": 2,
-    "timestamp": "2024-01-01T00:00:00.000000Z",
-    "type": "thinking",
-    "message": "思考中..."
-  }
-}
-```
+> **注**: `type: "thinking"` はExtended Thinkingが有効化された場合のみ送信されます。
+> 現在はExtended Thinkingが無効のため、`generating` と `tool` のみが送信されます。
 
 #### generating（テキスト生成中）
 
@@ -255,6 +316,8 @@ Extended Thinking（思考プロセス）イベント。
 
 #### tool（ツール実行）
 
+**メインエージェントの場合**:
+
 ```json
 {
   "event": "progress",
@@ -265,11 +328,30 @@ Extended Thinking（思考プロセス）イベント。
     "message": "Readを実行中...",
     "tool_use_id": "tool-use-uuid",
     "tool_name": "Read",
-    "tool_status": "running",
-    "parent_agent_id": null
+    "tool_status": "running"
   }
 }
 ```
+
+**サブエージェント内の場合**:
+
+```json
+{
+  "event": "progress",
+  "data": {
+    "seq": 19,
+    "timestamp": "2024-01-01T00:00:00.000000Z",
+    "type": "tool",
+    "message": "Grepを実行中...",
+    "tool_use_id": "tool-use-uuid-2",
+    "tool_name": "Grep",
+    "tool_status": "running",
+    "parent_agent_id": "task-tool-uuid"
+  }
+}
+```
+
+> **注**: `parent_agent_id` はサブエージェント内の場合のみ含まれます。
 
 ツールステータス:
 - `pending`: 受付済み
@@ -456,46 +538,40 @@ Client                          Server
   |  event: init                  |  (seq: 1)
   |<------------------------------|
   |                               |
-  |  event: progress              |  (seq: 2, type: "thinking")
+  |  event: progress              |  (seq: 2, type: "generating")
   |<------------------------------|
   |                               |
-  |  event: thinking              |  (seq: 3)
+  |  event: assistant             |  (seq: 3, text)
   |<------------------------------|
   |                               |
-  |  event: progress              |  (seq: 4, type: "generating")
+  |  event: progress              |  (seq: 4, type: "tool", status: "pending")
   |<------------------------------|
   |                               |
-  |  event: assistant             |  (seq: 5, text)
+  |  event: tool_call             |  (seq: 5)
   |<------------------------------|
   |                               |
-  |  event: progress              |  (seq: 6, type: "tool", status: "pending")
-  |<------------------------------|
-  |                               |
-  |  event: tool_call             |  (seq: 7)
-  |<------------------------------|
-  |                               |
-  |  event: progress              |  (seq: 8, type: "tool", status: "running")
+  |  event: progress              |  (seq: 6, type: "tool", status: "running")
   |<------------------------------|
   |                               |
   |  event: ping                  |  (seq: 0, heartbeat)
   |<------------------------------|
   |                               |
-  |  event: progress              |  (seq: 9, type: "tool", status: "completed")
+  |  event: progress              |  (seq: 7, type: "tool", status: "completed")
   |<------------------------------|
   |                               |
-  |  event: tool_result           |  (seq: 10)
+  |  event: tool_result           |  (seq: 8)
   |<------------------------------|
   |                               |
-  |  event: assistant             |  (seq: 11, text)
+  |  event: assistant             |  (seq: 9, text)
   |<------------------------------|
   |                               |
-  |  event: title                 |  (seq: 12)
+  |  event: title                 |  (seq: 10)
   |<------------------------------|
   |                               |
-  |  event: context_status        |  (seq: 13, warning_level, can_continue)  ★NEW
+  |  event: context_status        |  (seq: 11, warning_level, can_continue)
   |<------------------------------|
   |                               |
-  |  event: done                  |  (seq: 14)
+  |  event: done                  |  (seq: 12)
   |<------------------------------|
   |                               |
   |  (connection closed)          |
@@ -557,6 +633,7 @@ export interface InitEvent {
 
 // ==========================================
 // thinking イベント
+// ※現在Extended Thinkingは無効のため、このイベントは送信されません
 // ==========================================
 
 export interface ThinkingEventData extends BaseEventData {
@@ -659,7 +736,8 @@ export interface SubagentEndEvent {
 // progress イベント
 // ==========================================
 
-export type ProgressType = 'thinking' | 'generating' | 'tool';
+// 'thinking' はExtended Thinking有効時のみ（現在は無効のため使用されない）
+export type ProgressType = 'generating' | 'tool' | 'thinking';
 export type ToolProgressStatus = 'pending' | 'running' | 'completed' | 'error';
 
 export interface ProgressEventData extends BaseEventData {
