@@ -36,8 +36,10 @@ from app.infrastructure.distributed_lock import (
     ConversationLockError,
     get_conversation_lock_manager,
 )
+from app.utils.exceptions import ContextLimitExceededError
 from app.utils.streaming import (
     SequenceCounter,
+    format_context_status_event,
     format_done_event,
     format_error_event,
     format_title_event,
@@ -101,6 +103,19 @@ class ExecuteService:
 
         # シーケンス番号カウンターを初期化
         seq_counter = SequenceCounter()
+
+        # コンテキスト制限チェック（リクエスト時）
+        context_check_error = await self._check_context_limit_before_execution(
+            context, seq_counter
+        )
+        if context_check_error:
+            yield context_check_error
+            yield self._create_error_result(
+                context,
+                ["コンテキスト制限に達しています。新しいチャットを開始してください。"],
+                seq_counter,
+            )
+            return
 
         # 会話ロックを取得
         lock_manager = get_conversation_lock_manager()
@@ -488,6 +503,26 @@ class ExecuteService:
             "cache_read_tokens": cache_read,
             "total_tokens": input_tokens + output_tokens,
         }
+
+        # コンテキスト状況を計算して更新
+        context_status = await self._calculate_and_update_context_status(
+            context=context,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
+
+        # context_statusイベントを追加（doneの直前）
+        context_status_event = format_context_status_event(
+            seq=seq_counter.next(),
+            current_context_tokens=context_status["current_context_tokens"],
+            max_context_tokens=context_status["max_context_tokens"],
+            usage_percent=context_status["usage_percent"],
+            warning_level=context_status["warning_level"],
+            can_continue=context_status["can_continue"],
+            message=context_status.get("message"),
+            recommended_action=context_status.get("recommended_action"),
+        )
+        events.append(context_status_event)
 
         # 結果イベントを追加
         # JSON出力用にコストをフォーマット（科学的記数法を避ける）
@@ -1007,3 +1042,145 @@ class ExecuteService:
                 conversation_id=context.conversation_id,
                 exc_info=True,
             )
+
+    async def _check_context_limit_before_execution(
+        self,
+        context: ExecutionContext,
+        seq_counter: SequenceCounter,
+    ) -> dict | None:
+        """
+        実行前にコンテキスト制限をチェック
+
+        会話がすでにcontext_limit_reachedフラグが立っている場合、
+        または推定コンテキストトークンが上限の95%を超えている場合はエラーを返す。
+
+        Args:
+            context: 実行コンテキスト
+            seq_counter: シーケンスカウンター
+
+        Returns:
+            エラーイベント（問題がなければNone）
+        """
+        # 会話を取得
+        conversation = await self.conversation_service.get_conversation_by_id(
+            context.conversation_id, context.tenant_id
+        )
+        if not conversation:
+            return None
+
+        # context_limit_reachedフラグをチェック
+        if conversation.context_limit_reached:
+            logger.warning(
+                "コンテキスト制限到達済みの会話に対するリクエスト",
+                conversation_id=context.conversation_id,
+                estimated_context_tokens=conversation.estimated_context_tokens,
+            )
+            return format_error_event(
+                seq=seq_counter.next(),
+                error_type="context_limit_exceeded",
+                message="この会話はコンテキスト制限に達しています。新しいチャットを開始してください。",
+                recoverable=False,
+            )
+
+        # 推定コンテキストトークンをチェック（95%以上で警告）
+        max_context = context.model.context_window
+        if conversation.estimated_context_tokens > 0:
+            usage_percent = (conversation.estimated_context_tokens / max_context) * 100
+            if usage_percent >= 95:
+                logger.warning(
+                    "コンテキスト使用率が95%を超えています",
+                    conversation_id=context.conversation_id,
+                    estimated_context_tokens=conversation.estimated_context_tokens,
+                    max_context=max_context,
+                    usage_percent=usage_percent,
+                )
+                return format_error_event(
+                    seq=seq_counter.next(),
+                    error_type="context_limit_exceeded",
+                    message=f"コンテキスト使用率が{usage_percent:.1f}%に達しています。新しいチャットを開始してください。",
+                    recoverable=False,
+                )
+
+        return None
+
+    async def _calculate_and_update_context_status(
+        self,
+        context: ExecutionContext,
+        input_tokens: int,
+        output_tokens: int,
+    ) -> dict[str, Any]:
+        """
+        コンテキスト状況を計算し、会話テーブルを更新
+
+        実行終了後に呼び出され、次回リクエスト時のコンテキストサイズを推定。
+        警告レベルを判定し、context_limit_reachedフラグを更新する。
+
+        Args:
+            context: 実行コンテキスト
+            input_tokens: 今回の入力トークン数
+            output_tokens: 今回の出力トークン数
+
+        Returns:
+            コンテキスト状況の辞書
+        """
+        # 次回リクエスト時の推定コンテキストサイズ
+        # = 今回の入力トークン（システムプロンプト+履歴+入力）+ 今回の出力（次回は履歴に含まれる）
+        estimated_next_context = input_tokens + output_tokens
+
+        # モデルのContext Window上限
+        max_context = context.model.context_window
+
+        # 使用率計算
+        usage_percent = (estimated_next_context / max_context) * 100 if max_context > 0 else 0
+
+        # 警告レベル判定
+        if usage_percent >= 95:
+            warning_level = "blocked"
+            can_continue = False
+            message = "トークン上限に達しました。新しいチャットでやりとりしてください。"
+            recommended_action = "new_chat"
+        elif usage_percent >= 85:
+            warning_level = "critical"
+            can_continue = True
+            message = "トークン上限に近づいています。次の返信でエラーになる可能性があります。"
+            recommended_action = "new_chat"
+        elif usage_percent >= 70:
+            warning_level = "warning"
+            can_continue = True
+            message = "会話が長くなっています。新しいチャットを開始することをおすすめします。"
+            recommended_action = "new_chat"
+        else:
+            warning_level = "normal"
+            can_continue = True
+            message = None
+            recommended_action = None
+
+        # 会話テーブルを更新
+        await self.conversation_service.update_conversation_context_status(
+            conversation_id=context.conversation_id,
+            tenant_id=context.tenant_id,
+            total_input_tokens=input_tokens,
+            total_output_tokens=output_tokens,
+            estimated_context_tokens=estimated_next_context,
+            context_limit_reached=not can_continue,
+        )
+
+        logger.info(
+            "コンテキスト状況を更新",
+            conversation_id=context.conversation_id,
+            estimated_context_tokens=estimated_next_context,
+            max_context_tokens=max_context,
+            usage_percent=round(usage_percent, 1),
+            warning_level=warning_level,
+            can_continue=can_continue,
+        )
+
+        return {
+            "current_context_tokens": estimated_next_context,
+            "max_context_tokens": max_context,
+            "usage_percent": usage_percent,
+            "warning_level": warning_level,
+            "can_continue": can_continue,
+            "message": message,
+            "recommended_action": recommended_action,
+        }

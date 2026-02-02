@@ -58,6 +58,7 @@ data: {"seq": 99, "timestamp": "...", "status": "success", ...}
 | `progress` | 進捗更新（統合型） | 状態変化時 |
 | `title` | タイトル生成 | 初回実行時 |
 | `ping` | ハートビート | 10秒間隔 |
+| `context_status` | コンテキスト使用状況 | done直前（実行終了時） |
 | `done` | 完了 | 終了時 |
 | `error` | エラー | エラー発生時 |
 
@@ -306,6 +307,51 @@ Extended Thinking（思考プロセス）イベント。
 }
 ```
 
+### context_status イベント
+
+コンテキスト使用状況イベント。**`done`イベントの直前**に送信されます。
+フロントエンドはこのイベントを受信して、ユーザーに警告を表示したり、入力欄を無効化したりできます。
+
+```json
+{
+  "event": "context_status",
+  "data": {
+    "seq": 98,
+    "timestamp": "2024-01-01T00:00:00.000000Z",
+    "current_context_tokens": 150000,
+    "max_context_tokens": 200000,
+    "usage_percent": 75.0,
+    "warning_level": "warning",
+    "can_continue": true,
+    "message": "会話が長くなっています。新しいチャットを開始することをおすすめします。",
+    "recommended_action": "new_chat"
+  }
+}
+```
+
+#### warning_level の種類
+
+| warning_level | 使用率 | can_continue | UI表示 |
+|---------------|--------|--------------|--------|
+| `normal` | < 70% | true | なし |
+| `warning` | 70-85% | true | 黄色バナー「新しいチャット推奨」 |
+| `critical` | 85-95% | true | オレンジバナー「次の返信でエラーの可能性」 |
+| `blocked` | ≥ 95% | **false** | 赤バナー「送信不可」+ 入力欄無効化 |
+
+#### recommended_action の種類
+
+| recommended_action | 説明 |
+|--------------------|------|
+| `null` | アクション不要（normal時） |
+| `new_chat` | 新しいチャットを開始すべき |
+
+#### フロントエンド実装ガイド
+
+`can_continue: false` の場合：
+1. 入力欄を無効化する
+2. 「新しいチャットを開始」ボタンを強調表示
+3. 会話はリードオンリーとして表示
+
 ### done イベント
 
 完了イベント。処理終了時に送信されます。
@@ -389,9 +435,15 @@ Extended Thinking（思考プロセス）イベント。
 | `model_validation_error` | モデルバリデーションエラー | false |
 | `options_error` | SDK オプション構築エラー | false |
 | `execution_error` | 実行中のエラー | false |
+| `context_limit_exceeded` | コンテキスト制限超過（新しいチャットが必要） | false |
 | `background_execution_error` | バックグラウンド実行エラー | false |
 | `background_task_error` | バックグラウンドタスクエラー | false |
 | `timeout_error` | タイムアウト | true |
+
+**`context_limit_exceeded`エラー発生時のUI対応:**
+- このエラーは会話のコンテキストがモデルの上限に達した場合に発生
+- 「新しいチャットを開始してください」というメッセージを表示
+- 入力欄を無効化し、新規会話作成ボタンを強調表示
 
 ## フロー図
 
@@ -440,11 +492,34 @@ Client                          Server
   |  event: title                 |  (seq: 12)
   |<------------------------------|
   |                               |
-  |  event: done                  |  (seq: 13)
+  |  event: context_status        |  (seq: 13, warning_level, can_continue)  ★NEW
+  |<------------------------------|
+  |                               |
+  |  event: done                  |  (seq: 14)
   |<------------------------------|
   |                               |
   |  (connection closed)          |
   |<------------------------------|
+```
+
+### コンテキスト制限超過時のフロー
+
+```
+Client                          Server
+  |                               |
+  |  POST /conversations/{id}/stream
+  |------------------------------>|
+  |                               |
+  |  event: error                 |  (error_type: "context_limit_exceeded")
+  |<------------------------------|
+  |                               |
+  |  event: done                  |  (status: "error")
+  |<------------------------------|
+  |                               |
+  |  (connection closed)          |
+  |<------------------------------|
+
+→ フロントエンド: 入力欄を無効化、「新しいチャット」ボタンを表示
 ```
 
 ## Next.js型定義
@@ -628,6 +703,28 @@ export interface PingEvent {
 }
 
 // ==========================================
+// context_status イベント
+// ==========================================
+
+export type WarningLevel = 'normal' | 'warning' | 'critical' | 'blocked';
+export type RecommendedAction = 'new_chat' | null;
+
+export interface ContextStatusEventData extends BaseEventData {
+  current_context_tokens: number;
+  max_context_tokens: number;
+  usage_percent: number;
+  warning_level: WarningLevel;
+  can_continue: boolean;
+  message?: string;
+  recommended_action?: RecommendedAction;
+}
+
+export interface ContextStatusEvent {
+  event: 'context_status';
+  data: ContextStatusEventData;
+}
+
+// ==========================================
 // done イベント
 // ==========================================
 
@@ -680,6 +777,7 @@ export type ErrorType =
   | 'model_validation_error'
   | 'options_error'
   | 'execution_error'
+  | 'context_limit_exceeded'
   | 'background_execution_error'
   | 'background_task_error'
   | 'timeout_error';
@@ -710,6 +808,7 @@ export type StreamingEvent =
   | ProgressEvent
   | TitleEvent
   | PingEvent
+  | ContextStatusEvent
   | DoneEvent
   | ErrorEvent;
 
@@ -773,6 +872,10 @@ export function isTitleEvent(event: StreamingEvent): event is TitleEvent {
 
 export function isPingEvent(event: StreamingEvent): event is PingEvent {
   return event.event === 'ping';
+}
+
+export function isContextStatusEvent(event: StreamingEvent): event is ContextStatusEvent {
+  return event.event === 'context_status';
 }
 
 export function isDoneEvent(event: StreamingEvent): event is DoneEvent {
@@ -1010,6 +1113,26 @@ function processEvent(
         handlers?.onTitle?.(data.title);
         break;
 
+      case 'context_status':
+        // コンテキスト使用状況を更新
+        setState(prev => ({
+          ...prev,
+          contextStatus: {
+            currentTokens: data.current_context_tokens,
+            maxTokens: data.max_context_tokens,
+            usagePercent: data.usage_percent,
+            warningLevel: data.warning_level,
+            canContinue: data.can_continue,
+            message: data.message,
+          },
+        }));
+        handlers?.onContextStatus?.(data);
+        // can_continue: false の場合、入力を無効化
+        if (!data.can_continue) {
+          handlers?.onInputDisabled?.(true, data.message);
+        }
+        break;
+
       case 'done':
         setState(prev => ({
           ...prev,
@@ -1025,6 +1148,10 @@ function processEvent(
           error: data.message,
         }));
         handlers?.onError?.(data.message, data.recoverable);
+        // context_limit_exceeded の場合、入力を無効化
+        if (data.error_type === 'context_limit_exceeded') {
+          handlers?.onInputDisabled?.(true, data.message);
+        }
         break;
 
       case 'ping':

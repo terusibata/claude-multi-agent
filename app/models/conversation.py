@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -71,6 +71,30 @@ class Conversation(Base):
     # ワークスペース作成日時
     workspace_created_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+    # 累積入力トークン数
+    total_input_tokens: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0,
+        comment="累積入力トークン数"
+    )
+
+    # 累積出力トークン数
+    total_output_tokens: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0,
+        comment="累積出力トークン数"
+    )
+
+    # 推定コンテキストトークン数（次回リクエスト時のサイズ推定）
+    estimated_context_tokens: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0,
+        comment="推定コンテキストトークン数"
+    )
+
+    # コンテキスト制限に到達しているか
+    context_limit_reached: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False,
+        comment="コンテキスト制限到達フラグ"
     )
 
     # タイムスタンプ

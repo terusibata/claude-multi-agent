@@ -35,6 +35,18 @@ class ModelBase(BaseModel):
     cache_read_price: Decimal = Field(
         default=Decimal("0"), description="キャッシュ読込単価 (USD/1Kトークン、通常は入力価格×0.1)"
     )
+    context_window: int = Field(
+        default=200000, description="Context Window上限（トークン）"
+    )
+    max_output_tokens: int = Field(
+        default=64000, description="最大出力トークン数"
+    )
+    supports_extended_context: bool = Field(
+        default=False, description="拡張Context Window（1M等）対応可否"
+    )
+    extended_context_window: Optional[int] = Field(
+        default=None, description="拡張Context Window上限（トークン）"
+    )
 
 
 class ModelCreate(ModelBase):
@@ -56,6 +68,10 @@ class ModelUpdate(BaseModel):
     cache_creation_5m_price: Optional[Decimal] = None
     cache_creation_1h_price: Optional[Decimal] = None
     cache_read_price: Optional[Decimal] = None
+    context_window: Optional[int] = None
+    max_output_tokens: Optional[int] = None
+    supports_extended_context: Optional[bool] = None
+    extended_context_window: Optional[int] = None
     status: Optional[str] = Field(None, pattern="^(active|deprecated)$")
 
 
