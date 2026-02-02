@@ -139,7 +139,10 @@ interface InitEvent {
 
 ### 2. thinking（Extended Thinking）
 
-AIの思考プロセスを表示します。
+> **注**: 現在Extended Thinkingは有効化されていないため、このイベントは送信されません。
+> 将来的にExtended Thinkingを有効化した場合に使用されます。
+
+AIの思考プロセスを表示します。Claude SDKの `thinking` オプションが有効な場合のみ送信されます。
 
 ```typescript
 interface ThinkingEvent {
@@ -376,7 +379,7 @@ interface SubagentEndEvent {
 interface ProgressEvent {
   seq: number;
   timestamp: string;
-  type: "thinking" | "generating" | "tool";  // 進捗タイプ
+  type: "generating" | "tool";               // 進捗タイプ（※thinkingは現在無効）
   message: string;                           // 進捗メッセージ
   tool_use_id?: string;                      // ツール使用ID（tool タイプ時）
   tool_name?: string;                        // ツール名
@@ -387,21 +390,14 @@ interface ProgressEvent {
 
 **進捗タイプ:**
 
-| type | 説明 | 追加フィールド |
-|------|------|---------------|
-| `thinking` | AI思考中 | なし |
-| `generating` | テキスト生成中 | なし |
-| `tool` | ツール実行中 | `tool_use_id`, `tool_name`, `tool_status` |
+| type | 説明 | 追加フィールド | 備考 |
+|------|------|---------------|------|
+| `generating` | テキスト生成中 | なし | |
+| `tool` | ツール実行中 | `tool_use_id`, `tool_name`, `tool_status` | |
+| `thinking` | AI思考中 | なし | ※Extended Thinking有効時のみ（現在無効） |
 
-**thinking タイプの例:**
-```json
-{
-  "seq": 2,
-  "timestamp": "2024-01-15T10:30:01.567Z",
-  "type": "thinking",
-  "message": "考えています..."
-}
-```
+> **注**: `type: "thinking"` はExtended Thinkingが有効化された場合のみ送信されます。
+> 現在はExtended Thinkingが無効のため、`generating` と `tool` のみが送信されます。
 
 **generating タイプの例:**
 ```json
