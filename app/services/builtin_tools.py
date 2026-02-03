@@ -380,20 +380,28 @@ def create_file_tools_mcp_server(
 
     # Excel ツール
     @tool(
-        "inspect_excel_file",
-        "Excelファイルの構造を確認します。シート一覧、ヘッダー行、データサンプルを返します。",
+        "get_sheet_info",
+        "Excelファイルのシート情報を取得します。シート一覧、各シートの行数・列数・範囲、印刷領域の有無を返します。",
         {"file_path": str},
     )
-    async def inspect_excel_file_tool(args: dict[str, Any]) -> dict[str, Any]:
-        return await handlers["inspect_excel_file"](args)
+    async def get_sheet_info_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["get_sheet_info"](args)
 
     @tool(
-        "read_excel_sheet",
-        "Excelシートのデータを取得します。sheet_name（シート名）、start_row/end_row（行範囲）、columns（列指定: 'A:D'や'A,C,E'）を指定可能。",
-        {"file_path": str, "sheet_name": str, "start_row": int, "end_row": int, "columns": str},
+        "get_sheet_csv",
+        "指定シートの内容をCSV Markdown形式で取得します。sheet_name（シート名、必須）、start_row/end_row（行範囲）、max_rows（最大行数、デフォルト100）、use_print_area（印刷領域を使用するか、デフォルトtrue）を指定可能。",
+        {"file_path": str, "sheet_name": str, "start_row": int, "end_row": int, "max_rows": int, "use_print_area": bool},
     )
-    async def read_excel_sheet_tool(args: dict[str, Any]) -> dict[str, Any]:
-        return await handlers["read_excel_sheet"](args)
+    async def get_sheet_csv_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["get_sheet_csv"](args)
+
+    @tool(
+        "search_workbook",
+        "Excelワークブック全体からキーワード検索を行います。query（検索キーワード、必須）、case_sensitive（大文字小文字区別、デフォルトfalse）、max_hits（最大ヒット数、デフォルト50）を指定可能。",
+        {"file_path": str, "query": str, "case_sensitive": bool, "max_hits": int},
+    )
+    async def search_workbook_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["search_workbook"](args)
 
     # PDF ツール
     @tool(
@@ -472,8 +480,9 @@ def create_file_tools_mcp_server(
             list_workspace_files_tool,
             read_image_file_tool,
             # Excel
-            inspect_excel_file_tool,
-            read_excel_sheet_tool,
+            get_sheet_info_tool,
+            get_sheet_csv_tool,
+            search_workbook_tool,
             # PDF
             inspect_pdf_file_tool,
             read_pdf_pages_tool,

@@ -108,12 +108,17 @@ BUILTIN_TOOL_MESSAGES: dict[str, list[str]] = {
         "画像ファイルを読み込んでいます...",
         "画像を分析中...",
     ],
-    "mcp__file-tools__inspect_excel_file": [
+    "mcp__file-tools__get_sheet_info": [
+        "Excelシート情報を取得中...",
         "Excelファイルの構造を確認中...",
     ],
-    "mcp__file-tools__read_excel_sheet": [
-        "Excelデータを取得しています...",
+    "mcp__file-tools__get_sheet_csv": [
+        "ExcelデータをCSV形式で取得中...",
         "スプレッドシートを読み込み中...",
+    ],
+    "mcp__file-tools__search_workbook": [
+        "Excelファイル内を検索中...",
+        "ワークブックを検索しています...",
     ],
     "mcp__file-tools__inspect_pdf_file": [
         "PDFファイルの構造を確認中...",

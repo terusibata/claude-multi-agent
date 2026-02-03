@@ -31,8 +31,9 @@ BUILTIN_MCP_LABELS: dict[str, str] = {
     # file-tools
     "mcp__file-tools__list_workspace_files": "ファイル一覧取得",
     "mcp__file-tools__read_image_file": "画像読み込み",
-    "mcp__file-tools__inspect_excel_file": "Excel構造確認",
-    "mcp__file-tools__read_excel_sheet": "Excelデータ取得",
+    "mcp__file-tools__get_sheet_info": "Excelシート情報",
+    "mcp__file-tools__get_sheet_csv": "ExcelCSV取得",
+    "mcp__file-tools__search_workbook": "Excel検索",
     "mcp__file-tools__inspect_pdf_file": "PDF構造確認",
     "mcp__file-tools__read_pdf_pages": "PDFテキスト取得",
     "mcp__file-tools__convert_pdf_to_images": "PDF画像変換",

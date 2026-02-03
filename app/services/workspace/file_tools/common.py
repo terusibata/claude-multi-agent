@@ -25,9 +25,10 @@ FILE_TOOLS_PROMPT = """
 
 ワークスペースのファイルは以下の手順で読んでください：
 1. list_workspace_files でファイル一覧を確認
-2. inspect_* で構造を確認（Excel/PDF/Word/PowerPoint/画像）
-3. read_* でテキストを取得
-4. 図表など視覚的確認が必要な場合のみ convert_*_to_images → read_image_file
+2. 構造確認（Excel: get_sheet_info / PDF: inspect_pdf_file / Word: inspect_word_file / PowerPoint: inspect_pptx_file / 画像: inspect_image_file）
+3. データ取得（Excel: get_sheet_csv / PDF: read_pdf_pages / Word: read_word_section / PowerPoint: read_pptx_slides）
+4. Excel検索: search_workbook でキーワード検索
+5. 図表など視覚的確認が必要な場合のみ convert_*_to_images → read_image_file
 
 ※ 画像読み込みはコンテキストを消費するため、必要な場合のみ使用
 ※ テキスト/CSV/JSONファイルは従来のReadツールも使用可能
@@ -224,8 +225,9 @@ def create_file_tools_handlers(
     """
     # 各ツールモジュールからハンドラーをインポート
     from app.services.workspace.file_tools.excel_tools import (
-        inspect_excel_file_handler,
-        read_excel_sheet_handler,
+        get_sheet_info_handler,
+        get_sheet_csv_handler,
+        search_workbook_handler,
     )
     from app.services.workspace.file_tools.pdf_tools import (
         inspect_pdf_file_handler,
@@ -255,8 +257,9 @@ def create_file_tools_handlers(
         "list_workspace_files": bind_handler(list_workspace_files_handler),
         "read_image_file": bind_handler(read_image_file_handler),
         # Excel
-        "inspect_excel_file": bind_handler(inspect_excel_file_handler),
-        "read_excel_sheet": bind_handler(read_excel_sheet_handler),
+        "get_sheet_info": bind_handler(get_sheet_info_handler),
+        "get_sheet_csv": bind_handler(get_sheet_csv_handler),
+        "search_workbook": bind_handler(search_workbook_handler),
         # PDF
         "inspect_pdf_file": bind_handler(inspect_pdf_file_handler),
         "read_pdf_pages": bind_handler(read_pdf_pages_handler),
