@@ -25,9 +25,22 @@ FILE_TOOLS_PROMPT = """
 
 ワークスペースのファイルは以下の手順で読んでください：
 1. list_workspace_files でファイル一覧を確認
-2. inspect_* で構造を確認（Excel/PDF/Word/PowerPoint/画像）
-3. read_* でテキストを取得
-4. 図表など視覚的確認が必要な場合のみ convert_*_to_images → read_image_file
+2. 構造確認
+   - Excel: get_sheet_info
+   - PDF: inspect_pdf_file
+   - Word: get_document_info
+   - PowerPoint: get_presentation_info
+   - 画像: inspect_image_file
+3. データ取得
+   - Excel: get_sheet_csv
+   - PDF: read_pdf_pages
+   - Word: get_document_content
+   - PowerPoint: get_slides_content
+4. 検索
+   - Excel: search_workbook
+   - Word: search_document
+   - PowerPoint: search_presentation
+5. 図表など視覚的確認が必要な場合のみ convert_pdf_to_images → read_image_file
 
 ※ 画像読み込みはコンテキストを消費するため、必要な場合のみ使用
 ※ テキスト/CSV/JSONファイルは従来のReadツールも使用可能
@@ -224,8 +237,9 @@ def create_file_tools_handlers(
     """
     # 各ツールモジュールからハンドラーをインポート
     from app.services.workspace.file_tools.excel_tools import (
-        inspect_excel_file_handler,
-        read_excel_sheet_handler,
+        get_sheet_info_handler,
+        get_sheet_csv_handler,
+        search_workbook_handler,
     )
     from app.services.workspace.file_tools.pdf_tools import (
         inspect_pdf_file_handler,
@@ -233,12 +247,14 @@ def create_file_tools_handlers(
         convert_pdf_to_images_handler,
     )
     from app.services.workspace.file_tools.word_tools import (
-        inspect_word_file_handler,
-        read_word_section_handler,
+        get_document_info_handler,
+        get_document_content_handler,
+        search_document_handler,
     )
     from app.services.workspace.file_tools.pptx_tools import (
-        inspect_pptx_file_handler,
-        read_pptx_slides_handler,
+        get_presentation_info_handler,
+        get_slides_content_handler,
+        search_presentation_handler,
     )
     from app.services.workspace.file_tools.image_tools import (
         inspect_image_file_handler,
@@ -255,18 +271,21 @@ def create_file_tools_handlers(
         "list_workspace_files": bind_handler(list_workspace_files_handler),
         "read_image_file": bind_handler(read_image_file_handler),
         # Excel
-        "inspect_excel_file": bind_handler(inspect_excel_file_handler),
-        "read_excel_sheet": bind_handler(read_excel_sheet_handler),
+        "get_sheet_info": bind_handler(get_sheet_info_handler),
+        "get_sheet_csv": bind_handler(get_sheet_csv_handler),
+        "search_workbook": bind_handler(search_workbook_handler),
         # PDF
         "inspect_pdf_file": bind_handler(inspect_pdf_file_handler),
         "read_pdf_pages": bind_handler(read_pdf_pages_handler),
         "convert_pdf_to_images": bind_handler(convert_pdf_to_images_handler),
         # Word
-        "inspect_word_file": bind_handler(inspect_word_file_handler),
-        "read_word_section": bind_handler(read_word_section_handler),
+        "get_document_info": bind_handler(get_document_info_handler),
+        "get_document_content": bind_handler(get_document_content_handler),
+        "search_document": bind_handler(search_document_handler),
         # PowerPoint
-        "inspect_pptx_file": bind_handler(inspect_pptx_file_handler),
-        "read_pptx_slides": bind_handler(read_pptx_slides_handler),
+        "get_presentation_info": bind_handler(get_presentation_info_handler),
+        "get_slides_content": bind_handler(get_slides_content_handler),
+        "search_presentation": bind_handler(search_presentation_handler),
         # 画像
         "inspect_image_file": bind_handler(inspect_image_file_handler),
     }

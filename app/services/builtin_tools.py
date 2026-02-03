@@ -380,20 +380,28 @@ def create_file_tools_mcp_server(
 
     # Excel ツール
     @tool(
-        "inspect_excel_file",
-        "Excelファイルの構造を確認します。シート一覧、ヘッダー行、データサンプルを返します。",
+        "get_sheet_info",
+        "Excelファイルのシート情報を取得します。シート一覧、各シートの行数・列数・範囲、印刷領域の有無を返します。",
         {"file_path": str},
     )
-    async def inspect_excel_file_tool(args: dict[str, Any]) -> dict[str, Any]:
-        return await handlers["inspect_excel_file"](args)
+    async def get_sheet_info_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["get_sheet_info"](args)
 
     @tool(
-        "read_excel_sheet",
-        "Excelシートのデータを取得します。sheet_name（シート名）、start_row/end_row（行範囲）、columns（列指定: 'A:D'や'A,C,E'）を指定可能。",
-        {"file_path": str, "sheet_name": str, "start_row": int, "end_row": int, "columns": str},
+        "get_sheet_csv",
+        "指定シートの内容をCSV Markdown形式で取得します。sheet_name（シート名、必須）、start_row/end_row（行範囲）、max_rows（最大行数、デフォルト100）、use_print_area（印刷領域を使用するか、デフォルトtrue）を指定可能。",
+        {"file_path": str, "sheet_name": str, "start_row": int, "end_row": int, "max_rows": int, "use_print_area": bool},
     )
-    async def read_excel_sheet_tool(args: dict[str, Any]) -> dict[str, Any]:
-        return await handlers["read_excel_sheet"](args)
+    async def get_sheet_csv_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["get_sheet_csv"](args)
+
+    @tool(
+        "search_workbook",
+        "Excelワークブック全体からキーワード検索を行います。query（検索キーワード、必須）、case_sensitive（大文字小文字区別、デフォルトfalse）、max_hits（最大ヒット数、デフォルト50）を指定可能。",
+        {"file_path": str, "query": str, "case_sensitive": bool, "max_hits": int},
+    )
+    async def search_workbook_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["search_workbook"](args)
 
     # PDF ツール
     @tool(
@@ -422,37 +430,53 @@ def create_file_tools_mcp_server(
 
     # Word ツール
     @tool(
-        "inspect_word_file",
-        "Wordファイルの構造を確認します。見出し一覧、段落数、冒頭プレビューを返します。",
+        "get_document_info",
+        "Wordファイルの構造情報を取得します。見出し構造、段落数、文字数、表の概要を返します。",
         {"file_path": str},
     )
-    async def inspect_word_file_tool(args: dict[str, Any]) -> dict[str, Any]:
-        return await handlers["inspect_word_file"](args)
+    async def get_document_info_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["get_document_info"](args)
 
     @tool(
-        "read_word_section",
-        "Wordファイルのセクションを取得します。headingで見出しを指定するか、start_paragraph/end_paragraphで段落範囲を指定。",
-        {"file_path": str, "heading": str, "start_paragraph": int, "end_paragraph": int},
+        "get_document_content",
+        "Wordファイルの内容を取得します。headingで見出しセクション指定、またはstart_paragraph/max_paragraphsで範囲指定。include_tablesで表を含めるか指定。",
+        {"file_path": str, "heading": str, "start_paragraph": int, "end_paragraph": int, "max_paragraphs": int, "include_tables": bool},
     )
-    async def read_word_section_tool(args: dict[str, Any]) -> dict[str, Any]:
-        return await handlers["read_word_section"](args)
+    async def get_document_content_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["get_document_content"](args)
+
+    @tool(
+        "search_document",
+        "Wordドキュメント全体からキーワード検索を行います。段落、表、見出しすべてを対象に検索。query（検索キーワード、必須）、case_sensitive、max_hits、include_tablesを指定可能。",
+        {"file_path": str, "query": str, "case_sensitive": bool, "max_hits": int, "include_tables": bool},
+    )
+    async def search_document_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["search_document"](args)
 
     # PowerPoint ツール
     @tool(
-        "inspect_pptx_file",
-        "PowerPointファイルの構造を確認します。スライド一覧、各スライドの要素数を返します。",
+        "get_presentation_info",
+        "PowerPointファイルの構造情報を取得します。スライド一覧、各スライドの要素数、文字数を返します。",
         {"file_path": str},
     )
-    async def inspect_pptx_file_tool(args: dict[str, Any]) -> dict[str, Any]:
-        return await handlers["inspect_pptx_file"](args)
+    async def get_presentation_info_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["get_presentation_info"](args)
 
     @tool(
-        "read_pptx_slides",
-        "PowerPointスライドのテキストを取得します。slidesで範囲指定（'1-5'や'1,3,5'形式）、include_notesでノートを含めるか指定。",
-        {"file_path": str, "slides": str, "include_notes": bool},
+        "get_slides_content",
+        "PowerPointスライドの内容を取得します。slidesで範囲指定（'1-5'や'1,3,5'形式）、max_slidesで最大取得数指定、include_notes/include_tablesで含める内容を指定。",
+        {"file_path": str, "slides": str, "max_slides": int, "include_notes": bool, "include_tables": bool},
     )
-    async def read_pptx_slides_tool(args: dict[str, Any]) -> dict[str, Any]:
-        return await handlers["read_pptx_slides"](args)
+    async def get_slides_content_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["get_slides_content"](args)
+
+    @tool(
+        "search_presentation",
+        "PowerPointプレゼンテーション全体からキーワード検索を行います。スライドテキスト、表、ノートすべてを対象に検索。query（検索キーワード、必須）、case_sensitive、max_hits、include_notesを指定可能。",
+        {"file_path": str, "query": str, "case_sensitive": bool, "max_hits": int, "include_notes": bool},
+    )
+    async def search_presentation_tool(args: dict[str, Any]) -> dict[str, Any]:
+        return await handlers["search_presentation"](args)
 
     # 画像 ツール
     @tool(
@@ -472,18 +496,21 @@ def create_file_tools_mcp_server(
             list_workspace_files_tool,
             read_image_file_tool,
             # Excel
-            inspect_excel_file_tool,
-            read_excel_sheet_tool,
+            get_sheet_info_tool,
+            get_sheet_csv_tool,
+            search_workbook_tool,
             # PDF
             inspect_pdf_file_tool,
             read_pdf_pages_tool,
             convert_pdf_to_images_tool,
             # Word
-            inspect_word_file_tool,
-            read_word_section_tool,
+            get_document_info_tool,
+            get_document_content_tool,
+            search_document_tool,
             # PowerPoint
-            inspect_pptx_file_tool,
-            read_pptx_slides_tool,
+            get_presentation_info_tool,
+            get_slides_content_tool,
+            search_presentation_tool,
             # 画像
             inspect_image_file_tool,
         ],

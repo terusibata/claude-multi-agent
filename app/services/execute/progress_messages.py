@@ -108,12 +108,17 @@ BUILTIN_TOOL_MESSAGES: dict[str, list[str]] = {
         "画像ファイルを読み込んでいます...",
         "画像を分析中...",
     ],
-    "mcp__file-tools__inspect_excel_file": [
+    "mcp__file-tools__get_sheet_info": [
+        "Excelシート情報を取得中...",
         "Excelファイルの構造を確認中...",
     ],
-    "mcp__file-tools__read_excel_sheet": [
-        "Excelデータを取得しています...",
+    "mcp__file-tools__get_sheet_csv": [
+        "ExcelデータをCSV形式で取得中...",
         "スプレッドシートを読み込み中...",
+    ],
+    "mcp__file-tools__search_workbook": [
+        "Excelファイル内を検索中...",
+        "ワークブックを検索しています...",
     ],
     "mcp__file-tools__inspect_pdf_file": [
         "PDFファイルの構造を確認中...",
@@ -126,19 +131,29 @@ BUILTIN_TOOL_MESSAGES: dict[str, list[str]] = {
         "PDFを画像に変換しています...",
         "PDF画像化処理中...",
     ],
-    "mcp__file-tools__inspect_word_file": [
+    "mcp__file-tools__get_document_info": [
+        "Word文書情報を取得中...",
         "Wordファイルの構造を確認中...",
     ],
-    "mcp__file-tools__read_word_section": [
-        "Wordテキストを取得しています...",
+    "mcp__file-tools__get_document_content": [
+        "Word文書の内容を取得中...",
         "ドキュメントを読み込み中...",
     ],
-    "mcp__file-tools__inspect_pptx_file": [
-        "PowerPointの構造を確認中...",
+    "mcp__file-tools__search_document": [
+        "Word文書内を検索中...",
+        "ドキュメントを検索しています...",
     ],
-    "mcp__file-tools__read_pptx_slides": [
-        "PowerPointスライドを読み込んでいます...",
-        "プレゼンテーションを処理中...",
+    "mcp__file-tools__get_presentation_info": [
+        "PowerPoint情報を取得中...",
+        "プレゼンテーションの構造を確認中...",
+    ],
+    "mcp__file-tools__get_slides_content": [
+        "PowerPointスライドの内容を取得中...",
+        "プレゼンテーションを読み込み中...",
+    ],
+    "mcp__file-tools__search_presentation": [
+        "PowerPoint内を検索中...",
+        "プレゼンテーションを検索しています...",
     ],
     "mcp__file-tools__inspect_image_file": [
         "画像の情報を取得しています...",
