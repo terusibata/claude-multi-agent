@@ -29,7 +29,7 @@ AIエージェント実行のリアルタイムストリーミングを提供す
 |-----------|-----|------|------|
 | `request_data` | string (JSON) | Yes | StreamRequestのJSON文字列 |
 | `files` | File[] | No | 添付ファイル（複数可） |
-| `file_metadata` | string (JSON) | Yes（ファイル添付時） | FileUploadMetadataのJSONリスト |
+| `file_metadata` | string (JSON) | No | FileUploadMetadataのJSONリスト（デフォルト: `[]`、ファイル添付時は必須） |
 
 ### FileUploadMetadata構造
 

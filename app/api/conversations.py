@@ -500,7 +500,7 @@ async def stream_conversation(
     conversation_id: str,
     request_data: str = Form(..., description="StreamRequestのJSON文字列"),
     files: list[UploadFile] = File(default=[], description="添付ファイル（複数可、オプション）"),
-    file_metadata: str = Form(..., description="FileUploadMetadataのJSONリスト（ファイル添付時は必須）"),
+    file_metadata: str = Form(default="[]", description="FileUploadMetadataのJSONリスト（ファイル添付時は必須）"),
     db: AsyncSession = Depends(get_db),
 ):
     """

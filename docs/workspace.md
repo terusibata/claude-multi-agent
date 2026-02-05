@@ -158,7 +158,7 @@ Content-Type: multipart/form-data
 |-----------|-----|------|------|
 | `request_data` | string | ○ | StreamRequestのJSON文字列 |
 | `files` | File[] | - | アップロードするファイル（複数可） |
-| `file_metadata` | string | ○（ファイル添付時） | FileUploadMetadataのJSONリスト |
+| `file_metadata` | string | - | FileUploadMetadataのJSONリスト（デフォルト: `[]`、ファイル添付時は必須） |
 
 ### FileUploadMetadata構造
 
