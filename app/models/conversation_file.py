@@ -61,6 +61,9 @@ class ConversationFile(Base):
     # ファイル説明（AI作成時のコンテキスト）
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # 元の相対パス（表示用。例: api/users/route.ts）
+    original_relative_path: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+
     # ステータス: "active" | "deleted"
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
 

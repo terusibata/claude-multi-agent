@@ -22,6 +22,7 @@ from app.models.conversation import Conversation
 from app.models.conversation_file import ConversationFile
 from app.schemas.workspace import (
     ConversationFileInfo,
+    FileUploadMetadata,
     WorkspaceContextForAI,
     WorkspaceFileList,
     WorkspaceInfo,
@@ -51,68 +52,24 @@ class WorkspaceService:
         self.s3 = S3StorageBackend()
         self.context_builder = AIContextBuilder()
 
-    async def upload_files(
-        self,
-        tenant_id: str,
-        conversation_id: str,
-        files: list[tuple[str, bytes, str]],  # [(filename, content, content_type), ...]
-    ) -> list[ConversationFileInfo]:
-        """
-        複数ファイルをS3にアップロード
-
-        Args:
-            tenant_id: テナントID
-            conversation_id: 会話ID
-            files: [(filename, content, content_type), ...]
-
-        Returns:
-            アップロードされたファイル情報のリスト
-
-        Raises:
-            FileSizeExceededError: ファイルサイズが制限を超えた場合
-        """
-        results = []
-        for filename, content, content_type in files:
-            # ファイルタイプ別のサイズ制限を取得
-            max_size = FileTypeClassifier.get_max_file_size(filename, content_type)
-
-            # ファイルサイズチェック
-            if len(content) > max_size:
-                raise FileSizeExceededError(
-                    filename=filename,
-                    size=len(content),
-                    max_size=max_size,
-                )
-            file_path = f"uploads/{filename}"
-            await self.s3.upload(tenant_id, conversation_id, file_path, content, content_type)
-
-            # DBに記録
-            file_info = await self._save_file_record(
-                tenant_id=tenant_id,
-                conversation_id=conversation_id,
-                file_path=file_path,
-                original_name=filename,
-                file_size=len(content),
-                content_type=content_type,
-                source="user_upload",
-            )
-            results.append(file_info)
-
-        return results
-
-    async def upload_user_file(
+    async def upload_user_file_with_metadata(
         self,
         tenant_id: str,
         conversation_id: str,
         file: UploadFile,
+        metadata: FileUploadMetadata,
     ) -> ConversationFileInfo:
         """
-        FastAPI UploadFile形式の単一ファイルをアップロード
+        メタデータ付きでファイルをS3にアップロード
+
+        フロントエンドで組み立てた識別子付きパスをそのまま使用する。
+        バックエンド側でのパス組み立てロジックは不要。
 
         Args:
             tenant_id: テナントID
             conversation_id: 会話ID
             file: FastAPI UploadFile オブジェクト
+            metadata: ファイルメタデータ（フロントエンドから送信）
 
         Returns:
             アップロードされたファイル情報
@@ -121,16 +78,38 @@ class WorkspaceService:
             FileSizeExceededError: ファイルサイズが制限を超えた場合
         """
         content = await file.read()
-        content_type = file.content_type or "application/octet-stream"
-        filename = file.filename or "unnamed"
+        content_type = metadata.content_type
 
-        # upload_files を利用（サイズチェックも含む）
-        results = await self.upload_files(
-            tenant_id,
-            conversation_id,
-            [(filename, content, content_type)],
+        # ファイルタイプ別のサイズ制限を取得
+        max_size = FileTypeClassifier.get_max_file_size(metadata.filename, content_type)
+
+        # ファイルサイズチェック
+        if len(content) > max_size:
+            raise FileSizeExceededError(
+                filename=metadata.filename,
+                size=len(content),
+                max_size=max_size,
+            )
+
+        # フロントエンドで組み立て済みのパスをそのまま使用
+        file_path = f"uploads/{metadata.relative_path}"
+
+        # S3にアップロード
+        await self.s3.upload(tenant_id, conversation_id, file_path, content, content_type)
+
+        # DBに記録（original_relative_path 含む）
+        file_info = await self._save_file_record(
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
+            file_path=file_path,
+            original_name=metadata.original_name,
+            original_relative_path=metadata.original_relative_path,
+            file_size=len(content),
+            content_type=content_type,
+            source="user_upload",
         )
-        return results[0]
+
+        return file_info
 
     async def download_file(
         self,
@@ -519,6 +498,7 @@ class WorkspaceService:
         content_type: str,
         source: str,
         is_presented: bool = False,
+        original_relative_path: Optional[str] = None,
     ) -> ConversationFileInfo:
         """
         ファイルレコードをDBに保存
@@ -532,6 +512,7 @@ class WorkspaceService:
             content_type: MIMEタイプ
             source: ソース
             is_presented: Presentedフラグ
+            original_relative_path: 元の相対パス（表示用）
 
         Returns:
             ファイル情報
@@ -552,6 +533,7 @@ class WorkspaceService:
             is_presented=is_presented,
             checksum=None,  # S3版ではチェックサムは省略
             description=None,
+            original_relative_path=original_relative_path,
             status="active",
         )
         self.db.add(conversation_file)
@@ -713,6 +695,7 @@ class WorkspaceService:
             file_id=conversation_file.file_id,
             file_path=conversation_file.file_path,
             original_name=conversation_file.original_name,
+            original_relative_path=conversation_file.original_relative_path,
             file_size=conversation_file.file_size,
             mime_type=conversation_file.mime_type,
             version=conversation_file.version,

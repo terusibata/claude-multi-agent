@@ -158,6 +158,34 @@ Content-Type: multipart/form-data
 |-----------|-----|------|------|
 | `request_data` | string | ○ | StreamRequestのJSON文字列 |
 | `files` | File[] | - | アップロードするファイル（複数可） |
+| `file_metadata` | string | - | FileUploadMetadataのJSONリスト（デフォルト: `[]`、ファイル添付時は必須） |
+
+### FileUploadMetadata構造
+
+ファイルをアップロードする際は、各ファイルに対応するメタデータを`file_metadata`パラメータで送信する必要があります。
+フロントエンドで識別子付きパスを生成し、バックエンドはそのパスをそのまま使用して保存します。
+
+```typescript
+interface FileUploadMetadata {
+  filename: string;              // 保存用ファイル名（識別子付き）例: route_abcd.ts
+  original_name: string;         // 元のファイル名 例: route.ts
+  relative_path: string;         // 保存用の相対パス（識別子付き）例: api/users/route_abcd.ts
+  original_relative_path: string; // 元の相対パス（表示用）例: api/users/route.ts
+  content_type: string;          // MIMEタイプ
+  size: number;                  // ファイルサイズ（バイト）
+}
+```
+
+### パス識別子の設計
+
+同名ファイル（例: `route.ts`）が複数存在する場合、識別子を付与して区別します：
+
+| 元のパス | 保存用パス |
+|---------|-----------|
+| `api/users/route.ts` | `api/users/route_abcd.ts` |
+| `api/posts/route.ts` | `api/posts/route_efgh.ts` |
+
+識別子はフロントエンドで生成します（例: ランダムな4文字の英数字）。
 
 ### cURLの例
 
@@ -174,7 +202,25 @@ curl -X POST "http://localhost:8000/api/tenants/tenant-001/conversations/550e840
     }
   }' \
   -F "files=@/path/to/document.pdf" \
-  -F "files=@/path/to/data.csv"
+  -F "files=@/path/to/data.csv" \
+  -F 'file_metadata=[
+    {
+      "filename": "document_a1b2.pdf",
+      "original_name": "document.pdf",
+      "relative_path": "document_a1b2.pdf",
+      "original_relative_path": "document.pdf",
+      "content_type": "application/pdf",
+      "size": 102400
+    },
+    {
+      "filename": "data_c3d4.csv",
+      "original_name": "data.csv",
+      "relative_path": "data_c3d4.csv",
+      "original_relative_path": "data.csv",
+      "content_type": "text/csv",
+      "size": 2048
+    }
+  ]'
 ```
 
 ### JavaScriptの例
@@ -193,9 +239,27 @@ const requestData = {
 };
 formData.append('request_data', JSON.stringify(requestData));
 
-// ファイルを追加
-formData.append('files', file1);
-formData.append('files', file2);
+// 識別子生成関数
+const generateId = () => Math.random().toString(36).substring(2, 6);
+
+// ファイルとメタデータを追加
+const files = [file1, file2];
+const metadata = files.map(file => {
+  const ext = file.name.split('.').pop();
+  const baseName = file.name.replace(/\.[^.]+$/, '');
+  const id = generateId();
+  return {
+    filename: `${baseName}_${id}.${ext}`,
+    original_name: file.name,
+    relative_path: `${baseName}_${id}.${ext}`,
+    original_relative_path: file.name,
+    content_type: file.type || 'application/octet-stream',
+    size: file.size
+  };
+});
+
+files.forEach(file => formData.append('files', file));
+formData.append('file_metadata', JSON.stringify(metadata));
 
 const response = await fetch(
   `/api/tenants/${tenantId}/conversations/${conversationId}/stream`,
@@ -209,7 +273,7 @@ const response = await fetch(
 );
 ```
 
-ファイルがアップロードされると、自動的にS3に保存されます。
+ファイルがアップロードされると、メタデータで指定したパスに従ってS3に保存されます。
 
 **注意**: ファイルをアップロードする場合、会話作成時に `workspace_enabled: true` を指定しておく必要があります。
 
@@ -231,8 +295,9 @@ GET /api/tenants/{tenant_id}/conversations/{conversation_id}/files
   "files": [
     {
       "file_id": "a1b2c3d4-...",
-      "file_path": "uploads/data.csv",
+      "file_path": "uploads/data_a1b2.csv",
       "original_name": "data.csv",
+      "original_relative_path": "data.csv",
       "file_size": 2048,
       "mime_type": "text/csv",
       "version": 1,
@@ -245,6 +310,7 @@ GET /api/tenants/{tenant_id}/conversations/{conversation_id}/files
       "file_id": "e5f6g7h8-...",
       "file_path": "outputs/analysis_result.json",
       "original_name": "analysis_result.json",
+      "original_relative_path": null,
       "file_size": 512,
       "mime_type": "application/json",
       "version": 1,
@@ -313,6 +379,7 @@ GET /api/tenants/{tenant_id}/conversations/{conversation_id}/files/presented
       "file_id": "e5f6g7h8-...",
       "file_path": "outputs/analysis_result.xlsx",
       "original_name": "analysis_result.xlsx",
+      "original_relative_path": null,
       "file_size": 1024,
       "mime_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       "version": 1,

@@ -500,6 +500,7 @@ async def stream_conversation(
     conversation_id: str,
     request_data: str = Form(..., description="StreamRequestのJSON文字列"),
     files: list[UploadFile] = File(default=[], description="添付ファイル（複数可、オプション）"),
+    file_metadata: str = Form(default="[]", description="FileUploadMetadataのJSONリスト（ファイル添付時は必須）"),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -511,6 +512,7 @@ async def stream_conversation(
 
     - **request_data**: StreamRequestのJSON文字列
     - **files**: 添付ファイル（複数可、オプション）
+    - **file_metadata**: FileUploadMetadataのJSONリスト（ファイル添付時は必須）
 
     ## StreamRequest JSON フィールド
 
@@ -518,6 +520,15 @@ async def stream_conversation(
     - **executor**: 実行者情報（必須）
     - **tokens**: MCPサーバー用認証情報（オプション）
     - **preferred_skills**: 優先使用するスキル名のリスト（オプション）
+
+    ## FileUploadMetadata JSON フィールド
+
+    - **filename**: 保存用ファイル名（識別子付き）例: route_abcd.ts
+    - **original_name**: 元のファイル名 例: route.ts
+    - **relative_path**: 保存用の相対パス（識別子付き）例: api/users/route_abcd.ts
+    - **original_relative_path**: 元の相対パス（表示用）例: api/users/route.ts
+    - **content_type**: MIMEタイプ
+    - **size**: ファイルサイズ（バイト）
 
     ## レスポンス
 
@@ -577,18 +588,41 @@ async def stream_conversation(
 
     # ファイルがある場合はワークスペースにアップロード
     if files and conversation.workspace_enabled:
+        # メタデータをパース
+        from app.schemas.workspace import FileUploadMetadata
+
+        try:
+            metadata_list_raw = json.loads(file_metadata)
+        except json.JSONDecodeError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"file_metadataのパースに失敗しました: {str(e)}",
+            )
+
+        # ファイル数とメタデータ数の整合性チェック
+        if len(files) != len(metadata_list_raw):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"ファイル数（{len(files)}）とメタデータ数（{len(metadata_list_raw)}）が一致しません",
+            )
+
+        # メタデータをバリデーション
+        try:
+            metadata_list = [FileUploadMetadata(**m) for m in metadata_list_raw]
+        except ValidationError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"メタデータのバリデーションに失敗しました: {str(e)}",
+            )
+
         workspace_service = WorkspaceService(db)
         try:
-            for file in files:
-                if not file.filename:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="ファイル名が指定されていません",
-                    )
-                await workspace_service.upload_user_file(
+            for file, metadata in zip(files, metadata_list):
+                await workspace_service.upload_user_file_with_metadata(
                     tenant_id=tenant_id,
                     conversation_id=conversation_id,
                     file=file,
+                    metadata=metadata,
                 )
             await db.commit()
         except HTTPException:

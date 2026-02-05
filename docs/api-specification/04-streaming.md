@@ -29,6 +29,25 @@ AIエージェント実行のリアルタイムストリーミングを提供す
 |-----------|-----|------|------|
 | `request_data` | string (JSON) | Yes | StreamRequestのJSON文字列 |
 | `files` | File[] | No | 添付ファイル（複数可） |
+| `file_metadata` | string (JSON) | No | FileUploadMetadataのJSONリスト（デフォルト: `[]`、ファイル添付時は必須） |
+
+### FileUploadMetadata構造
+
+ファイルをアップロードする際は、各ファイルに対応するメタデータを送信する必要があります。
+
+```typescript
+interface FileUploadMetadata {
+  filename: string;              // 保存用ファイル名（識別子付き）例: route_abcd.ts
+  original_name: string;         // 元のファイル名 例: route.ts
+  relative_path: string;         // 保存用の相対パス（識別子付き）例: api/users/route_abcd.ts
+  original_relative_path: string; // 元の相対パス（表示用）例: api/users/route.ts
+  content_type: string;          // MIMEタイプ
+  size: number;                  // ファイルサイズ（バイト）
+}
+```
+
+> **設計方針**: フロントエンドで識別子付きパスを生成し、バックエンドはそのパスをそのまま使用して保存します。
+> これにより、同名ファイル（例: `route.ts`）が複数存在する場合でも区別できます。
 
 ### StreamRequest JSON構造
 
@@ -62,7 +81,15 @@ curl -X POST "https://api.example.com/api/tenants/acme-corp/conversations/550e84
     },
     "preferred_skills": ["data-analysis"]
   }' \
-  -F 'files=@data.csv'
+  -F 'files=@data.csv' \
+  -F 'file_metadata=[{
+    "filename": "data_a1b2.csv",
+    "original_name": "data.csv",
+    "relative_path": "data_a1b2.csv",
+    "original_relative_path": "data.csv",
+    "content_type": "text/csv",
+    "size": 10240
+  }]'
 ```
 
 ---
