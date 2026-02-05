@@ -41,8 +41,9 @@ S3をバックエンドとしてファイルの保存・取得を提供します
 ```typescript
 interface ConversationFileInfo {
   file_id: string;                          // ファイルID
-  file_path: string;                        // ワークスペース内のファイルパス
+  file_path: string;                        // ワークスペース内のファイルパス（識別子付き）
   original_name: string;                    // 元のファイル名
+  original_relative_path: string | null;    // 元の相対パス（表示用）例: api/users/route.ts
   file_size: number;                        // ファイルサイズ（バイト）
   mime_type: string | null;                 // MIMEタイプ
   version: number;                          // バージョン番号
@@ -54,6 +55,10 @@ interface ConversationFileInfo {
   updated_at: string;                       // 更新日時
 }
 ```
+
+> **パスの説明**:
+> - `file_path`: S3保存用パス（識別子付き）。例: `uploads/api/users/route_abcd.ts`
+> - `original_relative_path`: 表示用の元パス。例: `api/users/route.ts`
 
 ### ファイルソースの説明
 
@@ -92,8 +97,9 @@ AIがユーザーにダウンロードしてほしいとマークしたファイ
   "files": [
     {
       "file_id": "file-001",
-      "file_path": "uploads/data.csv",
+      "file_path": "uploads/data_a1b2.csv",
       "original_name": "data.csv",
+      "original_relative_path": "data.csv",
       "file_size": 10240,
       "mime_type": "text/csv",
       "version": 1,
@@ -108,6 +114,7 @@ AIがユーザーにダウンロードしてほしいとマークしたファイ
       "file_id": "file-002",
       "file_path": "outputs/analysis_result.csv",
       "original_name": "analysis_result.csv",
+      "original_relative_path": null,
       "file_size": 5120,
       "mime_type": "text/csv",
       "version": 1,
@@ -230,6 +237,7 @@ AIがユーザーに提示したファイル（Presentedファイル）の一覧
       "file_id": "file-002",
       "file_path": "outputs/analysis_result.csv",
       "original_name": "analysis_result.csv",
+      "original_relative_path": null,
       "file_size": 5120,
       "mime_type": "text/csv",
       "version": 1,
@@ -244,6 +252,7 @@ AIがユーザーに提示したファイル（Presentedファイル）の一覧
       "file_id": "file-003",
       "file_path": "outputs/report.md",
       "original_name": "report.md",
+      "original_relative_path": null,
       "file_size": 2048,
       "mime_type": "text/markdown",
       "version": 1,

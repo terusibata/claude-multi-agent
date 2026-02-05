@@ -36,6 +36,8 @@ class AIContextBuilder:
         files = [
             {
                 "path": f.file_path,
+                "original_name": f.original_name,
+                "original_relative_path": f.original_relative_path,
                 "size": f.file_size,
                 "type": f.mime_type or "unknown",
                 "source": f.source,
@@ -152,6 +154,10 @@ class AIContextBuilder:
             source = "📤" if f["source"] == "user_upload" else "🤖"
             desc = f" - {f['description']}" if f.get("description") else ""
             lines.append(f"  {source} {f['path']} ({size_str}){desc}")
+            # 元パスがある場合は追加表示
+            original_path = f.get("original_relative_path")
+            if original_path:
+                lines.append(f"     └── 元ファイル: {original_path}")
 
         return "\n".join(lines)
 

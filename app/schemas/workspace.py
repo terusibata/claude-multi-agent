@@ -8,12 +8,24 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 
+class FileUploadMetadata(BaseModel):
+    """ファイルアップロード時のメタデータ（フロントエンドから送信）"""
+
+    filename: str = Field(..., description="保存用ファイル名（識別子付き）例: route_abcd.ts")
+    original_name: str = Field(..., description="元のファイル名 例: route.ts")
+    relative_path: str = Field(..., description="保存用の相対パス（識別子付き）例: api/users/route_abcd.ts")
+    original_relative_path: str = Field(..., description="元の相対パス（表示用）例: api/users/route.ts")
+    content_type: str = Field(default="application/octet-stream", description="MIMEタイプ")
+    size: int = Field(..., description="ファイルサイズ（バイト）")
+
+
 class ConversationFileInfo(BaseModel):
     """会話ファイル情報"""
 
     file_id: str = Field(..., description="ファイルID")
     file_path: str = Field(..., description="ワークスペース内のファイルパス")
     original_name: str = Field(..., description="元のファイル名")
+    original_relative_path: Optional[str] = Field(None, description="元の相対パス（表示用）例: api/users/route.ts")
     file_size: int = Field(..., description="ファイルサイズ（バイト）")
     mime_type: Optional[str] = Field(None, description="MIMEタイプ")
     version: int = Field(..., description="バージョン番号")
