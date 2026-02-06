@@ -2,30 +2,29 @@
 リクエストトレーシングミドルウェア
 
 分散システムでのリクエスト追跡を実現
+
+純粋なASGIミドルウェアとして実装し、SSEストリーミングとの互換性を確保
 """
 import time
 import uuid
-from typing import Callable
 
 import structlog
-from fastapi import Request, Response
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from structlog.contextvars import bind_contextvars, clear_contextvars
 
 logger = structlog.get_logger(__name__)
 
 
-class TracingMiddleware(BaseHTTPMiddleware):
+class TracingMiddleware:
     """
-    リクエストトレーシングミドルウェア
+    リクエストトレーシングミドルウェア（純粋なASGI実装）
 
     各リクエストに一意のIDを付与し、ログとレスポンスヘッダーで追跡可能にする
     """
 
-    # リクエストIDヘッダー名
-    REQUEST_ID_HEADER = "X-Request-ID"
-    # 処理時間ヘッダー名
-    PROCESS_TIME_HEADER = "X-Process-Time"
+    REQUEST_ID_HEADER = b"x-request-id"
+    PROCESS_TIME_HEADER = b"x-process-time"
 
     # ログ出力をスキップするパス
     SKIP_LOG_PATHS = {
@@ -34,20 +33,16 @@ class TracingMiddleware(BaseHTTPMiddleware):
         "/health/ready",
     }
 
-    def __init__(self, app, log_requests: bool = True):
-        """
-        初期化
-
-        Args:
-            app: FastAPIアプリケーション
-            log_requests: リクエストログを出力するか
-        """
-        super().__init__(app)
+    def __init__(self, app: ASGIApp, log_requests: bool = True):
+        self.app = app
         self.log_requests = log_requests
 
-    def _generate_request_id(self) -> str:
-        """リクエストIDを生成"""
-        return str(uuid.uuid4())
+    def _get_headers_dict(self, scope: Scope) -> dict[str, str]:
+        """scopeからヘッダー辞書を取得"""
+        return dict(
+            (k.decode("latin-1"), v.decode("latin-1"))
+            for k, v in scope.get("headers", [])
+        )
 
     def _should_log(self, path: str) -> bool:
         """ログ出力すべきパスか判定"""
@@ -55,13 +50,16 @@ class TracingMiddleware(BaseHTTPMiddleware):
             return False
         return path not in self.SKIP_LOG_PATHS
 
-    async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        """リクエストを処理"""
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        headers = self._get_headers_dict(scope)
+        path = scope.get("path", "")
+
         # リクエストIDを取得または生成
-        request_id = request.headers.get(
-            self.REQUEST_ID_HEADER,
-            self._generate_request_id(),
-        )
+        request_id = headers.get("x-request-id", str(uuid.uuid4()))
 
         # 処理開始時刻
         start_time = time.perf_counter()
@@ -70,16 +68,14 @@ class TracingMiddleware(BaseHTTPMiddleware):
         clear_contextvars()
         bind_contextvars(
             request_id=request_id,
-            method=request.method,
-            path=request.url.path,
+            method=scope.get("method", ""),
+            path=path,
         )
 
         # ヘッダーから識別情報を取得してコンテキストに追加
-        # AI実行系API用: X-Tenant-ID + X-User-ID
-        tenant_id = request.headers.get("X-Tenant-ID")
-        user_id = request.headers.get("X-User-ID")
-        # 管理系API用: X-Admin-ID
-        admin_id = request.headers.get("X-Admin-ID")
+        tenant_id = headers.get("x-tenant-id")
+        user_id = headers.get("x-user-id")
+        admin_id = headers.get("x-admin-id")
 
         if tenant_id:
             bind_contextvars(tenant_id=tenant_id)
@@ -88,41 +84,44 @@ class TracingMiddleware(BaseHTTPMiddleware):
         if admin_id:
             bind_contextvars(admin_id=admin_id)
 
-        # リクエストをstateに保存（他のハンドラから参照可能）
-        request.state.request_id = request_id
+        # request.stateにrequest_idを保存するためscopeに追加
+        if "state" not in scope:
+            scope["state"] = {}
+        scope["state"]["request_id"] = request_id
 
-        # リクエストログ
-        should_log = self._should_log(request.url.path)
+        should_log = self._should_log(path)
         if should_log:
+            client = scope.get("client")
+            client_ip = client[0] if client else "unknown"
             logger.info(
                 "リクエスト受信",
-                client_ip=request.client.host if request.client else "unknown",
-                user_agent=request.headers.get("User-Agent", "unknown"),
+                client_ip=client_ip,
+                user_agent=headers.get("user-agent", "unknown"),
             )
 
-        try:
-            # リクエストを処理
-            response = await call_next(request)
+        request_id_bytes = request_id.encode("latin-1")
 
-            # 処理時間を計算
-            process_time = time.perf_counter() - start_time
-
-            # レスポンスヘッダーを追加
-            response.headers[self.REQUEST_ID_HEADER] = request_id
-            response.headers[self.PROCESS_TIME_HEADER] = f"{process_time:.4f}"
-
-            # レスポンスログ
-            if should_log:
-                logger.info(
-                    "レスポンス送信",
-                    status_code=response.status_code,
-                    process_time_ms=round(process_time * 1000, 2),
+        async def send_with_tracing(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                process_time = time.perf_counter() - start_time
+                existing_headers = list(message.get("headers", []))
+                existing_headers.append([self.REQUEST_ID_HEADER, request_id_bytes])
+                existing_headers.append(
+                    [self.PROCESS_TIME_HEADER, f"{process_time:.4f}".encode("latin-1")]
                 )
+                message = {**message, "headers": existing_headers}
 
-            return response
+                if should_log:
+                    logger.info(
+                        "レスポンス送信",
+                        status_code=message.get("status"),
+                        process_time_ms=round(process_time * 1000, 2),
+                    )
+            await send(message)
 
+        try:
+            await self.app(scope, receive, send_with_tracing)
         except Exception as e:
-            # エラーログ
             process_time = time.perf_counter() - start_time
             logger.error(
                 "リクエスト処理エラー",
@@ -132,7 +131,5 @@ class TracingMiddleware(BaseHTTPMiddleware):
                 exc_info=True,
             )
             raise
-
         finally:
-            # コンテキストをクリア
             clear_contextvars()

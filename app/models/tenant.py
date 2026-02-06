@@ -45,7 +45,14 @@ class Tenant(Base):
     )
 
     # リレーションシップ
-    model = relationship("Model", lazy="selectin")
+    model = relationship("Model", lazy="noload")
+    conversations = relationship(
+        "Conversation",
+        back_populates="tenant",
+        lazy="noload",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
     def __repr__(self) -> str:
         return f"<Tenant(tenant_id={self.tenant_id})>"

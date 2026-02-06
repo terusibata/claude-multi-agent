@@ -126,12 +126,16 @@ class TenantService:
         await self.db.refresh(tenant)
         return tenant
 
-    async def delete(self, tenant_id: str) -> bool:
+    async def delete(self, tenant_id: str, hard_delete: bool = False) -> bool:
         """
-        テナントを削除
+        テナントを削除（デフォルトはソフトデリート）
+
+        ソフトデリート: status を "deleted" に変更（データは残る）
+        ハードデリート: 関連データ含め物理削除（カスケード削除で会話も削除される）
 
         Args:
             tenant_id: テナントID
+            hard_delete: 物理削除を行うか（デフォルトはFalse）
 
         Returns:
             削除成功かどうか
@@ -140,5 +144,9 @@ class TenantService:
         if not tenant:
             return False
 
-        await self.db.delete(tenant)
+        if hard_delete:
+            await self.db.delete(tenant)
+        else:
+            tenant.status = "deleted"
+            await self.db.flush()
         return True

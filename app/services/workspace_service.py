@@ -77,25 +77,47 @@ class WorkspaceService:
         Raises:
             FileSizeExceededError: ファイルサイズが制限を超えた場合
         """
-        content = await file.read()
         content_type = metadata.content_type
 
         # ファイルタイプ別のサイズ制限を取得
         max_size = FileTypeClassifier.get_max_file_size(metadata.filename, content_type)
 
-        # ファイルサイズチェック
-        if len(content) > max_size:
+        # ファイルサイズチェック（metadata.sizeを信頼しつつ、実際のサイズも検証）
+        if metadata.size > max_size:
             raise FileSizeExceededError(
                 filename=metadata.filename,
-                size=len(content),
+                size=metadata.size,
                 max_size=max_size,
             )
+
+        # SpooledTemporaryFileでディスクバッファリング（1MB以上はディスクへ退避）
+        import tempfile
+        spool = tempfile.SpooledTemporaryFile(max_size=1024 * 1024)
+        total_size = 0
+        chunk_size = 64 * 1024  # 64KB
+        while True:
+            chunk = await file.read(chunk_size)
+            if not chunk:
+                break
+            total_size += len(chunk)
+            if total_size > max_size:
+                spool.close()
+                raise FileSizeExceededError(
+                    filename=metadata.filename,
+                    size=total_size,
+                    max_size=max_size,
+                )
+            spool.write(chunk)
+        spool.seek(0)
 
         # フロントエンドで組み立て済みのパスをそのまま使用
         file_path = f"uploads/{metadata.relative_path}"
 
-        # S3にアップロード
-        await self.s3.upload(tenant_id, conversation_id, file_path, content, content_type)
+        # S3にストリームアップロード（メモリ効率的）
+        await self.s3.upload_stream(
+            tenant_id, conversation_id, file_path, spool, content_type, total_size,
+        )
+        spool.close()
 
         # DBに記録（original_relative_path 含む）
         file_info = await self._save_file_record(
@@ -104,7 +126,7 @@ class WorkspaceService:
             file_path=file_path,
             original_name=metadata.original_name,
             original_relative_path=metadata.original_relative_path,
-            file_size=len(content),
+            file_size=total_size,
             content_type=content_type,
             source="user_upload",
         )

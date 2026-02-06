@@ -12,7 +12,6 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy.pool import Pool
 
 from app.config import get_settings
 
@@ -45,7 +44,8 @@ engine = create_async_engine(
 
 
 # コネクションプールのイベントリスナー（監視用）
-@event.listens_for(Pool, "checkout")
+# engine.pool（特定インスタンス）に登録し、テスト時の副作用を防止
+@event.listens_for(engine.sync_engine.pool, "checkout")
 def on_checkout(dbapi_connection, connection_record, connection_proxy):
     """接続がプールからチェックアウトされた時"""
     logger.debug(
@@ -54,7 +54,7 @@ def on_checkout(dbapi_connection, connection_record, connection_proxy):
     )
 
 
-@event.listens_for(Pool, "checkin")
+@event.listens_for(engine.sync_engine.pool, "checkin")
 def on_checkin(dbapi_connection, connection_record):
     """接続がプールに返却された時"""
     logger.debug(
@@ -63,7 +63,7 @@ def on_checkin(dbapi_connection, connection_record):
     )
 
 
-@event.listens_for(Pool, "connect")
+@event.listens_for(engine.sync_engine.pool, "connect")
 def on_connect(dbapi_connection, connection_record):
     """新しい接続が作成された時"""
     logger.info(
@@ -72,7 +72,7 @@ def on_connect(dbapi_connection, connection_record):
     )
 
 
-@event.listens_for(Pool, "invalidate")
+@event.listens_for(engine.sync_engine.pool, "invalidate")
 def on_invalidate(dbapi_connection, connection_record, exception):
     """接続が無効化された時"""
     logger.warning(

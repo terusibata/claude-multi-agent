@@ -221,6 +221,14 @@ def with_retry(
 
 
 # Bedrock用のリトライ設定
+# botocore の ThrottlingException, ServiceUnavailableException 等の一時的エラーのみリトライ
+from botocore.exceptions import (
+    ClientError as BotocoreClientError,
+    EndpointConnectionError,
+    ReadTimeoutError,
+    ConnectTimeoutError,
+)
+
 BEDROCK_RETRY_CONFIG = RetryConfig(
     max_attempts=3,
     base_delay=1.0,
@@ -228,7 +236,12 @@ BEDROCK_RETRY_CONFIG = RetryConfig(
     exponential_base=2.0,
     jitter=True,
     retryable_exceptions=(
-        Exception,  # botocore の例外は汎用的にキャッチ
+        BotocoreClientError,
+        EndpointConnectionError,
+        ReadTimeoutError,
+        ConnectTimeoutError,
+        ConnectionError,
+        TimeoutError,
     ),
 )
 
@@ -240,11 +253,22 @@ S3_RETRY_CONFIG = RetryConfig(
     exponential_base=2.0,
     jitter=True,
     retryable_exceptions=(
-        Exception,
+        BotocoreClientError,
+        EndpointConnectionError,
+        ReadTimeoutError,
+        ConnectTimeoutError,
+        ConnectionError,
+        TimeoutError,
     ),
 )
 
 # Redis用のリトライ設定
+from redis.exceptions import (
+    ConnectionError as RedisConnectionError,
+    TimeoutError as RedisTimeoutError,
+    BusyLoadingError,
+)
+
 REDIS_RETRY_CONFIG = RetryConfig(
     max_attempts=3,
     base_delay=0.1,
@@ -252,11 +276,21 @@ REDIS_RETRY_CONFIG = RetryConfig(
     exponential_base=2.0,
     jitter=True,
     retryable_exceptions=(
-        Exception,
+        RedisConnectionError,
+        RedisTimeoutError,
+        BusyLoadingError,
+        ConnectionError,
+        TimeoutError,
     ),
 )
 
 # DB用のリトライ設定
+from sqlalchemy.exc import (
+    OperationalError,
+    InterfaceError,
+    DisconnectionError,
+)
+
 DB_RETRY_CONFIG = RetryConfig(
     max_attempts=3,
     base_delay=0.5,
@@ -264,6 +298,10 @@ DB_RETRY_CONFIG = RetryConfig(
     exponential_base=2.0,
     jitter=True,
     retryable_exceptions=(
-        Exception,
+        OperationalError,
+        InterfaceError,
+        DisconnectionError,
+        ConnectionError,
+        TimeoutError,
     ),
 )

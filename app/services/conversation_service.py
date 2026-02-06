@@ -225,8 +225,8 @@ class ConversationService:
         if not conversation:
             return None
 
-        conversation.total_input_tokens = total_input_tokens
-        conversation.total_output_tokens = total_output_tokens
+        conversation.total_input_tokens += total_input_tokens
+        conversation.total_output_tokens += total_output_tokens
         conversation.estimated_context_tokens = estimated_context_tokens
         conversation.context_limit_reached = context_limit_reached
 

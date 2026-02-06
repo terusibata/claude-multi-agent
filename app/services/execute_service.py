@@ -11,6 +11,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.database import async_session_maker
 from app.models.model import Model
 from app.models.tenant import Tenant
 from app.schemas.execute import ExecuteRequest
@@ -50,11 +51,16 @@ logger = structlog.get_logger(__name__)
 
 
 class ExecuteService:
-    """エージェント実行サービスクラス"""
+    """エージェント実行サービスクラス
 
-    def __init__(self, db: AsyncSession):
+    SSEストリーミング中のDBセッション枯渇を防ぐため、
+    リクエストスコープのセッションを受け取らず、
+    execute_streaming()内で自前のセッションを管理する。
+    """
+
+    def _init_services(self, db: AsyncSession) -> None:
         """
-        初期化
+        DBセッションに紐づくサービス群を初期化
 
         Args:
             db: データベースセッション
@@ -82,6 +88,10 @@ class ExecuteService:
         """
         エージェントをストリーミング実行
 
+        リクエストスコープのDBセッションではなく、自前のセッションを使用する。
+        これにより、SSEストリーミング期間中にリクエストのDBセッションを
+        占有してコネクションプールが枯渇することを防ぐ。
+
         Args:
             request: 実行リクエスト
             tenant: テナント
@@ -104,105 +114,111 @@ class ExecuteService:
         # シーケンス番号カウンターを初期化
         seq_counter = SequenceCounter()
 
-        # コンテキスト制限チェック（リクエスト時）
-        context_check_error = await self._check_context_limit_before_execution(
-            context, seq_counter
-        )
-        if context_check_error:
-            yield context_check_error
-            yield self._create_error_result(
-                context,
-                ["コンテキスト制限に達しています。新しいチャットを開始してください。"],
-                seq_counter,
+        # 自前のDBセッションを作成してサービス群を初期化
+        async with async_session_maker() as db:
+            self._init_services(db)
+
+            # コンテキスト制限チェック（リクエスト時）
+            context_check_error = await self._check_context_limit_before_execution(
+                context, seq_counter
             )
-            return
+            if context_check_error:
+                yield context_check_error
+                yield self._create_error_result(
+                    context,
+                    ["コンテキスト制限に達しています。新しいチャットを開始してください。"],
+                    seq_counter,
+                )
+                return
 
-        # 会話ロックを取得
-        lock_manager = get_conversation_lock_manager()
-        try:
-            await lock_manager.acquire(context.conversation_id)
-        except ConversationLockError as e:
-            logger.warning(
-                "会話ロック取得失敗",
-                conversation_id=context.conversation_id,
-                error=str(e),
-            )
-            yield format_error_event(
-                seq=seq_counter.next(),
-                error_type="conversation_locked",
-                message="会話は現在使用中です。しばらくしてから再試行してください。",
-                recoverable=True,
-            )
-            yield self._create_error_result(context, [str(e)], seq_counter)
-            return
-
-        logger.info(
-            "エージェント実行開始",
-            tenant_id=context.tenant_id,
-            conversation_id=context.conversation_id,
-            model_id=model.model_id,
-        )
-
-        execution_success = False
-        try:
-            # オプション構築
-            options = await self.options_builder.build(context, request.tokens)
-            logger.info("SDK options", options=sanitize_sdk_options(options))
-
-            # ターン番号とメッセージ順序取得
-            context.turn_number = await self.conversation_service.get_latest_turn_number(
-                context.conversation_id
-            ) + 1
-            context.message_seq = await self.conversation_service.get_max_message_seq(
-                context.conversation_id
-            )
-
-            # SDKインポートと実行
-            async for event in self._execute_with_sdk(context, options, tool_tracker, seq_counter):
-                yield event
-
-            execution_success = True
-
-        except Exception as e:
-            for event in self._handle_error(e, context, tool_tracker, seq_counter):
-                yield event
-
-        finally:
-            # 会話ロックを解放
+            # 会話ロックを取得
+            lock_manager = get_conversation_lock_manager()
+            lock_token: str | None = None
             try:
-                await lock_manager.release(context.conversation_id)
-            except Exception as lock_error:
-                logger.error(
-                    "会話ロック解放エラー",
-                    error=str(lock_error),
+                lock_token = await lock_manager.acquire(context.conversation_id)
+            except ConversationLockError as e:
+                logger.warning(
+                    "会話ロック取得失敗",
                     conversation_id=context.conversation_id,
+                    error=str(e),
+                )
+                yield format_error_event(
+                    seq=seq_counter.next(),
+                    error_type="conversation_locked",
+                    message="会話は現在使用中です。しばらくしてから再試行してください。",
+                    recoverable=True,
+                )
+                yield self._create_error_result(context, [str(e)], seq_counter)
+                return
+
+            logger.info(
+                "エージェント実行開始",
+                tenant_id=context.tenant_id,
+                conversation_id=context.conversation_id,
+                model_id=model.model_id,
+            )
+
+            execution_success = False
+            try:
+                # オプション構築
+                options = await self.options_builder.build(context, request.tokens)
+                logger.info("SDK options", options=sanitize_sdk_options(options))
+
+                # ターン番号とメッセージ順序取得
+                context.turn_number = await self.conversation_service.get_latest_turn_number(
+                    context.conversation_id
+                ) + 1
+                context.message_seq = await self.conversation_service.get_max_message_seq(
+                    context.conversation_id
                 )
 
-            if execution_success:
-                # 正常終了時のみcommit
-                try:
-                    await self.db.commit()
-                except Exception as commit_error:
-                    logger.error(
-                        "コミットエラー",
-                        error=str(commit_error),
-                        conversation_id=context.conversation_id,
-                    )
-                    await self.db.rollback()
-            else:
-                # エラー発生時はrollback
-                try:
-                    await self.db.rollback()
-                    logger.info(
-                        "トランザクションをロールバック",
-                        conversation_id=context.conversation_id,
-                    )
-                except Exception as rollback_error:
-                    logger.error(
-                        "ロールバックエラー",
-                        error=str(rollback_error),
-                        conversation_id=context.conversation_id,
-                    )
+                # SDKインポートと実行
+                async for event in self._execute_with_sdk(context, options, tool_tracker, seq_counter):
+                    yield event
+
+                execution_success = True
+
+            except Exception as e:
+                for event in self._handle_error(e, context, tool_tracker, seq_counter):
+                    yield event
+
+            finally:
+                # 会話ロックを解放
+                if lock_token:
+                    try:
+                        await lock_manager.release(context.conversation_id, lock_token)
+                    except Exception as lock_error:
+                        logger.error(
+                            "会話ロック解放エラー",
+                            error=str(lock_error),
+                            conversation_id=context.conversation_id,
+                        )
+
+                if execution_success:
+                    # 正常終了時のみcommit
+                    try:
+                        await db.commit()
+                    except Exception as commit_error:
+                        logger.error(
+                            "コミットエラー",
+                            error=str(commit_error),
+                            conversation_id=context.conversation_id,
+                        )
+                        await db.rollback()
+                else:
+                    # エラー発生時はrollback
+                    try:
+                        await db.rollback()
+                        logger.info(
+                            "トランザクションをロールバック",
+                            conversation_id=context.conversation_id,
+                        )
+                    except Exception as rollback_error:
+                        logger.error(
+                            "ロールバックエラー",
+                            error=str(rollback_error),
+                            conversation_id=context.conversation_id,
+                        )
 
     async def _execute_with_sdk(
         self,

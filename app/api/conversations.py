@@ -467,8 +467,15 @@ async def _event_generator(
     except asyncio.CancelledError:
         logger.info(
             f"Client disconnected for conversation {request.conversation_id}, "
-            "but background execution continues"
+            "cancelling background task"
         )
+        background_task.cancel()
+        try:
+            await background_task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            pass
         raise
     except Exception as e:
         logger.error(
@@ -486,9 +493,16 @@ async def _event_generator(
         raise
     finally:
         if not background_task.done():
-            logger.info(
-                f"Background task continues for conversation {request.conversation_id}"
+            logger.warning(
+                f"Cancelling orphaned background task for conversation {request.conversation_id}"
             )
+            background_task.cancel()
+            try:
+                await background_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
 
 
 @router.post(
@@ -656,8 +670,8 @@ async def stream_conversation(
         preferred_skills=stream_request.preferred_skills,
     )
 
-    # 実行サービスの作成
-    execute_service = ExecuteService(db)
+    # 実行サービスの作成（自前でDBセッションを管理するためdbは渡さない）
+    execute_service = ExecuteService()
 
     # SSEレスポンスを返す
     return EventSourceResponse(

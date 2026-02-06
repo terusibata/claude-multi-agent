@@ -12,6 +12,7 @@ import structlog
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database import async_session_maker
 from app.models.model import Model
 from app.models.simple_chat import SimpleChat
 from app.models.simple_chat_message import SimpleChatMessage
@@ -265,9 +266,22 @@ class SimpleChatService:
         content: str,
     ) -> SimpleChatMessage:
         """
+        メッセージを保存（リクエストスコープのセッション使用）
+        """
+        return await self._save_message_with_db(self.db, chat_id, role, content)
+
+    async def _save_message_with_db(
+        self,
+        db: AsyncSession,
+        chat_id: str,
+        role: str,
+        content: str,
+    ) -> SimpleChatMessage:
+        """
         メッセージを保存
 
         Args:
+            db: データベースセッション
             chat_id: チャットID
             role: ロール (user / assistant)
             content: メッセージ内容
@@ -280,7 +294,7 @@ class SimpleChatService:
             select(func.max(SimpleChatMessage.message_seq))
             .where(SimpleChatMessage.chat_id == chat_id)
         )
-        result = await self.db.execute(max_seq_query)
+        result = await db.execute(max_seq_query)
         max_seq = result.scalar() or 0
 
         message = SimpleChatMessage(
@@ -290,9 +304,41 @@ class SimpleChatService:
             role=role,
             content=content,
         )
-        self.db.add(message)
-        await self.db.flush()
+        db.add(message)
+        await db.flush()
         return message
+
+    async def _get_messages_with_db(
+        self,
+        db: AsyncSession,
+        chat_id: str,
+    ) -> list[SimpleChatMessage]:
+        """メッセージ一覧を取得（指定セッション使用）"""
+        query = (
+            select(SimpleChatMessage)
+            .where(SimpleChatMessage.chat_id == chat_id)
+            .order_by(SimpleChatMessage.message_seq)
+        )
+        result = await db.execute(query)
+        return list(result.scalars().all())
+
+    async def _update_chat_title_with_db(
+        self,
+        db: AsyncSession,
+        chat_id: str,
+        tenant_id: str,
+        title: str,
+    ) -> None:
+        """チャットタイトルを更新（指定セッション使用）"""
+        query = select(SimpleChat).where(
+            SimpleChat.chat_id == chat_id,
+            SimpleChat.tenant_id == tenant_id,
+        )
+        result = await db.execute(query)
+        chat = result.scalar_one_or_none()
+        if chat:
+            chat.title = title
+            await db.flush()
 
     # ============================================
     # ストリーミング実行
@@ -307,6 +353,9 @@ class SimpleChatService:
         """
         メッセージを送信してストリーミング応答を取得
 
+        SSEストリーミング中のDBセッション枯渇を防ぐため、
+        リクエストスコープのセッションではなく自前のセッションを使用する。
+
         Args:
             chat: チャット
             model: モデル
@@ -318,69 +367,74 @@ class SimpleChatService:
         seq = 1
 
         try:
-            # ユーザーメッセージを保存
-            await self._save_message(chat.chat_id, "user", user_message)
+            async with async_session_maker() as db:
+                usage_service = UsageService(db)
 
-            # 過去のメッセージ履歴を取得
-            messages = await self.get_messages(chat.chat_id)
-            message_history = [
-                {"role": msg.role, "content": msg.content}
-                for msg in messages
-            ]
+                # ユーザーメッセージを保存
+                await self._save_message_with_db(db, chat.chat_id, "user", user_message)
+                await db.commit()
 
-            # タイトルが未設定かチェック（初回判定）
-            is_first_message = chat.title is None
+                # 過去のメッセージ履歴を取得
+                messages = await self._get_messages_with_db(db, chat.chat_id)
+                message_history = [
+                    {"role": msg.role, "content": msg.content}
+                    for msg in messages
+                ]
 
-            # アシスタント応答を収集
-            assistant_response = ""
-            input_tokens = 0
-            output_tokens = 0
+                # タイトルが未設定かチェック（初回判定）
+                is_first_message = chat.title is None
 
-            # Bedrock APIでストリーミング
-            async for chunk in self.bedrock_client.stream_chat(
-                model_id=model.bedrock_model_id,
-                system_prompt=chat.system_prompt,
-                messages=message_history,
-            ):
-                if chunk.type == "text_delta" and chunk.content:
-                    assistant_response += chunk.content
-                    yield {
-                        "seq": seq,
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "event_type": "text_delta",
-                        "content": chunk.content,
-                    }
-                    seq += 1
+                # アシスタント応答を収集
+                assistant_response = ""
+                input_tokens = 0
+                output_tokens = 0
 
-                elif chunk.type == "metadata":
-                    input_tokens = chunk.input_tokens
-                    output_tokens = chunk.output_tokens
+                # Bedrock APIでストリーミング
+                async for chunk in self.bedrock_client.stream_chat(
+                    model_id=model.bedrock_model_id,
+                    system_prompt=chat.system_prompt,
+                    messages=message_history,
+                ):
+                    if chunk.type == "text_delta" and chunk.content:
+                        assistant_response += chunk.content
+                        yield {
+                            "seq": seq,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "event_type": "text_delta",
+                            "content": chunk.content,
+                        }
+                        seq += 1
 
-            # アシスタント応答を保存
-            await self._save_message(chat.chat_id, "assistant", assistant_response)
+                    elif chunk.type == "metadata":
+                        input_tokens = chunk.input_tokens
+                        output_tokens = chunk.output_tokens
 
-            # タイトル生成（初回のみ）
-            # イベントループのブロックを防止するため、同期的なBedrock呼び出しを別スレッドで実行
-            title = None
-            if is_first_message and assistant_response:
-                title = await asyncio.to_thread(
-                    self.title_generator.generate, user_message, assistant_response
+                # アシスタント応答を保存
+                await self._save_message_with_db(db, chat.chat_id, "assistant", assistant_response)
+
+                # タイトル生成（初回のみ）
+                title = None
+                if is_first_message and assistant_response:
+                    title = await asyncio.to_thread(
+                        self.title_generator.generate, user_message, assistant_response
+                    )
+                    await self._update_chat_title_with_db(db, chat.chat_id, chat.tenant_id, title)
+
+                # コスト計算
+                cost_usd = self._calculate_cost(model, input_tokens, output_tokens)
+
+                # 使用状況ログを保存
+                await usage_service.save_usage_log(
+                    tenant_id=chat.tenant_id,
+                    user_id=chat.user_id,
+                    model_id=chat.model_id,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cost_usd=cost_usd,
+                    simple_chat_id=chat.chat_id,
                 )
-                await self.update_chat_title(chat.chat_id, chat.tenant_id, title)
 
-            # コスト計算
-            cost_usd = self._calculate_cost(model, input_tokens, output_tokens)
-
-            # 使用状況ログを保存
-            await self.usage_service.save_usage_log(
-                tenant_id=chat.tenant_id,
-                user_id=chat.user_id,
-                model_id=chat.model_id,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                cost_usd=cost_usd,
-                simple_chat_id=chat.chat_id,
-            )
+                await db.commit()
 
             # 完了イベント
             yield {

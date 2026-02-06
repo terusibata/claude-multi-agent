@@ -106,12 +106,13 @@ class Conversation(Base):
     )
 
     # リレーションシップ
-    tenant: Mapped["Tenant"] = relationship("Tenant", lazy="selectin")
-    model: Mapped["Model"] = relationship("Model", lazy="selectin")
+    # デフォルトはnoload（必要な箇所でselectinload/joinedloadを明示的に使用）
+    tenant: Mapped["Tenant"] = relationship("Tenant", lazy="noload")
+    model: Mapped["Model"] = relationship("Model", lazy="noload")
     files: Mapped[list["ConversationFile"]] = relationship(
         "ConversationFile",
         back_populates="conversation",
-        lazy="selectin",
+        lazy="noload",
         cascade="all, delete-orphan",
     )
 
