@@ -234,3 +234,8 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """設定インスタンスを取得（キャッシュ付き）"""
     return Settings()
+
+
+def clear_settings_cache() -> None:
+    """設定キャッシュをクリア（テスト用）"""
+    get_settings.cache_clear()

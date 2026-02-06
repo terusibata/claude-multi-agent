@@ -318,8 +318,9 @@ class SimpleChatService:
         seq = 1
 
         try:
-            # ユーザーメッセージを保存
+            # ユーザーメッセージを保存（ストリーミングエラー時もメッセージを保持するため即座にコミット）
             await self._save_message(chat.chat_id, "user", user_message)
+            await self.db.commit()
 
             # 過去のメッセージ履歴を取得
             messages = await self.get_messages(chat.chat_id)

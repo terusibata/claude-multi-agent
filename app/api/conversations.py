@@ -294,7 +294,6 @@ async def get_message_logs(
 
 
 async def _background_execution(
-    execute_service: ExecuteService,
     request: ExecuteRequest,
     tenant: Tenant,
     model: Model,
@@ -303,39 +302,45 @@ async def _background_execution(
     """
     バックグラウンドでエージェントを実行し、イベントをキューに送信
 
+    独立したDBセッションを使用する（BUG-004修正）。
+    リクエストスコープのセッションはレスポンス返却後にクリーンアップされるため、
+    長時間実行のバックグラウンドタスクでは独立セッションが必要。
+
     Args:
-        execute_service: 実行サービス
         request: 実行リクエスト
         tenant: テナント
         model: モデル定義
         event_queue: イベントキュー
     """
-    try:
-        async for event in execute_service.execute_streaming(
-            request=request,
-            tenant=tenant,
-            model=model,
-        ):
-            await event_queue.put(event)
-    except Exception as e:
-        logger.error(
-            f"Background execution error: {e}",
-            exc_info=True,
-            extra={"conversation_id": request.conversation_id},
-        )
-        error_event = format_error_event(
-            seq=0,
-            error_type="background_execution_error",
-            message=f"バックグラウンド実行エラー: {str(e)}",
-            recoverable=False,
-        )
-        await event_queue.put(error_event)
-    finally:
-        await event_queue.put(None)
+    from app.database import async_session_maker
+
+    async with async_session_maker() as db:
+        try:
+            execute_service = ExecuteService(db)
+            async for event in execute_service.execute_streaming(
+                request=request,
+                tenant=tenant,
+                model=model,
+            ):
+                await event_queue.put(event)
+        except Exception as e:
+            logger.error(
+                f"Background execution error: {e}",
+                exc_info=True,
+                extra={"conversation_id": request.conversation_id},
+            )
+            error_event = format_error_event(
+                seq=0,
+                error_type="background_execution_error",
+                message=f"バックグラウンド実行エラー: {str(e)}",
+                recoverable=False,
+            )
+            await event_queue.put(error_event)
+        finally:
+            await event_queue.put(None)
 
 
 async def _event_generator(
-    execute_service: ExecuteService,
     request: ExecuteRequest,
     tenant: Tenant,
     model: Model,
@@ -346,7 +351,6 @@ async def _event_generator(
     定期的にハートビートを送信して接続を維持します。
 
     Args:
-        execute_service: 実行サービス
         request: 実行リクエスト
         tenant: テナント
         model: モデル定義
@@ -361,7 +365,6 @@ async def _event_generator(
 
     background_task = asyncio.create_task(
         _background_execution(
-            execute_service,
             request,
             tenant,
             model,
@@ -487,8 +490,15 @@ async def _event_generator(
     finally:
         if not background_task.done():
             logger.info(
-                f"Background task continues for conversation {request.conversation_id}"
+                f"Cancelling background task for conversation {request.conversation_id}"
             )
+            background_task.cancel()
+            try:
+                await background_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
 
 
 @router.post(
@@ -656,13 +666,11 @@ async def stream_conversation(
         preferred_skills=stream_request.preferred_skills,
     )
 
-    # 実行サービスの作成
-    execute_service = ExecuteService(db)
-
     # SSEレスポンスを返す
+    # バックグラウンドタスクは独立したDBセッションを使用するため、
+    # リクエストスコープのセッション(db)は渡さない（BUG-004修正）
     return EventSourceResponse(
         _event_generator(
-            execute_service=execute_service,
             request=execute_request,
             tenant=tenant,
             model=model,

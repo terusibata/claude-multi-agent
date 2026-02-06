@@ -2,6 +2,7 @@
 エージェント実行サービス
 Claude Agent SDKを使用したエージェント実行とストリーミング処理（v2形式）
 """
+import asyncio
 import time
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -119,8 +120,9 @@ class ExecuteService:
 
         # 会話ロックを取得
         lock_manager = get_conversation_lock_manager()
+        lock_token = None
         try:
-            await lock_manager.acquire(context.conversation_id)
+            lock_token = await lock_manager.acquire(context.conversation_id)
         except ConversationLockError as e:
             logger.warning(
                 "会話ロック取得失敗",
@@ -169,14 +171,15 @@ class ExecuteService:
 
         finally:
             # 会話ロックを解放
-            try:
-                await lock_manager.release(context.conversation_id)
-            except Exception as lock_error:
-                logger.error(
-                    "会話ロック解放エラー",
-                    error=str(lock_error),
-                    conversation_id=context.conversation_id,
-                )
+            if lock_token:
+                try:
+                    await lock_manager.release(context.conversation_id, lock_token)
+                except Exception as lock_error:
+                    logger.error(
+                        "会話ロック解放エラー",
+                        error=str(lock_error),
+                        conversation_id=context.conversation_id,
+                    )
 
             if execution_success:
                 # 正常終了時のみcommit
@@ -300,12 +303,11 @@ class ExecuteService:
                     for progress_event in progress_manager.drain_queue():
                         yield progress_event
 
-                    context.message_seq += 1
                     timestamp = datetime.now(timezone.utc)
 
                     # メッセージタイプ判定
                     msg_type = message_processor.determine_message_type(message)
-                    logger.debug("メッセージ受信", seq=context.message_seq, type=msg_type)
+                    logger.debug("メッセージ受信", type=msg_type)
 
                     # ログエントリ作成
                     log_entry = MessageLogEntry(
@@ -560,7 +562,8 @@ class ExecuteService:
         aws_config = AWSConfig(context.model)
         title_generator = TitleGenerator(aws_config)
 
-        generated_title = title_generator.generate(
+        generated_title = await asyncio.to_thread(
+            title_generator.generate,
             user_input=context.request.user_input,
             assistant_response=context.assistant_text,
             model_region=context.model.model_region or settings.aws_region,
@@ -606,6 +609,7 @@ class ExecuteService:
                 )
 
         if should_save:
+            context.message_seq += 1
             await self.conversation_service.save_message_log(
                 conversation_id=context.conversation_id,
                 message_seq=context.message_seq,
@@ -615,7 +619,6 @@ class ExecuteService:
             )
             return True
         else:
-            context.message_seq -= 1
             return False
 
     def _handle_error(
@@ -1084,7 +1087,7 @@ class ExecuteService:
 
         # 推定コンテキストトークンをチェック（95%以上で警告）
         max_context = context.model.context_window
-        if conversation.estimated_context_tokens > 0:
+        if max_context > 0 and conversation.estimated_context_tokens > 0:
             usage_percent = (conversation.estimated_context_tokens / max_context) * 100
             if usage_percent >= 95:
                 logger.warning(
