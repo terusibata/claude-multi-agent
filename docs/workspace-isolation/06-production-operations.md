@@ -6,9 +6,9 @@
 
 | パラメータ | 値 | 根拠 |
 |-----------|-----|------|
-| コンテナあたりリソース | 2 CPU / 4GB RAM | Agent SDK + Python 処理の実績値 |
-| ホストあたりコンテナ数 | 8〜16 | ホストスペックに依存 |
-| 推奨ホストスペック | 16 CPU / 64GB RAM | コンテナ×16 + オーバーヘッド |
+| コンテナあたりリソース | 2 CPU / 2GB RAM | Anthropic 推奨値 + データ分析考慮 |
+| ホストあたりコンテナ数 | 16〜32 | メモリ 2GB/コンテナ × ホストスペック |
+| 推奨ホストスペック | 16 CPU / 64GB RAM | コンテナ×32 + オーバーヘッド |
 | Warm Pool サイズ | 同時接続数の 10〜20% | コールドスタート回避 |
 
 ### スケーリング戦略
@@ -50,19 +50,20 @@
 | Docker デーモン停止 | systemd watchdog | systemd 自動再起動 | 再起動失敗時に確認 |
 | S3 障害 | S3 エラーレスポンス | リトライ (exponential backoff) | AWS に問い合わせ |
 | Redis 障害 | 接続エラー | Redis Sentinel/Cluster フェイルオーバー | 不要 |
-| ネットワーク分断 | タイムアウト | リトライ + 別ホストへの再割り当て | 不要 |
+| Proxy クラッシュ | Unix Socket 接続エラー | Proxy プロセス自動再起動 | 不要 |
 
 ### データ損失の最小化
 
 ```
 コンテナクラッシュ時のデータ復旧フロー:
 
-1. ヘルスチェック失敗を検知
+1. ヘルスチェック失敗を検知（Unix Socket 経由で /health 応答なし）
 2. 実行中リクエストに "container_lost" エラーを返却
 3. Redis から会話のコンテナメタデータを取得
-4. 新コンテナを割り当て
-5. S3 から最新のワークスペースファイルを同期
-6. ユーザーに「セッションが復旧された」旨を通知
+4. 新コンテナを割り当て（Warm Pool → 新規作成）
+5. 新しい Unix Socket ペア + Proxy を起動
+6. S3 から最新のワークスペースファイルを同期
+7. ユーザーに「セッションが復旧された」旨を通知
    ※ 最後の同期以降の未保存変更は失われる可能性あり
 ```
 
@@ -95,6 +96,8 @@
 | コンテナクラッシュ率 | crash / total containers | > 5% |
 | S3 同期エラー率 | error / total syncs | > 1% |
 | TTL による破棄数 | 時間あたりの GC 数 | 急増時アラート |
+| Proxy レイテンシ | Unix Socket 経由の往復時間 | P95 > 100ms |
+| Proxy ブロック率 | blocked / total proxy requests | 急増時アラート |
 
 ### ログ戦略
 
@@ -108,7 +111,22 @@
   "tenant_id": "tenant-456",
   "container_id": "ws-abc",
   "source": "warm_pool",
+  "network_mode": "none",
   "duration_ms": 1200
+}
+```
+
+```json
+{
+  "timestamp": "2026-02-07T10:30:05Z",
+  "level": "INFO",
+  "service": "credential-proxy",
+  "event": "request_forwarded",
+  "container_id": "ws-abc",
+  "method": "POST",
+  "destination": "bedrock-runtime.us-east-1.amazonaws.com",
+  "status": 200,
+  "duration_ms": 450
 }
 ```
 
@@ -130,38 +148,78 @@
 │  │ P95: 4.5s         │  │ S3 sync error: 0.05%    │  │
 │  │ P99: 8.2s         │  │ Health check fail: 0.2% │  │
 │  └───────────────────┘  └─────────────────────────┘  │
+│                                                       │
+│  ┌─ Proxy メトリクス ─────────────────────────────┐  │
+│  │ Requests/min: 1,240   Blocked: 3 (0.2%)       │  │
+│  │ Avg latency: 12ms    P95 latency: 45ms        │  │
+│  │ Top domains: bedrock-runtime (85%), pypi (12%) │  │
+│  └───────────────────────────────────────────────┘  │
 └───────────────────────────────────────────────────────┘
 ```
 
 ## 実装ロードマップ
 
-### Phase 1: 基本的なコンテナ隔離
+### Phase 1: コンテナ隔離 + セキュリティ基盤（公式推奨準拠）
 
-- [ ] Workspace ベースイメージの作成
+**目標**: Anthropic 公式セキュアデプロイメントガイドに準拠した基本構成を構築
+
+- [ ] Workspace ベースイメージの作成（プリインストール済みライブラリ含む）
 - [ ] ContainerOrchestrator の実装（Docker API 連携）
-- [ ] Backend → Container 間の HTTP 通信
+- [ ] `--network none` + Unix Socket 通信の実装
+- [ ] Credential Injection Proxy の実装（AWS SigV4 署名注入）
+- [ ] ドメインホワイトリスト適用
 - [ ] S3 ファイル同期の実装
 - [ ] TTL ベースの GC 実装
-- [ ] 基本的なヘルスチェック
+- [ ] リソース制限の適用（CPU 2core / Memory 2GB / PIDs 100 / Disk 5GB）
+- [ ] seccomp（Docker デフォルトプロファイル）有効化
+- [ ] read-only rootfs + noexec tmpfs 適用
+- [ ] `no-new-privileges` + Capability drop
+- [ ] IPC 隔離 (`--ipc private`)
+- [ ] 基本的なヘルスチェック（Unix Socket 経由）
+- [ ] Proxy 監査ログの実装
 
-### Phase 2: 運用品質の向上
+### Phase 2: 運用品質 + Warm Pool
 
-- [ ] Warm Pool の実装
-- [ ] ネットワーク隔離（iptables ルール）
-- [ ] リソース制限の適用（CPU、メモリ、PIDs、ディスク）
+**目標**: コールドスタート最適化と運用監視の強化
+
+- [ ] Warm Pool の実装（Redis ベース、マルチインスタンス対応）
+- [ ] userns-remap の有効化
+- [ ] カスタム seccomp プロファイルの適用
 - [ ] 監視ダッシュボードの構築
 - [ ] アラート設定
+- [ ] Proxy レイテンシ最適化
+- [ ] コンテナ起動時間のプロファイリングと最適化
 
 ### Phase 3: セキュリティ強化
 
-- [ ] seccomp プロファイルの適用
+**目標**: カーネルレベルの隔離とセキュリティ監査
+
+- [ ] gVisor (runsc) ランタイムの導入
 - [ ] AppArmor プロファイルの適用
-- [ ] ネットワークホワイトリストの厳格化
-- [ ] セキュリティ監査ログ
+- [ ] セキュリティ監査ログの集約と分析
+- [ ] ペネトレーションテスト（コンテナエスケープ試行）
+- [ ] ドメインホワイトリストの厳格化
 
 ### Phase 4: スケーリング
+
+**目標**: マルチホスト対応とコスト最適化
 
 - [ ] マルチホスト対応（コンテナスケジューリング）
 - [ ] Auto Scaling の実装
 - [ ] Spot インスタンス対応
-- [ ] gVisor / Firecracker への移行検討
+- [ ] Firecracker microVM への移行検討
+- [ ] コスト分析とリソース最適化
+
+### Phase 間の依存関係
+
+```
+Phase 1 ─────► Phase 2 ─────► Phase 3
+  │                              │
+  │              Phase 4 ◄───────┘
+  │                │
+  └────────────────┘ (Phase 1 完了後に Phase 4 並行可能)
+```
+
+> **Phase 1 のスコープについて**: 旧設計では seccomp、ネットワーク隔離、リソース制限の一部が
+> Phase 2〜3 に先送りされていたが、Anthropic 公式ガイドではこれらを基本設定として記載している。
+> Phase 1 で公式推奨の全セキュリティ設定を適用することで、初期デプロイから安全な状態を確保する。

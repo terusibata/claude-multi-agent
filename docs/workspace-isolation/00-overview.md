@@ -21,19 +21,26 @@
 ## アーキテクチャ概要
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    Backend (FastAPI)                     │
-│  ┌──────────┐  ┌──────────────┐  ┌──────────────────┐  │
-│  │ API Layer│  │ Container    │  │ Warm Pool        │  │
-│  │          │──│ Orchestrator │──│ Manager          │  │
-│  └──────────┘  └──────┬───────┘  └──────────────────┘  │
-└─────────────────────────┼───────────────────────────────┘
-                          │ Docker API
+┌─────────────────────────────────────────────────────────────┐
+│                    Backend (FastAPI)                         │
+│  ┌──────────┐  ┌──────────────┐  ┌──────────────────┐      │
+│  │ API Layer│  │ Container    │  │ Warm Pool        │      │
+│  │          │──│ Orchestrator │──│ Manager          │      │
+│  └──────────┘  └──────┬───────┘  └──────────────────┘      │
+│                        │                                     │
+│  ┌─────────────────────┴──────────────────────────────────┐ │
+│  │         Credential Injection Proxy                      │ │
+│  │  (Unix Socket ベース、認証情報注入 + ドメイン制御)       │ │
+│  └─────────────────────┬──────────────────────────────────┘ │
+└─────────────────────────┼───────────────────────────────────┘
+                          │ Docker API + Unix Socket
           ┌───────────────┼───────────────┐
           ▼               ▼               ▼
    ┌─────────────┐ ┌─────────────┐ ┌─────────────┐
    │ Workspace   │ │ Workspace   │ │ Workspace   │
    │ Container A │ │ Container B │ │ Container C │
+   │ --network   │ │ --network   │ │ --network   │
+   │   none      │ │   none      │ │   none      │
    │             │ │             │ │             │
    │ Claude SDK  │ │ Claude SDK  │ │ Claude SDK  │
    │ Python venv │ │ Python venv │ │ Python venv │
@@ -107,3 +114,26 @@ pyyaml, python-dotenv, tqdm, rich
 - Agent が `pip install numpy` のような定番コマンドで時間を浪費しない
 
 **ベースイメージに入れつつ、ユーザーが `pip install` で追加も可能** という構成がベスト。
+
+### Q4: ネットワーク隔離はどの方式を採用すべきか？
+
+**→ Phase 1 から `--network none` + Unix Socket を採用する。**
+
+Anthropic 公式セキュアデプロイメントガイドで推奨される構成:
+- コンテナにネットワークスタックを一切持たせない（`--network none`）
+- ホスト上の Credential Injection Proxy に Unix Socket 経由で接続
+- プロキシがドメインホワイトリスト適用 + 認証情報注入 + ログ記録を担当
+
+**理由:**
+- 制限付きブリッジネットワーク + Squid よりもシンプルで安全
+- コンテナ内に認証情報が一切存在しない（プロキシ外部で注入）
+- `@anthropic-ai/sandbox-runtime` と同一のアーキテクチャ
+
+### Q5: sandbox-runtime の利用は検討すべきか？
+
+**→ 代替案として評価するが、Phase 1 ではセルフホスト Docker を採用する。**
+
+Anthropic 公式の `@anthropic-ai/sandbox-runtime` は軽量な隔離を提供するが、
+本システムではマルチテナント環境でのコンテナ単位のリソース制御・S3 連携・Warm Pool が必要なため、
+Docker ベースのセルフホスト構成をメインとする。
+ただし、sandbox-runtime の Unix Socket + プロキシパターンは設計に取り入れる。
