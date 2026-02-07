@@ -1,18 +1,19 @@
 """
 AIエージェントバックエンド メインアプリケーション
-AWS Bedrock + Claude Agent SDKを利用したマルチテナント対応AIエージェントシステム
+コンテナ隔離型マルチテナント対応AIエージェントシステム
 """
 import asyncio
 import logging
-import os
 import sys
 from contextlib import asynccontextmanager
 
+import aiodocker
 import structlog
 from fastapi import FastAPI, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
+from redis.asyncio import Redis
 
 from app import __version__
 from app.api import api_router
@@ -28,13 +29,17 @@ from app.infrastructure.metrics import (
     get_request_duration,
     measure_time,
 )
-from app.infrastructure.redis import close_redis_pool, get_pool_info
+from app.infrastructure.redis import close_redis_pool, get_pool_info, get_redis_pool
 from app.infrastructure.shutdown import get_shutdown_manager
 from app.middleware.auth import AuthMiddleware
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.middleware.tracing import TracingMiddleware
 from app.schemas.error import ErrorCodes, create_error_response
+from app.services.container.gc import ContainerGarbageCollector
+from app.services.container.lifecycle import ContainerLifecycleManager
+from app.services.container.orchestrator import ContainerOrchestrator
+from app.services.container.warm_pool import WarmPoolManager
 from app.utils.exceptions import (
     AppError,
     NotFoundError,
@@ -80,6 +85,12 @@ async def lifespan(app: FastAPI):
     """
     アプリケーションのライフサイクル管理
     起動時・終了時の処理を定義
+
+    コンテナ隔離アーキテクチャ:
+      - aiodocker → ContainerLifecycleManager
+      - WarmPoolManager（プレウォーム済みコンテナプール）
+      - ContainerOrchestrator（会話→コンテナマッピング）
+      - ContainerGarbageCollector（TTL超過コンテナ回収）
     """
     # シャットダウンマネージャーを取得
     shutdown_manager = get_shutdown_manager()
@@ -98,14 +109,52 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("シグナルハンドラー設定エラー", error=str(e))
 
-    # AWS Bedrock環境変数の設定
-    os.environ["CLAUDE_CODE_USE_BEDROCK"] = settings.claude_code_use_bedrock
-    if settings.aws_region:
-        os.environ["AWS_REGION"] = settings.aws_region
-    if settings.aws_access_key_id:
-        os.environ["AWS_ACCESS_KEY_ID"] = settings.aws_access_key_id
-    if settings.aws_secret_access_key:
-        os.environ["AWS_SECRET_ACCESS_KEY"] = settings.aws_secret_access_key
+    # ---- コンテナ隔離スタック初期化 ----
+    docker_client = aiodocker.Docker(url=settings.docker_socket_path)
+    logger.info("Dockerクライアント初期化完了", socket=settings.docker_socket_path)
+
+    # Redis接続プール取得
+    redis_pool = await get_redis_pool()
+    redis = Redis(connection_pool=redis_pool)
+
+    # コンテナライフサイクルマネージャー
+    lifecycle = ContainerLifecycleManager(docker_client)
+
+    # WarmPoolマネージャー
+    warm_pool = WarmPoolManager(lifecycle, redis)
+
+    # コンテナオーケストレーター
+    orchestrator = ContainerOrchestrator(lifecycle, warm_pool, redis)
+
+    # アプリケーション状態に保存（APIエンドポイントから参照）
+    app.state.orchestrator = orchestrator
+    app.state.docker_client = docker_client
+
+    # GC（ガベージコレクター）
+    gc = ContainerGarbageCollector(lifecycle, redis)
+    app.state.gc = gc
+
+    # WarmPoolの初期補充
+    try:
+        await warm_pool.replenish()
+        pool_size = await warm_pool.get_pool_size()
+        logger.info("WarmPool初期化完了", pool_size=pool_size)
+    except Exception as e:
+        logger.error("WarmPool初期化エラー", error=str(e))
+
+    # GCループ開始
+    try:
+        await gc.start(interval=settings.container_gc_interval)
+        logger.info("コンテナGC開始", interval=settings.container_gc_interval)
+    except Exception as e:
+        logger.error("GC開始エラー", error=str(e))
+
+    logger.info(
+        "コンテナ隔離スタック初期化完了",
+        warm_pool_min=settings.warm_pool_min_size,
+        warm_pool_max=settings.warm_pool_max_size,
+        container_image=settings.container_image,
+    )
 
     # セキュリティ設定のログ出力
     if settings.api_keys_list:
@@ -134,11 +183,38 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # 終了時
+    # ---- 終了時 ----
     logger.info("アプリケーション終了中...")
 
     # グレースフルシャットダウンを実行
     await shutdown_manager.graceful_shutdown()
+
+    # GC停止
+    try:
+        await gc.stop()
+        logger.info("コンテナGC停止完了")
+    except Exception as e:
+        logger.error("GC停止エラー", error=str(e))
+
+    # 全コンテナ破棄
+    try:
+        await orchestrator.destroy_all()
+        logger.info("全コンテナ破棄完了")
+    except Exception as e:
+        logger.error("コンテナ破棄エラー", error=str(e))
+
+    # Dockerクライアントクローズ
+    try:
+        await docker_client.close()
+        logger.info("Dockerクライアントクローズ完了")
+    except Exception as e:
+        logger.error("Dockerクライアントクローズエラー", error=str(e))
+
+    # Redisクライアントクローズ
+    try:
+        await redis.aclose()
+    except Exception:
+        pass
 
     # リソースをクリーンアップ
     try:

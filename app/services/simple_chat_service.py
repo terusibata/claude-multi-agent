@@ -16,7 +16,7 @@ from app.models.model import Model
 from app.models.simple_chat import SimpleChat
 from app.models.simple_chat_message import SimpleChatMessage
 from app.services.bedrock_client import BedrockChatClient, SimpleChatTitleGenerator
-from app.services.execute.aws_config import AWSConfig
+from app.services.aws_config import AWSConfig
 from app.services.usage_service import UsageService
 
 logger = structlog.get_logger(__name__)

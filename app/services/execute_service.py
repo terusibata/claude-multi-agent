@@ -1,8 +1,20 @@
 """
-エージェント実行サービス
-Claude Agent SDKを使用したエージェント実行とストリーミング処理（v2形式）
+エージェント実行サービス（コンテナ隔離版）
+
+会話ごとに隔離されたDockerコンテナ内でClaude Agent SDKを実行し、
+Unix Socket経由でSSEイベントを中継する。
+
+フロー:
+  1. コンテキスト制限チェック / 会話ロック取得
+  2. ContainerOrchestrator経由でコンテナ取得・作成
+  3. S3 → コンテナへファイル同期
+  4. コンテナ内workspace_agentにリクエスト送信（Unix Socket）
+  5. SSEイベントを中継しつつ、doneイベントから使用量を抽出
+  6. コンテナ → S3へファイル同期
+  7. DB記録（使用量、メッセージログ、タイトル生成）
 """
 import asyncio
+import json
 import time
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -15,29 +27,15 @@ from app.config import get_settings
 from app.models.model import Model
 from app.models.tenant import Tenant
 from app.schemas.execute import ExecuteRequest
-from app.services.execute import (
-    AWSConfig,
-    ExecutionContext,
-    MessageLogEntry,
-    MessageProcessor,
-    OptionsBuilder,
-    SubagentModelMapping,
-    TitleGenerator,
-    ToolTracker,
-)
-from app.services.execute.progress_manager import ProgressManager
-from app.services.model_service import ModelService
-from app.services.mcp_server_service import McpServerService
+from app.services.container.orchestrator import ContainerOrchestrator
+from app.services.workspace.file_sync import WorkspaceFileSync
+from app.services.workspace.s3_storage import S3StorageBackend
 from app.services.conversation_service import ConversationService
-from app.services.skill_service import SkillService
 from app.services.usage_service import UsageService
-from app.services.workspace_service import WorkspaceService
-from app.utils.log_sanitizer import sanitize_sdk_options
 from app.infrastructure.distributed_lock import (
     ConversationLockError,
     get_conversation_lock_manager,
 )
-from app.utils.exceptions import ContextLimitExceededError
 from app.utils.streaming import (
     SequenceCounter,
     format_context_status_event,
@@ -51,28 +49,17 @@ logger = structlog.get_logger(__name__)
 
 
 class ExecuteService:
-    """エージェント実行サービスクラス"""
+    """エージェント実行サービス（コンテナ隔離版）"""
 
-    def __init__(self, db: AsyncSession):
-        """
-        初期化
-
-        Args:
-            db: データベースセッション
-        """
+    def __init__(
+        self,
+        db: AsyncSession,
+        orchestrator: ContainerOrchestrator,
+    ):
         self.db = db
+        self.orchestrator = orchestrator
         self.conversation_service = ConversationService(db)
         self.usage_service = UsageService(db)
-        self.skill_service = SkillService(db)
-        self.mcp_service = McpServerService(db)
-        self.workspace_service = WorkspaceService(db)
-
-        # オプションビルダーを初期化
-        self.options_builder = OptionsBuilder(
-            mcp_service=self.mcp_service,
-            skill_service=self.skill_service,
-            workspace_service=self.workspace_service,
-        )
 
     async def execute_streaming(
         self,
@@ -81,7 +68,7 @@ class ExecuteService:
         model: Model,
     ) -> AsyncGenerator[dict, None]:
         """
-        エージェントをストリーミング実行
+        コンテナ隔離環境でエージェントをストリーミング実行
 
         Args:
             request: 実行リクエスト
@@ -91,584 +78,312 @@ class ExecuteService:
         Yields:
             SSEイベント辞書
         """
-        # 実行コンテキストを作成
-        context = ExecutionContext(
-            request=request,
-            tenant=tenant,
-            model=model,
-            start_time=time.time(),
-        )
-
-        # ツールトラッカーを初期化
-        tool_tracker = ToolTracker()
-
-        # シーケンス番号カウンターを初期化
+        start_time = time.time()
         seq_counter = SequenceCounter()
+        conversation_id = request.conversation_id
 
-        # コンテキスト制限チェック（リクエスト時）
-        context_check_error = await self._check_context_limit_before_execution(
-            context, seq_counter
+        # コンテキスト制限チェック
+        context_error = await self._check_context_limit(
+            conversation_id, request.tenant_id, model, seq_counter
         )
-        if context_check_error:
-            yield context_check_error
-            yield self._create_error_result(
-                context,
-                ["コンテキスト制限に達しています。新しいチャットを開始してください。"],
-                seq_counter,
-            )
+        if context_error:
+            yield context_error
+            yield self._error_done(start_time, seq_counter)
             return
 
-        # 会話ロックを取得
+        # 会話ロック取得
         lock_manager = get_conversation_lock_manager()
         lock_token = None
         try:
-            lock_token = await lock_manager.acquire(context.conversation_id)
+            lock_token = await lock_manager.acquire(conversation_id)
         except ConversationLockError as e:
-            logger.warning(
-                "会話ロック取得失敗",
-                conversation_id=context.conversation_id,
-                error=str(e),
-            )
+            logger.warning("会話ロック取得失敗", conversation_id=conversation_id, error=str(e))
             yield format_error_event(
                 seq=seq_counter.next(),
                 error_type="conversation_locked",
                 message="会話は現在使用中です。しばらくしてから再試行してください。",
                 recoverable=True,
             )
-            yield self._create_error_result(context, [str(e)], seq_counter)
+            yield self._error_done(start_time, seq_counter)
             return
 
         logger.info(
-            "エージェント実行開始",
-            tenant_id=context.tenant_id,
-            conversation_id=context.conversation_id,
+            "エージェント実行開始（コンテナ隔離）",
+            tenant_id=request.tenant_id,
+            conversation_id=conversation_id,
             model_id=model.model_id,
         )
 
         execution_success = False
         try:
-            # オプション構築
-            options = await self.options_builder.build(context, request.tokens)
-            logger.info("SDK options", options=sanitize_sdk_options(options))
+            # ユーザーメッセージを保存
+            await self._save_user_message(request)
 
-            # ターン番号とメッセージ順序取得
-            context.turn_number = await self.conversation_service.get_latest_turn_number(
-                context.conversation_id
-            ) + 1
-            context.message_seq = await self.conversation_service.get_max_message_seq(
-                context.conversation_id
-            )
+            # S3 → コンテナへファイル同期
+            if request.workspace_enabled:
+                await self._sync_files_to_container(request)
 
-            # SDKインポートと実行
-            async for event in self._execute_with_sdk(context, options, tool_tracker, seq_counter):
+            # コンテナ内エージェントにリクエスト送信・SSEストリーム中継
+            done_data = None
+            async for event in self._stream_from_container(request, model, seq_counter):
+                # doneイベントからメタデータを抽出
+                if event.get("event") == "done":
+                    done_data = event.get("data", {})
                 yield event
+
+            # コンテナ → S3へファイル同期
+            if request.workspace_enabled:
+                await self._sync_files_from_container(request)
+
+            # 使用量をDB記録
+            if done_data:
+                await self._record_usage(request, model, done_data)
 
             execution_success = True
 
         except Exception as e:
-            for event in self._handle_error(e, context, tool_tracker, seq_counter):
-                yield event
+            logger.error("エージェント実行エラー", error=str(e), exc_info=True)
+            yield format_error_event(
+                seq=seq_counter.next(),
+                error_type="execution_error",
+                message=str(e),
+                recoverable=False,
+            )
+            yield self._error_done(start_time, seq_counter)
 
         finally:
-            # 会話ロックを解放
             if lock_token:
                 try:
-                    await lock_manager.release(context.conversation_id, lock_token)
-                except Exception as lock_error:
-                    logger.error(
-                        "会話ロック解放エラー",
-                        error=str(lock_error),
-                        conversation_id=context.conversation_id,
-                    )
+                    await lock_manager.release(conversation_id, lock_token)
+                except Exception as e:
+                    logger.error("会話ロック解放エラー", error=str(e))
 
             if execution_success:
-                # 正常終了時のみcommit
                 try:
                     await self.db.commit()
-                except Exception as commit_error:
-                    logger.error(
-                        "コミットエラー",
-                        error=str(commit_error),
-                        conversation_id=context.conversation_id,
-                    )
+                except Exception as e:
+                    logger.error("コミットエラー", error=str(e))
                     await self.db.rollback()
             else:
-                # エラー発生時はrollback
                 try:
                     await self.db.rollback()
-                    logger.info(
-                        "トランザクションをロールバック",
-                        conversation_id=context.conversation_id,
-                    )
-                except Exception as rollback_error:
-                    logger.error(
-                        "ロールバックエラー",
-                        error=str(rollback_error),
-                        conversation_id=context.conversation_id,
-                    )
+                except Exception:
+                    pass
 
-    async def _execute_with_sdk(
+    async def _stream_from_container(
         self,
-        context: ExecutionContext,
-        options: dict,
-        tool_tracker: ToolTracker,
+        request: ExecuteRequest,
+        model: Model,
         seq_counter: SequenceCounter,
     ) -> AsyncGenerator[dict, None]:
-        """SDKを使用して実行"""
-        logger.info("Claude Agent SDK インポート中...")
+        """コンテナ内エージェントからSSEストリームを受信・中継"""
+        container_request = {
+            "user_input": request.user_input,
+            "system_prompt": "",
+            "model": model.bedrock_model_id if hasattr(model, "bedrock_model_id") else model.model_id,
+            "session_id": None,
+            "max_iterations": getattr(request, "max_iterations", 50),
+            "budget_tokens": getattr(request, "budget_tokens", 200000),
+            "mcp_servers": [],
+            "cwd": "/workspace",
+        }
+
+        # 会話のセッションIDを取得
+        conversation = await self.conversation_service.get_conversation_by_id(
+            request.conversation_id, request.tenant_id
+        )
+        if conversation and conversation.session_id:
+            container_request["session_id"] = conversation.session_id
+
+        buffer = ""
+        async for chunk in self.orchestrator.execute(
+            request.conversation_id, container_request
+        ):
+            decoded = chunk.decode("utf-8", errors="replace")
+            buffer += decoded
+
+            # SSEイベントをパース
+            while "\n\n" in buffer:
+                event_str, buffer = buffer.split("\n\n", 1)
+                event = self._parse_sse_event(event_str)
+                if event:
+                    yield event
+
+    def _parse_sse_event(self, event_str: str) -> dict | None:
+        """SSEイベント文字列をパース"""
+        event_type = "message"
+        data_str = ""
+
+        for line in event_str.strip().split("\n"):
+            if line.startswith("event: "):
+                event_type = line[7:].strip()
+            elif line.startswith("data: "):
+                data_str = line[6:]
+
+        if not data_str:
+            return None
 
         try:
-            from claude_agent_sdk import (
-                AssistantMessage,
-                ClaudeAgentOptions,
-                ClaudeSDKClient,
-                ResultMessage,
-                SystemMessage,
-                TextBlock,
-                ThinkingBlock,
-                ToolResultBlock,
-                ToolUseBlock,
-                UserMessage,
-            )
-            logger.info("Claude Agent SDK インポート成功")
-        except ImportError as e:
-            yield format_error_event(
-                seq=seq_counter.next(),
-                error_type="sdk_not_installed",
-                message=f"Claude Agent SDKがインストールされていません: {str(e)}",
-                recoverable=False,
-            )
-            yield self._create_error_result(context, [str(e)], seq_counter)
-            return
+            data = json.loads(data_str)
+        except json.JSONDecodeError:
+            data = {"raw": data_str}
 
-        # サブエージェント用モデルのバリデーション
-        validation_error = await self._validate_subagent_models()
-        if validation_error:
-            yield format_error_event(
-                seq=seq_counter.next(),
-                error_type="model_validation_error",
-                message=validation_error,
-                recoverable=False,
-            )
-            yield self._create_error_result(context, [validation_error], seq_counter)
-            return
+        return {"event": event_type, "data": data}
 
-        # オプション構築
+    async def _sync_files_to_container(self, request: ExecuteRequest) -> None:
+        """S3からコンテナへファイルを同期"""
         try:
-            sdk_options = ClaudeAgentOptions(**options)
-            logger.info("ClaudeAgentOptions 構築成功")
+            from app.services.container.lifecycle import ContainerLifecycleManager
+            info = await self.orchestrator.get_or_create(request.conversation_id)
+            file_sync = WorkspaceFileSync(
+                s3=S3StorageBackend(),
+                lifecycle=self.orchestrator.lifecycle,
+                db=self.db,
+            )
+            await file_sync.sync_to_container(
+                request.tenant_id, request.conversation_id, info.id
+            )
         except Exception as e:
-            logger.error("ClaudeAgentOptions 構築エラー", error=str(e), exc_info=True)
-            yield format_error_event(
-                seq=seq_counter.next(),
-                error_type="options_error",
-                message=f"SDK options構築エラー: {str(e)}",
-                recoverable=False,
-            )
-            yield self._create_error_result(context, [str(e)], seq_counter)
-            return
+            logger.error("S3→コンテナ同期エラー", error=str(e))
 
-        # ユーザーメッセージを保存
-        await self._save_user_message(context)
-
-        # 進捗管理マネージャーを初期化
-        progress_manager = ProgressManager(
-            seq_provider=seq_counter.next,
-            interval_seconds=3.0,
-        )
-
-        # メッセージプロセッサを初期化
-        message_processor = MessageProcessor(
-            context, tool_tracker, settings, seq_counter, progress_manager
-        )
-
-        # SDK実行
-        logger.info(
-            "ClaudeSDKClient実行開始",
-            user_input=context.request.user_input[:100],
-        )
-
-        # ターン番号追跡（SDKのターン、内部ログ用）
-        sdk_turn_number = 0
-
-        async with ClaudeSDKClient(options=sdk_options) as client:
-            await client.query(context.request.user_input)
-
-            # バックグラウンドティッカーを起動
-            await progress_manager.start_ticker()
-
-            try:
-                async for message in client.receive_response():
-                    # キューに溜まった進捗メッセージを送信
-                    for progress_event in progress_manager.drain_queue():
-                        yield progress_event
-
-                    timestamp = datetime.now(timezone.utc)
-
-                    # メッセージタイプ判定
-                    msg_type = message_processor.determine_message_type(message)
-                    logger.debug("メッセージ受信", type=msg_type)
-
-                    # ログエントリ作成
-                    log_entry = MessageLogEntry(
-                        message_type=msg_type,
-                        subtype=getattr(message, "subtype", None),
-                        timestamp=timestamp,
-                    )
-
-                    # メッセージタイプ別処理
-                    if isinstance(message, SystemMessage):
-                        async for event in self._wrap_generator(
-                            message_processor.process_system_message(message, log_entry)
-                        ):
-                            yield event
-
-                        # セッションID更新
-                        if context.session_id and message.subtype == "init":
-                            await self._update_session_id(context)
-
-                    elif isinstance(message, AssistantMessage):
-                        # ターン番号を内部的に追跡（ログ用）
-                        sdk_turn_number += 1
-
-                        async for event in self._wrap_generator(
-                            message_processor.process_assistant_message(
-                                message, log_entry,
-                                TextBlock, ToolUseBlock, ThinkingBlock, ToolResultBlock,
-                            )
-                        ):
-                            yield event
-
-                    elif isinstance(message, UserMessage):
-                        async for event in self._wrap_generator(
-                            message_processor.process_user_message(
-                                message, log_entry, ToolResultBlock
-                            )
-                        ):
-                            yield event
-
-                    elif isinstance(message, ResultMessage):
-                        # ティッカーを停止（完了処理前）
-                        await progress_manager.stop_ticker()
-
-                        # 実行完了後のワークスペース同期処理
-                        if context.workspace_enabled:
-                            await self._sync_workspace_after_execution(context)
-
-                        result_events = await self._handle_result_message(
-                            message, context, tool_tracker, log_entry, seq_counter
-                        )
-                        for event in result_events:
-                            yield event
-
-                    # メッセージログ保存（DB & コンテキスト）
-                    saved = await self._save_message_log(context, msg_type, message, log_entry)
-                    if saved:
-                        context.message_logs.append(log_entry.to_dict())
-
-            finally:
-                # 確実にティッカーを停止
-                await progress_manager.stop_ticker()
-
-    async def _wrap_generator(self, gen):
-        """同期ジェネレータを非同期で処理"""
+    async def _sync_files_from_container(self, request: ExecuteRequest) -> None:
+        """コンテナからS3へファイルを同期"""
         try:
-            for item in gen:
-                yield item
+            info = await self.orchestrator.get_or_create(request.conversation_id)
+            file_sync = WorkspaceFileSync(
+                s3=S3StorageBackend(),
+                lifecycle=self.orchestrator.lifecycle,
+                db=self.db,
+            )
+            await file_sync.sync_from_container(
+                request.tenant_id, request.conversation_id, info.id
+            )
         except Exception as e:
-            logger.error("ジェネレータ処理中にエラー発生", error=str(e), exc_info=True)
-            raise
+            logger.error("コンテナ→S3同期エラー", error=str(e))
 
-    async def _save_user_message(self, context: ExecutionContext) -> None:
-        """ユーザーメッセージを保存"""
-        context.message_seq += 1
-        user_message_timestamp = datetime.now(timezone.utc)
+    async def _save_user_message(self, request: ExecuteRequest) -> None:
+        """ユーザーメッセージをDBに保存"""
+        message_seq = await self.conversation_service.get_max_message_seq(
+            request.conversation_id
+        ) + 1
 
-        user_message_content = {
+        content = {
             "type": "user",
             "subtype": None,
-            "timestamp": user_message_timestamp.isoformat(),
-            "text": context.request.user_input,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "text": request.user_input,
         }
 
         await self.conversation_service.save_message_log(
-            conversation_id=context.conversation_id,
-            message_seq=context.message_seq,
+            conversation_id=request.conversation_id,
+            message_seq=message_seq,
             message_type="user",
             message_subtype=None,
-            content=user_message_content,
+            content=content,
         )
 
-        # message_logsにも追加（result用）
-        context.message_logs.append(user_message_content)
+    async def _record_usage(
+        self, request: ExecuteRequest, model: Model, done_data: dict
+    ) -> None:
+        """使用量をDBに記録"""
+        try:
+            usage = done_data.get("usage", {})
+            input_tokens = usage.get("input_tokens", 0)
+            output_tokens = usage.get("output_tokens", 0)
+            cache_5m = usage.get("cache_creation_5m_tokens", 0)
+            cache_1h = usage.get("cache_creation_1h_tokens", 0)
+            cache_read = usage.get("cache_read_tokens", 0)
 
-        logger.info("ユーザーメッセージ保存完了", message_seq=context.message_seq)
+            cost = model.calculate_cost(
+                input_tokens, output_tokens, cache_5m, cache_1h, cache_read
+            ) if hasattr(model, "calculate_cost") else Decimal("0")
 
-    async def _update_session_id(self, context: ExecutionContext) -> None:
-        """セッションIDを更新"""
-        await self.conversation_service.update_conversation(
-            conversation_id=context.conversation_id,
-            tenant_id=context.tenant_id,
-            session_id=context.session_id,
-        )
-
-    async def _handle_result_message(
-        self,
-        message,
-        context: ExecutionContext,
-        tool_tracker: ToolTracker,
-        log_entry: MessageLogEntry,
-        seq_counter: SequenceCounter,
-    ) -> list[dict]:
-        """
-        結果メッセージを処理
-
-        Returns:
-            イベントのリスト（タイトル生成イベント + 結果イベント）
-        """
-        events = []
-
-        subtype = message.subtype
-        usage_data = message.usage
-
-        # モデル別使用量を取得
-        # SDKからmodel_usageが取得できる場合はそれを使用
-        # 取得できない場合（Python SDKなど）はサブエージェントの追跡データから構築
-        model_usage_raw = getattr(message, "model_usage", None) or getattr(message, "modelUsage", None)
-        model_usage = self._normalize_model_usage(model_usage_raw)
-
-        # ログエントリに詳細を追加
-        log_entry.result = message.result
-        log_entry.is_error = message.is_error
-        log_entry.usage = usage_data
-        log_entry.total_cost_usd = message.total_cost_usd
-        log_entry.num_turns = message.num_turns
-        log_entry.session_id = message.session_id
-
-        # 使用状況の取得
-        input_tokens = usage_data.get("input_tokens", 0) if usage_data else 0
-        output_tokens = usage_data.get("output_tokens", 0) if usage_data else 0
-
-        # キャッシュトークン取得（新旧両方の形式に対応、5分/1時間を分離）
-        cache_5m, cache_1h = self._get_cache_creation_tokens(usage_data) if usage_data else (0, 0)
-        cache_read = usage_data.get("cache_read_input_tokens", 0) if usage_data else 0
-        total_cost = message.total_cost_usd or 0
-        num_turns = message.num_turns
-        duration_ms = int((time.time() - context.start_time) * 1000)
-
-        # エラーチェック
-        if message.is_error:
-            context.errors.append(message.result or "Unknown error")
-
-        # モデル別使用量を構築（SDKからmodel_usageが取得できない場合）
-        # 注: SDKのtotal_cost_usdは使用せず、DBの価格設定から計算する
-        if not model_usage:
-            model_usage = await self._build_model_usage(
-                context=context,
-                tool_tracker=tool_tracker,
-                main_input_tokens=input_tokens,
-                main_output_tokens=output_tokens,
-                main_cache_creation_5m=cache_5m,
-                main_cache_creation_1h=cache_1h,
-                main_cache_read=cache_read,
+            await self.usage_service.save_usage_log(
+                tenant_id=request.tenant_id,
+                user_id=request.executor.user_id,
+                model_id=request.model_id,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cache_creation_5m_tokens=cache_5m,
+                cache_creation_1h_tokens=cache_1h,
+                cache_read_tokens=cache_read,
+                cost_usd=cost,
+                conversation_id=request.conversation_id,
             )
 
-        # コスト計算（model_usageの全cost_usdを合計）
-        total_cost_decimal = self._calculate_total_cost_from_model_usage(model_usage)
-
-        # 使用状況ログを保存（Decimalで保存）
-        await self.usage_service.save_usage_log(
-            tenant_id=context.tenant_id,
-            user_id=context.request.executor.user_id,
-            model_id=context.request.model_id,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            cache_creation_5m_tokens=cache_5m,
-            cache_creation_1h_tokens=cache_1h,
-            cache_read_tokens=cache_read,
-            cost_usd=total_cost_decimal,
-            session_id=context.session_id,
-            conversation_id=context.conversation_id,
-        )
-
-        # タイトル生成
-        if context.turn_number == 1 and context.assistant_text and subtype == "success":
-            title_event = await self._generate_and_update_title(context, seq_counter)
-            events.append(title_event)
-
-        # 使用量オブジェクトを構築（5分/1時間キャッシュを分離）
-        usage_obj = {
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "cache_creation_5m_tokens": cache_5m,
-            "cache_creation_1h_tokens": cache_1h,
-            "cache_read_tokens": cache_read,
-            "total_tokens": input_tokens + output_tokens,
-        }
-
-        # コンテキスト状況を計算して更新
-        context_status = await self._calculate_and_update_context_status(
-            context=context,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-        )
-
-        # context_statusイベントを追加（doneの直前）
-        context_status_event = format_context_status_event(
-            seq=seq_counter.next(),
-            current_context_tokens=context_status["current_context_tokens"],
-            max_context_tokens=context_status["max_context_tokens"],
-            usage_percent=context_status["usage_percent"],
-            warning_level=context_status["warning_level"],
-            can_continue=context_status["can_continue"],
-            message=context_status.get("message"),
-            recommended_action=context_status.get("recommended_action"),
-        )
-        events.append(context_status_event)
-
-        # 結果イベントを追加
-        # JSON出力用にコストをフォーマット（科学的記数法を避ける）
-        total_cost_formatted = self._format_cost_for_json(total_cost_decimal)
-        model_usage_formatted = self._format_model_usage_for_json(model_usage)
-
-        # ステータスを決定
-        status = "success" if subtype == "success" else "error"
-
-        done_event = format_done_event(
-            seq=seq_counter.next(),
-            status=status,
-            result=context.assistant_text if subtype == "success" else None,
-            errors=context.errors if context.errors else None,
-            usage=usage_obj,
-            cost_usd=total_cost_formatted,
-            turn_count=num_turns,
-            duration_ms=duration_ms,
-            session_id=context.session_id,
-            messages=context.message_logs,
-            model_usage=model_usage_formatted,
-        )
-        events.append(done_event)
-
-        return events
-
-    async def _generate_and_update_title(
-        self,
-        context: ExecutionContext,
-        seq_counter: SequenceCounter,
-    ) -> dict:
-        """タイトル生成と更新"""
-        logger.info("初回実行のためタイトル生成中...")
-
-        aws_config = AWSConfig(context.model)
-        title_generator = TitleGenerator(aws_config)
-
-        generated_title = await asyncio.to_thread(
-            title_generator.generate,
-            user_input=context.request.user_input,
-            assistant_response=context.assistant_text,
-            model_region=context.model.model_region or settings.aws_region,
-        )
-
-        await self.conversation_service.update_conversation_title(
-            conversation_id=context.conversation_id,
-            tenant_id=context.tenant_id,
-            title=generated_title,
-        )
-        logger.info("タイトル更新完了", title=generated_title)
-
-        return format_title_event(seq=seq_counter.next(), title=generated_title)
-
-    async def _save_message_log(
-        self,
-        context: ExecutionContext,
-        msg_type: str,
-        message,
-        log_entry: MessageLogEntry,
-    ) -> bool:
-        """
-        メッセージログを保存
-
-        Returns:
-            保存された場合はTrue、スキップされた場合はFalse
-        """
-        should_save = True
-
-        if msg_type == "unknown":
-            should_save = False
-            logger.info("unknownメッセージタイプをスキップ", message_seq=context.message_seq)
-        elif msg_type == "system" and getattr(message, "subtype", None) == "init":
-            # 継続実行の場合はsystem/initをスキップ
-            existing = await self.conversation_service.get_conversation_by_id(
-                context.conversation_id, context.tenant_id
+            # コンテキスト状況を更新
+            await self._update_context_status(
+                request.conversation_id, request.tenant_id,
+                model, input_tokens, output_tokens,
             )
-            if existing and existing.session_id:
-                should_save = False
-                logger.info(
-                    "継続実行のためsystem/initメッセージをスキップ",
-                    message_seq=context.message_seq,
+        except Exception as e:
+            logger.error("使用量記録エラー", error=str(e))
+
+    async def _check_context_limit(
+        self,
+        conversation_id: str,
+        tenant_id: str,
+        model: Model,
+        seq_counter: SequenceCounter,
+    ) -> dict | None:
+        """コンテキスト制限チェック"""
+        conversation = await self.conversation_service.get_conversation_by_id(
+            conversation_id, tenant_id
+        )
+        if not conversation:
+            return None
+
+        if conversation.context_limit_reached:
+            return format_error_event(
+                seq=seq_counter.next(),
+                error_type="context_limit_exceeded",
+                message="この会話はコンテキスト制限に達しています。新しいチャットを開始してください。",
+                recoverable=False,
+            )
+
+        max_context = model.context_window
+        if max_context > 0 and conversation.estimated_context_tokens > 0:
+            usage_percent = (conversation.estimated_context_tokens / max_context) * 100
+            if usage_percent >= 95:
+                return format_error_event(
+                    seq=seq_counter.next(),
+                    error_type="context_limit_exceeded",
+                    message=f"コンテキスト使用率が{usage_percent:.1f}%に達しています。新しいチャットを開始してください。",
+                    recoverable=False,
                 )
 
-        if should_save:
-            context.message_seq += 1
-            await self.conversation_service.save_message_log(
-                conversation_id=context.conversation_id,
-                message_seq=context.message_seq,
-                message_type=msg_type,
-                message_subtype=getattr(message, "subtype", None),
-                content=log_entry.to_dict(),
-            )
-            return True
-        else:
-            return False
+        return None
 
-    def _handle_error(
+    async def _update_context_status(
         self,
-        error: Exception,
-        context: ExecutionContext,
-        tool_tracker: ToolTracker,
-        seq_counter: SequenceCounter,
-    ):
-        """エラーハンドリング"""
-        error_message = str(error)
-        duration_ms = int((time.time() - context.start_time) * 1000)
+        conversation_id: str,
+        tenant_id: str,
+        model: Model,
+        input_tokens: int,
+        output_tokens: int,
+    ) -> None:
+        """コンテキスト状況を更新"""
+        estimated = input_tokens + output_tokens
+        max_context = model.context_window
+        usage_percent = (estimated / max_context) * 100 if max_context > 0 else 0
+        limit_reached = usage_percent >= 95
 
-        # ProcessErrorの場合は詳細情報を取得
-        if hasattr(error, "exit_code") and hasattr(error, "stderr"):
-            error_message = (
-                f"Command failed with exit code {error.exit_code}\n"
-                f"Error details: {error.stderr}"
-            )
-            logger.error(
-                "エージェント実行エラー (ProcessError)",
-                exit_code=error.exit_code,
-                stderr=error.stderr,
-                exc_info=True,
-            )
-        else:
-            logger.error("エージェント実行エラー", error=error_message, exc_info=True)
-
-        yield format_error_event(
-            seq=seq_counter.next(),
-            error_type="execution_error",
-            message=error_message,
-            recoverable=False,
+        await self.conversation_service.update_conversation_context_status(
+            conversation_id=conversation_id,
+            tenant_id=tenant_id,
+            total_input_tokens=input_tokens,
+            total_output_tokens=output_tokens,
+            estimated_context_tokens=estimated,
+            context_limit_reached=limit_reached,
         )
-        yield self._create_error_result(context, [error_message], seq_counter)
 
-    def _create_error_result(
-        self,
-        context: ExecutionContext,
-        errors: list[str],
-        seq_counter: SequenceCounter,
-    ) -> dict:
-        """エラー結果イベントを生成"""
-        duration_ms = int((time.time() - context.start_time) * 1000)
-
+    def _error_done(self, start_time: float, seq_counter: SequenceCounter) -> dict:
+        """エラー時のdoneイベントを生成"""
         return format_done_event(
             seq=seq_counter.next(),
             status="error",
             result=None,
-            errors=errors,
+            errors=["エージェント実行に失敗しました"],
             usage={
                 "input_tokens": 0,
                 "output_tokens": 0,
@@ -679,511 +394,5 @@ class ExecuteService:
             },
             cost_usd="0",
             turn_count=0,
-            duration_ms=duration_ms,
+            duration_ms=int((time.time() - start_time) * 1000),
         )
-
-    def _get_cache_creation_tokens(self, usage_data: dict) -> tuple[int, int]:
-        """
-        キャッシュ作成トークン数を取得（5分/1時間を分離）
-
-        新旧両方のSDK形式に対応:
-        - 旧形式: cache_creation_input_tokens (int) → 全て5分キャッシュとして扱う
-        - 新形式: cache_creation.ephemeral_5m_input_tokens, ephemeral_1h_input_tokens
-
-        Args:
-            usage_data: SDKからの使用量データ
-
-        Returns:
-            (cache_5m_tokens, cache_1h_tokens)
-        """
-        if not usage_data:
-            return 0, 0
-
-        # 新形式をチェック
-        cache_creation = usage_data.get("cache_creation")
-        if isinstance(cache_creation, dict):
-            ephemeral_5m = cache_creation.get("ephemeral_5m_input_tokens", 0) or 0
-            ephemeral_1h = cache_creation.get("ephemeral_1h_input_tokens", 0) or 0
-            return ephemeral_5m, ephemeral_1h
-
-        # 旧形式の場合は全て5分キャッシュとして扱う
-        old_format = usage_data.get("cache_creation_input_tokens", 0) or 0
-        return old_format, 0
-
-    def _normalize_model_usage(
-        self,
-        model_usage_raw: dict | None,
-    ) -> dict[str, dict[str, Any]] | None:
-        """
-        モデル使用量を正規化
-
-        SDKからのmodel_usageフィールドを正規化された形式に変換
-
-        Args:
-            model_usage_raw: SDKからの生のmodel_usage
-
-        Returns:
-            正規化されたmodel_usage（なければNone）
-        """
-        if not model_usage_raw:
-            return None
-
-        # SDKの形式に応じて正規化
-        # 期待される形式:
-        # {
-        #   "claude-3-5-sonnet-20241022": {
-        #     "input_tokens": 1000,
-        #     "output_tokens": 500,
-        #     "cache_creation_input_tokens": 0,
-        #     "cache_read_input_tokens": 0
-        #   },
-        #   "claude-3-5-haiku-20241022": {...}
-        # }
-        normalized = {}
-        for model_id, usage in model_usage_raw.items():
-            if isinstance(usage, dict):
-                # キー存在チェックで正規化（0の場合も正しく取得）
-                normalized[model_id] = {
-                    "input_tokens": usage.get("input_tokens") if "input_tokens" in usage else usage.get("inputTokens", 0),
-                    "output_tokens": usage.get("output_tokens") if "output_tokens" in usage else usage.get("outputTokens", 0),
-                    "cache_creation_input_tokens": usage.get("cache_creation_input_tokens") if "cache_creation_input_tokens" in usage else usage.get("cacheCreationInputTokens", 0),
-                    "cache_read_input_tokens": usage.get("cache_read_input_tokens") if "cache_read_input_tokens" in usage else usage.get("cacheReadInputTokens", 0),
-                }
-        return normalized if normalized else None
-
-    def _calculate_total_cost_from_model_usage(
-        self,
-        model_usage: dict[str, dict[str, Any]],
-    ) -> Decimal:
-        """
-        モデル別使用量から合計コストを計算
-
-        各モデルの使用量に含まれるcost_usd（Decimal）を集計する
-
-        Args:
-            model_usage: モデル別使用量（各エントリにcost_usdが含まれる）
-
-        Returns:
-            合計コスト（USD）- Decimal型
-        """
-        total_cost = Decimal("0")
-
-        for model_id, usage in model_usage.items():
-            cost = usage.get("cost_usd", Decimal("0"))
-            if isinstance(cost, Decimal):
-                total_cost += cost
-            else:
-                # float/intの場合はDecimalに変換
-                total_cost += Decimal(str(cost))
-
-        return total_cost
-
-    @staticmethod
-    def _format_cost_for_json(cost: Decimal) -> str:
-        """
-        コストを適切な精度でJSON用にフォーマット
-
-        科学的記数法を避け、適切な小数点以下の桁数で表示する
-
-        Args:
-            cost: コスト（Decimal）
-
-        Returns:
-            フォーマットされたコスト文字列
-        """
-        # 小数点以下10桁まで表示（0は除去）
-        # 例: Decimal("0.0000576360") -> "0.000057636"
-        formatted = f"{cost:.10f}".rstrip("0").rstrip(".")
-        return formatted if formatted else "0"
-
-    def _format_model_usage_for_json(
-        self,
-        model_usage: dict[str, dict[str, Any]],
-    ) -> dict[str, dict[str, Any]]:
-        """
-        model_usageをJSON出力用にフォーマット
-
-        cost_usd（Decimal）を科学的記数法を避けた文字列に変換する
-
-        Args:
-            model_usage: モデル別使用量（cost_usdはDecimal）
-
-        Returns:
-            フォーマット済みのmodel_usage（cost_usdは文字列）
-        """
-        formatted: dict[str, dict[str, Any]] = {}
-        for model_id, usage in model_usage.items():
-            cost = usage.get("cost_usd", Decimal("0"))
-            if not isinstance(cost, Decimal):
-                cost = Decimal(str(cost))
-
-            formatted[model_id] = {
-                "input_tokens": usage["input_tokens"],
-                "output_tokens": usage["output_tokens"],
-                "cache_creation_5m_input_tokens": usage.get("cache_creation_5m_input_tokens", 0),
-                "cache_creation_1h_input_tokens": usage.get("cache_creation_1h_input_tokens", 0),
-                "cache_read_input_tokens": usage.get("cache_read_input_tokens", 0),
-                "cost_usd": self._format_cost_for_json(cost),
-            }
-        return formatted
-
-    async def _build_model_usage(
-        self,
-        context: ExecutionContext,
-        tool_tracker: ToolTracker,
-        main_input_tokens: int,
-        main_output_tokens: int,
-        main_cache_creation_5m: int,
-        main_cache_creation_1h: int,
-        main_cache_read: int,
-    ) -> dict[str, dict[str, Any]]:
-        """
-        モデル別使用量を構築
-
-        SDKからmodel_usageが取得できない場合（Python SDKなど）、
-        サブエージェントの追跡データから構築する。
-        コストはDBのmodelsテーブルの価格設定から計算する。
-
-        Args:
-            context: 実行コンテキスト
-            tool_tracker: ツールトラッカー
-            main_input_tokens: SDK全体の入力トークン数（メイン+サブエージェント）
-            main_output_tokens: SDK全体の出力トークン数（メイン+サブエージェント）
-            main_cache_creation_5m: 5分キャッシュ作成トークン数
-            main_cache_creation_1h: 1時間キャッシュ作成トークン数
-            main_cache_read: キャッシュ読み込みトークン数
-
-        Returns:
-            モデルID別の使用量辞書（cost_usdはDecimal型）
-        """
-        # サブエージェントの使用量を取得（cost_usdはDecimal）
-        subagent_model_usage = tool_tracker.get_aggregated_model_usage()
-
-        # サブエージェントの合計トークン数を計算
-        subagent_total_input = sum(
-            u["input_tokens"] for u in subagent_model_usage.values()
-        )
-        subagent_total_output = sum(
-            u["output_tokens"] for u in subagent_model_usage.values()
-        )
-
-        # メインエージェントの使用量（全体からサブエージェント分を引く）
-        main_model_id = context.model.model_id
-        main_actual_input = max(0, main_input_tokens - subagent_total_input)
-        main_actual_output = max(0, main_output_tokens - subagent_total_output)
-
-        # メインエージェントのコストをDBから計算（Decimal）
-        main_cost: Decimal = context.model.calculate_cost(
-            main_actual_input,
-            main_actual_output,
-            main_cache_creation_5m,
-            main_cache_creation_1h,
-            main_cache_read,
-        )
-
-        model_usage: dict[str, dict[str, Any]] = {
-            main_model_id: {
-                "input_tokens": main_actual_input,
-                "output_tokens": main_actual_output,
-                "cache_creation_5m_input_tokens": main_cache_creation_5m,
-                "cache_creation_1h_input_tokens": main_cache_creation_1h,
-                "cache_read_input_tokens": main_cache_read,
-                "cost_usd": main_cost,  # Decimal
-            }
-        }
-
-        # サブエージェントの使用量をマージ
-        # サブエージェントのcost_usdはDBから計算する必要がある
-        model_service = ModelService(self.db)
-
-        for model_id, usage in subagent_model_usage.items():
-            # サブエージェントのモデル情報をDBから取得
-            subagent_model = await model_service.get_by_id(model_id)
-
-            if subagent_model:
-                # DBから価格を取得してコスト計算
-                subagent_cost: Decimal = subagent_model.calculate_cost(
-                    usage["input_tokens"],
-                    usage["output_tokens"],
-                    usage.get("cache_creation_5m_input_tokens", 0),
-                    usage.get("cache_creation_1h_input_tokens", 0),
-                    usage.get("cache_read_input_tokens", 0),
-                )
-            else:
-                # モデルがDBにない場合は記録されたcost_usdを使用（ただし0の可能性）
-                subagent_cost = usage.get("cost_usd", Decimal("0"))
-                logger.warning(
-                    "サブエージェントモデルがDBに存在しません",
-                    model_id=model_id,
-                )
-
-            if model_id == main_model_id:
-                # 同じモデルの場合はマージ
-                model_usage[model_id]["input_tokens"] += usage["input_tokens"]
-                model_usage[model_id]["output_tokens"] += usage["output_tokens"]
-                model_usage[model_id]["cache_creation_5m_input_tokens"] += usage.get("cache_creation_5m_input_tokens", 0)
-                model_usage[model_id]["cache_creation_1h_input_tokens"] += usage.get("cache_creation_1h_input_tokens", 0)
-                model_usage[model_id]["cache_read_input_tokens"] += usage.get("cache_read_input_tokens", 0)
-                # コストはDecimal同士で加算
-                model_usage[model_id]["cost_usd"] += subagent_cost
-            else:
-                # 異なるモデルの場合は新規エントリ
-                model_usage[model_id] = {
-                    "input_tokens": usage["input_tokens"],
-                    "output_tokens": usage["output_tokens"],
-                    "cache_creation_5m_input_tokens": usage.get("cache_creation_5m_input_tokens", 0),
-                    "cache_creation_1h_input_tokens": usage.get("cache_creation_1h_input_tokens", 0),
-                    "cache_read_input_tokens": usage.get("cache_read_input_tokens", 0),
-                    "cost_usd": subagent_cost,  # Decimal
-                }
-
-        logger.info(
-            "モデル別使用量を構築",
-            main_model_id=main_model_id,
-            subagent_count=len(subagent_model_usage),
-            total_models=len(model_usage),
-        )
-
-        return model_usage
-
-    async def _validate_subagent_models(self) -> str | None:
-        """
-        サブエージェント用モデルがDBに存在するか確認
-
-        エージェント実行前にサブエージェントで使用するモデルが
-        modelsテーブルに登録されているか検証する
-
-        Returns:
-            エラーメッセージ（問題がなければNone）
-        """
-        required_ids = SubagentModelMapping.get_required_model_ids(settings)
-
-        model_service = ModelService(self.db)
-        missing_models = []
-
-        for model_id in required_ids:
-            model = await model_service.get_by_id(model_id)
-            if not model:
-                missing_models.append(model_id)
-
-        if missing_models:
-            error_msg = (
-                f"サブエージェント用モデルがDBに存在しません: {missing_models}. "
-                "models テーブルに登録してください。"
-            )
-            logger.error(
-                "モデルバリデーションエラー",
-                missing_models=missing_models,
-            )
-            return error_msg
-
-        logger.debug(
-            "サブエージェント用モデルバリデーション完了",
-            required_models=list(required_ids),
-        )
-        return None
-
-    async def _sync_workspace_after_execution(
-        self,
-        context: ExecutionContext,
-    ) -> None:
-        """
-        実行完了後のワークスペース同期処理
-
-        1. ローカルからS3に同期
-        2. AIファイルを自動登録
-        3. ローカルクリーンアップ
-        """
-        import os
-        try:
-            # デバッグ: ローカルディレクトリの内容を確認
-            local_dir = self.workspace_service.get_workspace_local_path(context.conversation_id)
-            logger.info(
-                "同期前ローカルディレクトリ確認",
-                local_dir=local_dir,
-                cwd=context.cwd,
-                exists=os.path.exists(local_dir),
-                contents=os.listdir(local_dir) if os.path.exists(local_dir) else [],
-            )
-
-            # ローカルからS3に同期
-            synced_files = await self.workspace_service.sync_from_local(
-                context.tenant_id, context.conversation_id
-            )
-            logger.info(
-                "ローカル→S3同期完了",
-                tenant_id=context.tenant_id,
-                conversation_id=context.conversation_id,
-                synced_count=len(synced_files),
-            )
-
-            # AIファイルを自動登録（すべてのファイルをpresented=Trueで登録）
-            for file_path in synced_files:
-                await self.workspace_service.register_ai_file(
-                    context.tenant_id,
-                    context.conversation_id,
-                    file_path,
-                    is_presented=True,
-                )
-                logger.info(
-                    "AIファイル自動登録",
-                    file_path=file_path,
-                )
-
-            # ローカルクリーンアップ
-            await self.workspace_service.cleanup_local(context.conversation_id)
-            logger.info(
-                "ローカルクリーンアップ完了",
-                conversation_id=context.conversation_id,
-            )
-
-        except Exception as e:
-            logger.error(
-                "ワークスペース同期エラー",
-                error=str(e),
-                tenant_id=context.tenant_id,
-                conversation_id=context.conversation_id,
-                exc_info=True,
-            )
-
-    async def _check_context_limit_before_execution(
-        self,
-        context: ExecutionContext,
-        seq_counter: SequenceCounter,
-    ) -> dict | None:
-        """
-        実行前にコンテキスト制限をチェック
-
-        会話がすでにcontext_limit_reachedフラグが立っている場合、
-        または推定コンテキストトークンが上限の95%を超えている場合はエラーを返す。
-
-        Args:
-            context: 実行コンテキスト
-            seq_counter: シーケンスカウンター
-
-        Returns:
-            エラーイベント（問題がなければNone）
-        """
-        # 会話を取得
-        conversation = await self.conversation_service.get_conversation_by_id(
-            context.conversation_id, context.tenant_id
-        )
-        if not conversation:
-            return None
-
-        # context_limit_reachedフラグをチェック
-        if conversation.context_limit_reached:
-            logger.warning(
-                "コンテキスト制限到達済みの会話に対するリクエスト",
-                conversation_id=context.conversation_id,
-                estimated_context_tokens=conversation.estimated_context_tokens,
-            )
-            return format_error_event(
-                seq=seq_counter.next(),
-                error_type="context_limit_exceeded",
-                message="この会話はコンテキスト制限に達しています。新しいチャットを開始してください。",
-                recoverable=False,
-            )
-
-        # 推定コンテキストトークンをチェック（95%以上で警告）
-        max_context = context.model.context_window
-        if max_context > 0 and conversation.estimated_context_tokens > 0:
-            usage_percent = (conversation.estimated_context_tokens / max_context) * 100
-            if usage_percent >= 95:
-                logger.warning(
-                    "コンテキスト使用率が95%を超えています",
-                    conversation_id=context.conversation_id,
-                    estimated_context_tokens=conversation.estimated_context_tokens,
-                    max_context=max_context,
-                    usage_percent=usage_percent,
-                )
-                return format_error_event(
-                    seq=seq_counter.next(),
-                    error_type="context_limit_exceeded",
-                    message=f"コンテキスト使用率が{usage_percent:.1f}%に達しています。新しいチャットを開始してください。",
-                    recoverable=False,
-                )
-
-        return None
-
-    async def _calculate_and_update_context_status(
-        self,
-        context: ExecutionContext,
-        input_tokens: int,
-        output_tokens: int,
-    ) -> dict[str, Any]:
-        """
-        コンテキスト状況を計算し、会話テーブルを更新
-
-        実行終了後に呼び出され、次回リクエスト時のコンテキストサイズを推定。
-        警告レベルを判定し、context_limit_reachedフラグを更新する。
-
-        Args:
-            context: 実行コンテキスト
-            input_tokens: 今回の入力トークン数
-            output_tokens: 今回の出力トークン数
-
-        Returns:
-            コンテキスト状況の辞書
-        """
-        # 次回リクエスト時の推定コンテキストサイズ
-        # = 今回の入力トークン（システムプロンプト+履歴+入力）+ 今回の出力（次回は履歴に含まれる）
-        estimated_next_context = input_tokens + output_tokens
-
-        # モデルのContext Window上限
-        max_context = context.model.context_window
-
-        # 使用率計算
-        usage_percent = (estimated_next_context / max_context) * 100 if max_context > 0 else 0
-
-        # 警告レベル判定
-        if usage_percent >= 95:
-            warning_level = "blocked"
-            can_continue = False
-            message = "トークン上限に達しました。新しいチャットでやりとりしてください。"
-            recommended_action = "new_chat"
-        elif usage_percent >= 85:
-            warning_level = "critical"
-            can_continue = True
-            message = "トークン上限に近づいています。次の返信でエラーになる可能性があります。"
-            recommended_action = "new_chat"
-        elif usage_percent >= 70:
-            warning_level = "warning"
-            can_continue = True
-            message = "会話が長くなっています。新しいチャットを開始することをおすすめします。"
-            recommended_action = "new_chat"
-        else:
-            warning_level = "normal"
-            can_continue = True
-            message = None
-            recommended_action = None
-
-        # 会話テーブルを更新
-        await self.conversation_service.update_conversation_context_status(
-            conversation_id=context.conversation_id,
-            tenant_id=context.tenant_id,
-            total_input_tokens=input_tokens,
-            total_output_tokens=output_tokens,
-            estimated_context_tokens=estimated_next_context,
-            context_limit_reached=not can_continue,
-        )
-
-        logger.info(
-            "コンテキスト状況を更新",
-            conversation_id=context.conversation_id,
-            estimated_context_tokens=estimated_next_context,
-            max_context_tokens=max_context,
-            usage_percent=round(usage_percent, 1),
-            warning_level=warning_level,
-            can_continue=can_continue,
-        )
-
-        return {
-            "current_context_tokens": estimated_next_context,
-            "max_context_tokens": max_context,
-            "usage_percent": usage_percent,
-            "warning_level": warning_level,
-            "can_continue": can_continue,
-            "message": message,
-            "recommended_action": recommended_action,
-        }

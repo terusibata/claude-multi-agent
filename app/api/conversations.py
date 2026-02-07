@@ -35,11 +35,18 @@ from app.schemas.conversation import (
     MessageLogResponse,
 )
 from app.schemas.execute import ExecuteRequest, StreamRequest
+from app.services.container.orchestrator import ContainerOrchestrator
 from app.services.conversation_service import ConversationService
 from app.services.execute_service import ExecuteService
 from app.services.tenant_service import TenantService
 from app.services.workspace_service import WorkspaceService
 from app.utils.streaming import format_error_event, format_ping_event
+
+
+def _get_orchestrator() -> ContainerOrchestrator:
+    """アプリケーション状態からオーケストレーターを取得"""
+    from app.main import app
+    return app.state.orchestrator
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -298,9 +305,10 @@ async def _background_execution(
     tenant: Tenant,
     model: Model,
     event_queue: asyncio.Queue,
+    orchestrator: "ContainerOrchestrator",
 ) -> None:
     """
-    バックグラウンドでエージェントを実行し、イベントをキューに送信
+    バックグラウンドでコンテナ隔離エージェントを実行し、イベントをキューに送信
 
     リクエストスコープのセッションはレスポンス返却後にクリーンアップされるため、
     独立したDBセッションを使用する。
@@ -310,12 +318,13 @@ async def _background_execution(
         tenant: テナント
         model: モデル定義
         event_queue: イベントキュー
+        orchestrator: コンテナオーケストレーター
     """
     from app.database import async_session_maker
 
     async with async_session_maker() as db:
         try:
-            execute_service = ExecuteService(db)
+            execute_service = ExecuteService(db, orchestrator)
             async for event in execute_service.execute_streaming(
                 request=request,
                 tenant=tenant,
@@ -343,9 +352,10 @@ async def _event_generator(
     request: ExecuteRequest,
     tenant: Tenant,
     model: Model,
+    orchestrator: "ContainerOrchestrator",
 ) -> AsyncIterator[dict]:
     """
-    SSEイベントジェネレータ
+    SSEイベントジェネレータ（コンテナ隔離版）
     クライアントが切断しても、バックグラウンド処理は継続します。
     定期的にハートビートを送信して接続を維持します。
 
@@ -353,6 +363,7 @@ async def _event_generator(
         request: 実行リクエスト
         tenant: テナント
         model: モデル定義
+        orchestrator: コンテナオーケストレーター
 
     Yields:
         SSEイベント
@@ -368,6 +379,7 @@ async def _event_generator(
             tenant,
             model,
             event_queue,
+            orchestrator,
         )
     )
 
@@ -665,12 +677,16 @@ async def stream_conversation(
         preferred_skills=stream_request.preferred_skills,
     )
 
+    # オーケストレーターを取得
+    orchestrator = _get_orchestrator()
+
     # SSEレスポンスを返す
     return EventSourceResponse(
         _event_generator(
             request=execute_request,
             tenant=tenant,
             model=model,
+            orchestrator=orchestrator,
         ),
         media_type="text/event-stream",
     )

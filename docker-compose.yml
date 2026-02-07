@@ -61,10 +61,18 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       SKILLS_BASE_PATH: /skills
       WORKSPACE_TEMP_DIR: /var/lib/aiagent/workspaces
+      # コンテナ隔離設定
+      DOCKER_SOCKET_PATH: unix:///var/run/docker.sock
+      WORKSPACE_SOCKET_BASE_PATH: /var/run/workspace-sockets
+      CONTAINER_IMAGE: ${CONTAINER_IMAGE:-workspace-base:latest}
     volumes:
       - ./app:/app/app
       - skills_data:/skills
       - workspaces_data:/var/lib/aiagent/workspaces
+      # Docker Socket（コンテナ管理用）
+      - /var/run/docker.sock:/var/run/docker.sock
+      # ワークスペースSocket（コンテナ間UDS通信用）
+      - workspace_sockets:/var/run/workspace-sockets
     ports:
       - "${APP_PORT:-8000}:8000"
     depends_on:
@@ -73,6 +81,9 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
+    # Docker Socketアクセスに必要
+    group_add:
+      - ${DOCKER_GID:-999}
 
   # 本番環境用バックエンド
   backend-prod:
@@ -100,9 +111,17 @@ services:
       API_KEYS: ${API_KEYS}
       METRICS_ENABLED: "true"
       SHUTDOWN_TIMEOUT: "30.0"
+      # コンテナ隔離設定
+      DOCKER_SOCKET_PATH: unix:///var/run/docker.sock
+      WORKSPACE_SOCKET_BASE_PATH: /var/run/workspace-sockets
+      CONTAINER_IMAGE: ${CONTAINER_IMAGE:-workspace-base:latest}
     volumes:
       - skills_data:/skills
       - workspaces_data:/var/lib/aiagent/workspaces
+      # Docker Socket（コンテナ管理用）
+      - /var/run/docker.sock:/var/run/docker.sock
+      # ワークスペースSocket（コンテナ間UDS通信用）
+      - workspace_sockets:/var/run/workspace-sockets
     ports:
       - "${APP_PORT:-8000}:8000"
     depends_on:
@@ -111,6 +130,9 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
+    # Docker Socketアクセスに必要
+    group_add:
+      - ${DOCKER_GID:-999}
     deploy:
       resources:
         limits:
@@ -130,4 +152,6 @@ volumes:
   skills_data:
     driver: local
   workspaces_data:
+    driver: local
+  workspace_sockets:
     driver: local

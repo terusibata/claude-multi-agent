@@ -12,7 +12,7 @@ from botocore.exceptions import ClientError, EndpointConnectionError
 from app.config import get_settings
 from app.infrastructure.metrics import get_bedrock_requests, get_bedrock_tokens
 from app.infrastructure.retry import RetryConfig, retry_sync
-from app.services.execute.aws_config import AWSConfig
+from app.services.aws_config import AWSConfig
 
 logger = structlog.get_logger(__name__)
 settings = get_settings()
