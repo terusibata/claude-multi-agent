@@ -175,7 +175,7 @@ class S3StorageBackend:
                         break
                     yield chunk
             finally:
-                # 正常終了・異常終了問わずBodyをクローズ（BUG-023修正）
+                # 正常終了・異常終了問わずBodyをクローズ
                 await asyncio.to_thread(body.close)
 
             self._metrics.inc(operation="download_stream", status="success")
@@ -307,7 +307,7 @@ class S3StorageBackend:
         session_id: str,
     ) -> int:
         """
-        セッション配下の全ファイルを削除（BUG-011用）
+        セッション配下の全ファイルを削除
 
         Args:
             tenant_id: テナントID

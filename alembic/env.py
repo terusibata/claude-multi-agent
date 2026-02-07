@@ -75,7 +75,6 @@ def do_run_migrations(connection: Connection) -> None:
     マイグレーション実行（接続使用）
     アドバイザリーロックで排他制御（複数コンテナ同時起動時の競合防止）
     """
-    # PostgreSQL アドバイザリーロックで排他制御（BUG-017修正）
     lock_id = 987654  # マイグレーション用の固定ロックID
     connection.execute(text(f"SELECT pg_advisory_lock({lock_id})"))
     try:

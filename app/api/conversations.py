@@ -302,9 +302,8 @@ async def _background_execution(
     """
     バックグラウンドでエージェントを実行し、イベントをキューに送信
 
-    独立したDBセッションを使用する（BUG-004修正）。
     リクエストスコープのセッションはレスポンス返却後にクリーンアップされるため、
-    長時間実行のバックグラウンドタスクでは独立セッションが必要。
+    独立したDBセッションを使用する。
 
     Args:
         request: 実行リクエスト
@@ -667,8 +666,6 @@ async def stream_conversation(
     )
 
     # SSEレスポンスを返す
-    # バックグラウンドタスクは独立したDBセッションを使用するため、
-    # リクエストスコープのセッション(db)は渡さない（BUG-004修正）
     return EventSourceResponse(
         _event_generator(
             request=execute_request,

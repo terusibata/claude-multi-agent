@@ -82,7 +82,7 @@ class WorkspaceService:
         # ファイルタイプ別のサイズ制限を取得
         max_size = FileTypeClassifier.get_max_file_size(metadata.filename, content_type)
 
-        # 申告サイズチェック（BUG-007修正：ファイル全体をメモリに読み込まない）
+        # 申告サイズチェック
         if metadata.size > max_size:
             raise FileSizeExceededError(
                 filename=metadata.filename,
