@@ -2,6 +2,7 @@
 Redis接続管理
 分散ロック、キャッシュ、レート制限に使用
 """
+import asyncio
 import time
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Optional
@@ -18,15 +19,23 @@ settings = get_settings()
 
 # グローバルRedisプール
 _redis_pool: Optional[ConnectionPool] = None
+_redis_pool_lock = asyncio.Lock()
 
 
 async def get_redis_pool() -> ConnectionPool:
     """
     Redis接続プールを取得
-    シングルトンパターンでプールを管理
+    シングルトンパターンでプールを管理（排他制御付き）
     """
     global _redis_pool
-    if _redis_pool is None:
+    if _redis_pool is not None:
+        return _redis_pool
+
+    async with _redis_pool_lock:
+        # ダブルチェックロック
+        if _redis_pool is not None:
+            return _redis_pool
+
         _redis_pool = ConnectionPool.from_url(
             settings.redis_url_with_auth,
             max_connections=settings.redis_max_connections,

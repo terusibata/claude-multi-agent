@@ -6,7 +6,7 @@ import asyncio
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import pool
+from sqlalchemy import pool, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
@@ -73,11 +73,18 @@ def run_migrations_offline() -> None:
 def do_run_migrations(connection: Connection) -> None:
     """
     マイグレーション実行（接続使用）
+    アドバイザリーロックで排他制御（複数コンテナ同時起動時の競合防止）
     """
-    context.configure(connection=connection, target_metadata=target_metadata)
+    lock_id = 987654  # マイグレーション用の固定ロックID
+    connection.execute(text(f"SELECT pg_advisory_lock({lock_id})"))
+    try:
+        context.configure(connection=connection, target_metadata=target_metadata)
 
-    with context.begin_transaction():
-        context.run_migrations()
+        with context.begin_transaction():
+            context.run_migrations()
+    finally:
+        connection.execute(text(f"SELECT pg_advisory_unlock({lock_id})"))
+        connection.commit()
 
 
 async def run_async_migrations() -> None:

@@ -3,15 +3,16 @@
 
 Redisベースのスライディングウィンドウアルゴリズムによるレート制限
 AI実行系API（一般ユーザー向け）のみに適用
+
+Pure ASGIミドルウェアとして実装（SSEストリーミング対応）
 """
+import json
 import re
 import time
-from typing import Callable
+from typing import Optional
 
 import structlog
-from fastapi import Request, Response
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import JSONResponse
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.config import get_settings
 from app.infrastructure.redis import redis_client
@@ -20,9 +21,9 @@ logger = structlog.get_logger(__name__)
 settings = get_settings()
 
 
-class RateLimitMiddleware(BaseHTTPMiddleware):
+class RateLimitMiddleware:
     """
-    レート制限ミドルウェア
+    レート制限ミドルウェア（Pure ASGI実装）
 
     AI実行系API（一般ユーザー向け）のみにレート制限を適用:
     - 会話関連: /api/tenants/{tenant_id}/conversations/**
@@ -45,6 +46,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         "/docs",
         "/redoc",
         "/openapi.json",
+        "/metrics",
     }
 
     # レート制限を適用するパスパターン（正規表現）
@@ -88,7 +90,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     def __init__(
         self,
-        app,
+        app: ASGIApp,
         requests_per_window: int,
         window_seconds: int,
         key_prefix: str = "ratelimit:",
@@ -97,12 +99,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         初期化
 
         Args:
-            app: FastAPIアプリケーション
+            app: 次のASGIアプリケーション
             requests_per_window: ウィンドウあたりの最大リクエスト数
             window_seconds: ウィンドウのサイズ（秒）
             key_prefix: Redisキーのプレフィックス
         """
-        super().__init__(app)
+        self.app = app
         self.requests_per_window = requests_per_window
         self.window_seconds = window_seconds
         self.key_prefix = key_prefix
@@ -111,7 +113,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if not self.enabled:
             logger.info("レート制限が無効化されています")
 
-    def _get_rate_limit_key(self, request: Request) -> str:
+    def _get_header(self, scope: Scope, name: bytes) -> Optional[str]:
+        """スコープからヘッダー値を取得"""
+        for header_name, header_value in scope.get("headers", []):
+            if header_name.lower() == name:
+                return header_value.decode("latin-1")
+        return None
+
+    def _get_rate_limit_key(self, scope: Scope) -> str:
         """
         レート制限キーを取得
 
@@ -119,21 +128,22 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         - X-User-ID + X-Tenant-ID: ユーザー単位（必須）
         - ヘッダーなし: IP単位（フォールバック）
         """
-        user_id = request.headers.get("X-User-ID")
-        tenant_id = request.headers.get("X-Tenant-ID")
+        user_id = self._get_header(scope, b"x-user-id")
+        tenant_id = self._get_header(scope, b"x-tenant-id")
 
         # ユーザーIDとテナントIDがあればユーザー単位で制限
         if user_id and tenant_id:
             return f"{self.key_prefix}user:{tenant_id}:{user_id}"
 
         # フォールバック: IP単位
-        forwarded_for = request.headers.get("X-Forwarded-For")
+        forwarded_for = self._get_header(scope, b"x-forwarded-for")
         if forwarded_for:
             client_ip = forwarded_for.split(",")[0].strip()
             return f"{self.key_prefix}ip:{client_ip}"
 
-        if request.client:
-            return f"{self.key_prefix}ip:{request.client.host}"
+        client = scope.get("client")
+        if client:
+            return f"{self.key_prefix}ip:{client[0]}"
 
         return f"{self.key_prefix}ip:unknown"
 
@@ -145,16 +155,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             True: レート制限を適用
             False: レート制限をスキップ
         """
-        # 常にスキップするパス
         if path in self.ALWAYS_SKIP_PATHS:
             return False
 
-        # AI実行系パターンにマッチするか確認
         for pattern in self.RATE_LIMITED_PATTERNS:
             if pattern.match(path):
                 return True
 
-        # それ以外（管理系API）はスキップ
         return False
 
     async def _check_rate_limit(
@@ -191,18 +198,46 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             logger.error("レート制限チェック失敗", error=str(e))
             return True, self.requests_per_window, 0
 
-    async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        """リクエストを処理"""
+    async def _send_json_response(
+        self, send: Send, status: int, body: dict, headers: list[list[bytes]] | None = None
+    ) -> None:
+        """JSONレスポンスを送信"""
+        body_bytes = json.dumps(body, ensure_ascii=False).encode("utf-8")
+        response_headers = [
+            [b"content-type", b"application/json"],
+        ]
+        if headers:
+            response_headers.extend(headers)
+        await send({
+            "type": "http.response.start",
+            "status": status,
+            "headers": response_headers,
+        })
+        await send({
+            "type": "http.response.body",
+            "body": body_bytes,
+        })
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """ASGIインターフェース"""
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
         # レート制限が無効の場合はスキップ
         if not self.enabled:
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
+
+        path = scope.get("path", "")
 
         # レート制限を適用すべきか判定
-        if not self._should_apply_rate_limit(request.url.path):
-            return await call_next(request)
+        if not self._should_apply_rate_limit(path):
+            await self.app(scope, receive, send)
+            return
 
         # レート制限キーを取得
-        rate_limit_key = self._get_rate_limit_key(request)
+        rate_limit_key = self._get_rate_limit_key(scope)
 
         # レート制限チェック
         allowed, remaining, retry_after = await self._check_rate_limit(rate_limit_key)
@@ -211,34 +246,40 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             logger.warning(
                 "レート制限超過",
                 rate_limit_key=rate_limit_key,
-                path=request.url.path,
+                path=path,
                 retry_after=retry_after,
             )
-            return JSONResponse(
-                status_code=429,
-                content={
+            await self._send_json_response(
+                send, 429,
+                {
                     "error": {
                         "code": "RATE_LIMIT_EXCEEDED",
                         "message": "リクエスト数が制限を超えました。しばらくしてから再試行してください。",
                         "retry_after": retry_after,
                     }
                 },
-                headers={
-                    "Retry-After": str(retry_after),
-                    "X-RateLimit-Limit": str(self.requests_per_window),
-                    "X-RateLimit-Remaining": "0",
-                    "X-RateLimit-Reset": str(int(time.time()) + retry_after),
-                },
+                headers=[
+                    [b"retry-after", str(retry_after).encode()],
+                    [b"x-ratelimit-limit", str(self.requests_per_window).encode()],
+                    [b"x-ratelimit-remaining", b"0"],
+                    [b"x-ratelimit-reset", str(int(time.time()) + retry_after).encode()],
+                ],
             )
+            return
 
-        # リクエストを処理
-        response = await call_next(request)
+        # レート制限ヘッダーを注入するためのsendラッパー
+        rate_limit_headers = {
+            b"x-ratelimit-limit": str(self.requests_per_window).encode(),
+            b"x-ratelimit-remaining": str(remaining).encode(),
+            b"x-ratelimit-reset": str(int(time.time()) + self.window_seconds).encode(),
+        }
 
-        # レート制限ヘッダーを追加
-        response.headers["X-RateLimit-Limit"] = str(self.requests_per_window)
-        response.headers["X-RateLimit-Remaining"] = str(remaining)
-        response.headers["X-RateLimit-Reset"] = str(
-            int(time.time()) + self.window_seconds
-        )
+        async def send_with_headers(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers", []))
+                for key, value in rate_limit_headers.items():
+                    headers.append([key, value])
+                message = {**message, "headers": headers}
+            await send(message)
 
-        return response
+        await self.app(scope, receive, send_with_headers)

@@ -6,12 +6,15 @@ from datetime import datetime
 from typing import Any, Optional
 from uuid import uuid4
 
+import structlog
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.conversation import Conversation
 from app.models.message_log import MessageLog
 from app.utils.timezone import to_utc
+
+logger = structlog.get_logger(__name__)
 
 
 class ConversationService:
@@ -225,8 +228,8 @@ class ConversationService:
         if not conversation:
             return None
 
-        conversation.total_input_tokens = total_input_tokens
-        conversation.total_output_tokens = total_output_tokens
+        conversation.total_input_tokens = (conversation.total_input_tokens or 0) + total_input_tokens
+        conversation.total_output_tokens = (conversation.total_output_tokens or 0) + total_output_tokens
         conversation.estimated_context_tokens = estimated_context_tokens
         conversation.context_limit_reached = context_limit_reached
 
@@ -272,6 +275,26 @@ class ConversationService:
         conversation = await self.get_conversation_by_id(conversation_id, tenant_id)
         if not conversation:
             return False
+
+        # S3ワークスペースファイルの削除
+        try:
+            from app.services.workspace.s3_storage import S3StorageBackend
+            s3 = S3StorageBackend()
+            await s3.delete_prefix(tenant_id, conversation_id)
+        except Exception as e:
+            logger.warning(
+                "S3ワークスペースファイル削除エラー（続行）",
+                conversation_id=conversation_id,
+                error=str(e),
+            )
+
+        # 関連するConversationFileレコードを削除
+        from app.models.conversation_file import ConversationFile
+        await self.db.execute(
+            ConversationFile.__table__.delete().where(
+                ConversationFile.conversation_id == conversation_id
+            )
+        )
 
         # 関連するメッセージログを削除
         await self.db.execute(

@@ -77,25 +77,28 @@ class WorkspaceService:
         Raises:
             FileSizeExceededError: ファイルサイズが制限を超えた場合
         """
-        content = await file.read()
         content_type = metadata.content_type
 
         # ファイルタイプ別のサイズ制限を取得
         max_size = FileTypeClassifier.get_max_file_size(metadata.filename, content_type)
 
-        # ファイルサイズチェック
-        if len(content) > max_size:
+        # 申告サイズチェック
+        if metadata.size > max_size:
             raise FileSizeExceededError(
                 filename=metadata.filename,
-                size=len(content),
+                size=metadata.size,
                 max_size=max_size,
             )
 
         # フロントエンドで組み立て済みのパスをそのまま使用
         file_path = f"uploads/{metadata.relative_path}"
 
-        # S3にアップロード
-        await self.s3.upload(tenant_id, conversation_id, file_path, content, content_type)
+        # S3にストリームアップロード（メモリ効率化：ファイル全体をメモリに読み込まない）
+        await self.s3.upload_stream(
+            tenant_id, conversation_id, file_path,
+            file.file,  # SpooledTemporaryFile を直接ストリーム
+            content_type,
+        )
 
         # DBに記録（original_relative_path 含む）
         file_info = await self._save_file_record(
@@ -104,7 +107,7 @@ class WorkspaceService:
             file_path=file_path,
             original_name=metadata.original_name,
             original_relative_path=metadata.original_relative_path,
-            file_size=len(content),
+            file_size=metadata.size,
             content_type=content_type,
             source="user_upload",
         )
@@ -215,16 +218,16 @@ class WorkspaceService:
         if not await self.s3.exists(tenant_id, conversation_id, file_path):
             return None
 
-        # ファイル情報取得
-        content, content_type = await self.s3.download(tenant_id, conversation_id, file_path)
+        # メタデータのみ取得（ファイル全体をダウンロードしない）
+        metadata = await self.s3.get_metadata(tenant_id, conversation_id, file_path)
 
         return await self._save_file_record(
             tenant_id=tenant_id,
             conversation_id=conversation_id,
             file_path=file_path,
             original_name=file_path.split('/')[-1],
-            file_size=len(content),
-            content_type=content_type,
+            file_size=metadata['content_length'],
+            content_type=metadata['content_type'],
             source="ai_created",
             is_presented=is_presented,
         )

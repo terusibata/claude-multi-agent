@@ -71,6 +71,7 @@ Authorization: Bearer your_api_key_here
 | `/health` | 詳細ヘルスチェック |
 | `/health/live` | Liveness Probe |
 | `/health/ready` | Readiness Probe |
+| `/metrics` | Prometheusメトリクス |
 | `/docs` | Swagger UI（開発環境のみ） |
 | `/redoc` | ReDoc（開発環境のみ） |
 | `/openapi.json` | OpenAPI仕様 |

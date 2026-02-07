@@ -64,6 +64,7 @@ API_KEYS=key1,key2,key3
 | `/health` | ヘルスチェック |
 | `/health/live` | Kubernetes liveness probe |
 | `/health/ready` | Kubernetes readiness probe |
+| `/metrics` | Prometheusメトリクス |
 | `/docs` | OpenAPI ドキュメント（開発環境のみ） |
 | `/redoc` | ReDoc ドキュメント（開発環境のみ） |
 | `/openapi.json` | OpenAPI スキーマ |
