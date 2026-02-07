@@ -141,20 +141,115 @@
 
 ## Phase 2: 運用品質 + セキュリティ強化
 
-**ステータス**: 計画策定完了・実装待ち
+**ステータス**: Step 7/7 完了
 **計画書**: `docs/migration/04-phase2-migration-plan.md`
 
 ### Phase 2 進捗サマリー
 
 | Step | タスク | ステータス | 備考 |
 |------|--------|-----------|------|
-| 1 | WarmPool最適化 | :white_circle: 未着手 | プリヒート、リトライ、メトリクス |
-| 2 | userns-remap | :white_circle: 未着手 | Docker daemon設定、互換性検証 |
-| 3 | カスタムseccomp | :white_circle: 未着手 | syscall分析、ホワイトリストプロファイル |
-| 4 | 監視ダッシュボード + アラート | :white_circle: 未着手 | Prometheus + Grafana |
-| 5 | Proxyレイテンシ最適化 | :white_circle: 未着手 | DNS キャッシュ、コネクションプール |
-| 6 | 統合テスト・検証 | :white_circle: 未着手 | Phase 2 全機能テスト |
-| 7 | ドキュメント整備 | :white_circle: 未着手 | 運用ガイド、セキュリティ設定ガイド |
+| 1 | WarmPool最適化 | :white_check_mark: 完了 | プリヒート、リトライ(exponential backoff)、メトリクス、ホットリロード |
+| 2 | userns-remap | :white_check_mark: 完了 | daemon.json, subuid/subgid, ソケット権限調整, 検証・デプロイ手順書 |
+| 3 | カスタムseccomp | :white_check_mark: 完了 | syscall分析, ホワイトリストプロファイル, コンテナ設定適用, 違反メトリクス |
+| 4 | 監視ダッシュボード + アラート | :white_check_mark: 完了 | Prometheusメトリクス, Grafanaダッシュボード, 8種アラートルール |
+| 5 | Proxyレイテンシ最適化 | :white_check_mark: 完了 | DNSキャッシュ, コネクションプール最適化, レイテンシ計測 |
+| 6 | 統合テスト・検証 | :white_check_mark: 完了 | Phase 2統合テスト, セキュリティ検証レポート更新 |
+| 7 | ドキュメント整備 | :white_check_mark: 完了 | 運用ガイド, セキュリティ設定ガイド, 進捗更新 |
+
+### Phase 2 詳細進捗
+
+#### Step 1: WarmPool最適化
+
+- [x] 1.1 起動時プリヒート実装 → `app/services/container/warm_pool.py`, `app/main.py`
+- [x] 1.2 補充リトライロジック（exponential backoff, 最大3回） → `warm_pool.py`
+- [x] 1.3 プールメトリクス収集（枯渇回数、取得レイテンシ） → `warm_pool.py`
+- [x] 1.4 プール枯渇アラート連携 → `monitoring/prometheus/alerts/workspace-alerts.yml`
+- [x] 1.5 WarmPool設定ホットリロード（Redis経由） → `warm_pool.py`
+
+#### Step 2: userns-remap
+
+- [x] 2.1 subordinate UID/GIDマッピング定義 → `deployment/docker/subuid`, `subgid`
+- [x] 2.2 Docker daemon設定ファイル → `deployment/docker/daemon.json`
+- [x] 2.3 互換性検証手順書 → `docs/migration/05-userns-remap-verification.md`
+- [x] 2.4 コンテナ設定のUsernsMode対応 → `app/services/container/config.py`
+- [x] 2.5 ソケットファイル権限調整 → `app/services/container/lifecycle.py`
+- [x] 2.6 デプロイメント手順書 → `docs/migration/06-userns-remap-deployment.md`
+
+#### Step 3: カスタムseccomp
+
+- [x] 3.1 必要syscall分析 → `docs/migration/07-seccomp-syscall-analysis.md`
+- [x] 3.2 seccompプロファイルJSON → `deployment/seccomp/workspace-seccomp.json`
+- [x] 3.3 プロファイル適用のコンテナ設定変更 → `app/services/container/config.py`
+- [x] 3.4 設定パスの環境変数化 → `app/config.py` (`SECCOMP_PROFILE_PATH`)
+- [x] 3.5 動作検証テスト → `tests/integration/test_phase2.py`
+- [x] 3.6 seccomp違反メトリクス定義 → `app/infrastructure/metrics.py`
+
+#### Step 4: 監視ダッシュボード + アラート
+
+- [x] 4.1 Prometheusメトリクス定義追加 → `app/infrastructure/metrics.py`
+- [x] 4.2 インフラメトリクス（コンテナ数、WarmPool、CPU/メモリ） → `metrics.py`
+- [x] 4.3 アプリメトリクス（起動時間、成功率、クラッシュ、Proxyレイテンシ等） → `metrics.py`
+- [x] 4.4 /metricsエンドポイント更新 → `app/main.py`
+- [x] 4.5 計測ポイント埋め込み → `orchestrator.py`, `warm_pool.py`, `credential_proxy.py`, `gc.py`
+- [x] 4.6 Grafanaダッシュボード → `monitoring/grafana/dashboards/workspace-containers.json`
+- [x] 4.7 アラートルール（8種） → `monitoring/prometheus/alerts/workspace-alerts.yml`
+- [x] 4.8 docker-compose監視スタック → `docker-compose.yml` (Prometheus + Grafana)
+
+#### Step 5: Proxyレイテンシ最適化
+
+- [x] 5.2 httpxコネクションプール最適化 → `app/services/proxy/credential_proxy.py`
+- [x] 5.3 DNSキャッシュ導入 → `app/services/proxy/dns_cache.py`
+- [x] 5.4 per-requestレイテンシ計測 → `credential_proxy.py`
+
+#### Step 6: 統合テスト・検証
+
+- [x] 6.1 Phase 2統合テスト → `tests/integration/test_phase2.py`
+- [x] 6.2 セキュリティ検証レポート更新 → `docs/migration/03-security-verification.md`
+
+#### Step 7: ドキュメント整備
+
+- [x] 7.1 進捗管理ドキュメント更新 → `docs/migration/01-progress-tracker.md`
+- [x] 7.2 監視運用ガイド → `docs/operations/monitoring-guide.md`
+- [x] 7.3 セキュリティ設定ガイド → `docs/operations/security-config-guide.md`
+
+---
+
+### Phase 2 新規作成ファイル
+
+| ファイル | 目的 |
+|---------|------|
+| `deployment/docker/daemon.json` | userns-remap Docker daemon設定 |
+| `deployment/docker/subuid` | subordinate UIDマッピング |
+| `deployment/docker/subgid` | subordinate GIDマッピング |
+| `deployment/seccomp/workspace-seccomp.json` | カスタムseccompプロファイル |
+| `app/services/proxy/dns_cache.py` | DNSキャッシュ |
+| `monitoring/grafana/dashboards/workspace-containers.json` | Grafanaダッシュボード |
+| `monitoring/prometheus/prometheus.yml` | Prometheus設定 |
+| `monitoring/prometheus/alerts/workspace-alerts.yml` | アラートルール |
+| `tests/integration/test_phase2.py` | Phase 2統合テスト |
+| `docs/migration/04-phase2-migration-plan.md` | Phase 2移行計画書 |
+| `docs/migration/05-userns-remap-verification.md` | userns-remap互換性検証 |
+| `docs/migration/06-userns-remap-deployment.md` | userns-remapデプロイ手順 |
+| `docs/migration/07-seccomp-syscall-analysis.md` | seccomp syscall分析 |
+| `docs/operations/monitoring-guide.md` | 監視運用ガイド |
+| `docs/operations/security-config-guide.md` | セキュリティ設定ガイド |
+
+### Phase 2 改修ファイル
+
+| ファイル | 変更内容 |
+|---------|---------|
+| `app/infrastructure/metrics.py` | ワークスペースコンテナメトリクス15種追加 |
+| `app/services/container/warm_pool.py` | プリヒート、リトライ、メトリクス、ホットリロード |
+| `app/services/container/config.py` | seccompプロファイル適用、UsernsMode対応 |
+| `app/services/container/lifecycle.py` | userns-remapソケット権限調整 |
+| `app/services/container/orchestrator.py` | コンテナ起動/リクエスト/クラッシュメトリクス |
+| `app/services/container/gc.py` | GCサイクルメトリクス |
+| `app/services/proxy/credential_proxy.py` | コネクションプール最適化、レイテンシ計測 |
+| `app/config.py` | seccompパス、userns-remap設定追加 |
+| `app/main.py` | WarmPoolプリヒート、/metricsにコンテナメトリクス追加 |
+| `docker-compose.yml` | Prometheus + Grafana監視スタック |
+| `docs/migration/01-progress-tracker.md` | Phase 2進捗追加 |
+| `docs/migration/03-security-verification.md` | L2 seccomp + L7 userns検証追記 |
 
 ---
 
@@ -165,3 +260,4 @@
 | 2026-02-07 | 移行計画書・進捗管理ドキュメント作成 |
 | 2026-02-07 | Step 1-10 全ステップ実装完了 |
 | 2026-02-07 | Phase 2 移行計画書策定 (`04-phase2-migration-plan.md`) |
+| 2026-02-07 | Phase 2 全7ステップ実装完了 |

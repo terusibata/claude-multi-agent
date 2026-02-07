@@ -149,6 +149,12 @@ class Settings(BaseSettings):
     proxy_log_all_requests: bool = True
 
     # ============================================
+    # セキュリティ強化設定 (Phase 2)
+    # ============================================
+    seccomp_profile_path: str = ""  # 空=Dockerデフォルト, パス指定=カスタムプロファイル
+    userns_remap_enabled: bool = False  # userns-remap有効化（Docker daemon設定と連動）
+
+    # ============================================
     # Docker設定
     # ============================================
     docker_socket_path: str = "/var/run/docker.sock"

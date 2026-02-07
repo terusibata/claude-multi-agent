@@ -1,0 +1,69 @@
+groups:
+  - name: workspace-containers
+    rules:
+      - alert: WarmPoolExhausted
+        expr: rate(workspace_warm_pool_exhausted_total[5m]) > 0.6
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Warm pool is being exhausted"
+          description: "Warm pool exhaustion rate has exceeded 0.6 over the last 5 minutes for more than 3 minutes."
+
+      - alert: ContainerStartupSlow
+        expr: histogram_quantile(0.95, rate(workspace_container_startup_seconds_bucket[5m])) > 10
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container startup P95 is slow"
+          description: "The 95th percentile container startup time exceeds 10 seconds."
+
+      - alert: HighCrashRate
+        expr: rate(workspace_container_crashes_total[5m]) / rate(workspace_requests_total[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High container crash rate"
+          description: "Container crash rate exceeds 5% of total requests for more than 5 minutes."
+
+      - alert: LowRequestSuccessRate
+        expr: rate(workspace_requests_total{status="success"}[5m]) / rate(workspace_requests_total[5m]) < 0.95
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Low request success rate"
+          description: "Request success rate has dropped below 95% for more than 5 minutes."
+
+      - alert: S3SyncErrorHigh
+        expr: rate(workspace_s3_sync_errors_total[10m]) > 0.01
+        labels:
+          severity: warning
+        annotations:
+          summary: "S3 sync error rate is high"
+          description: "S3 sync error rate exceeds 0.01 over the last 10 minutes."
+
+      - alert: ProxyLatencyHigh
+        expr: histogram_quantile(0.95, rate(workspace_proxy_request_duration_seconds_bucket[5m])) > 0.1
+        labels:
+          severity: warning
+        annotations:
+          summary: "Proxy latency P95 is high"
+          description: "The 95th percentile proxy request duration exceeds 100ms."
+
+      - alert: HighContainerCount
+        expr: workspace_active_containers > 25
+        labels:
+          severity: warning
+        annotations:
+          summary: "High active container count"
+          description: "The number of active workspace containers exceeds 25."
+
+      - alert: GCFailure
+        expr: increase(workspace_gc_cycles_total{result="error"}[15m]) > 3
+        labels:
+          severity: critical
+        annotations:
+          summary: "GC failures are high"
+          description: "More than 3 GC error cycles in the last 15 minutes."

@@ -18,6 +18,11 @@ def get_container_create_config(container_id: str) -> dict:
     settings = get_settings()
     image = settings.container_image
 
+    # SecurityOpt: no-new-privileges + カスタムseccomp（Phase 2）
+    security_opt = ["no-new-privileges:true"]
+    if settings.seccomp_profile_path:
+        security_opt.append(f"seccomp={settings.seccomp_profile_path}")
+
     return {
         "Image": image,
         "Env": [
@@ -41,10 +46,11 @@ def get_container_create_config(container_id: str) -> dict:
             "PidsLimit": settings.container_pids_limit,
             "CapDrop": ["ALL"],
             "CapAdd": ["CHOWN", "SETUID", "SETGID", "DAC_OVERRIDE"],
-            "SecurityOpt": ["no-new-privileges:true"],
+            "SecurityOpt": security_opt,
             "Privileged": False,
             "ReadonlyRootfs": True,
             "IpcMode": "private",
+            "UsernsMode": "host" if not settings.userns_remap_enabled else "",
             "Tmpfs": {
                 "/tmp": "rw,noexec,nosuid,size=512M",
                 "/var/tmp": "rw,noexec,nosuid,size=256M",

@@ -134,13 +134,13 @@ async def lifespan(app: FastAPI):
     gc = ContainerGarbageCollector(lifecycle, redis)
     app.state.gc = gc
 
-    # WarmPoolの初期補充
+    # WarmPoolプリヒート（min_sizeまで充填、リトライ付き）
     try:
-        await warm_pool.replenish()
+        created = await warm_pool.preheat()
         pool_size = await warm_pool.get_pool_size()
-        logger.info("WarmPool初期化完了", pool_size=pool_size)
+        logger.info("WarmPoolプリヒート完了", pool_size=pool_size, created=created)
     except Exception as e:
-        logger.error("WarmPool初期化エラー", error=str(e))
+        logger.error("WarmPoolプリヒートエラー", error=str(e))
 
     # GCループ開始
     try:
@@ -462,6 +462,23 @@ async def metrics():
         if redis_info.get("initialized"):
             connections_gauge = get_active_connections()
             connections_gauge.set(redis_info.get("max_connections", 0), type="redis_max")
+    except Exception:
+        pass
+
+    # ワークスペースコンテナメトリクス更新（Phase 2）
+    try:
+        from app.infrastructure.metrics import (
+            get_workspace_host_cpu_percent,
+            get_workspace_warm_pool_size,
+        )
+        orchestrator = getattr(app.state, "orchestrator", None)
+        if orchestrator:
+            pool_size = await orchestrator.warm_pool.get_pool_size()
+            get_workspace_warm_pool_size().set(pool_size)
+        import os
+        load = os.getloadavg()
+        cpu_count = os.cpu_count() or 1
+        get_workspace_host_cpu_percent().set(round(load[0] / cpu_count * 100, 1))
     except Exception:
         pass
 

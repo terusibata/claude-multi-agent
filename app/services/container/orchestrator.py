@@ -17,6 +17,7 @@ Container Orchestrator
   10. 完了後、AI生成ファイルをS3同期
 """
 import asyncio
+import time
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 
@@ -25,6 +26,12 @@ import structlog
 from redis.asyncio import Redis
 
 from app.config import get_settings
+from app.infrastructure.metrics import (
+    get_workspace_active_containers,
+    get_workspace_container_crashes,
+    get_workspace_container_startup,
+    get_workspace_requests_total,
+)
 from app.services.container.config import (
     CONTAINER_TTL_SECONDS,
     REDIS_KEY_CONTAINER,
@@ -85,6 +92,7 @@ class ContainerOrchestrator:
             await self._cleanup_container(existing)
 
         # WarmPoolからコンテナ取得
+        startup_start = time.perf_counter()
         info = await self.warm_pool.acquire()
         info.conversation_id = conversation_id
         info.status = ContainerStatus.READY
@@ -96,10 +104,16 @@ class ContainerOrchestrator:
         # Redis に記録
         await self._save_to_redis(info)
 
+        # メトリクス: コンテナ起動時間 + アクティブコンテナ数
+        startup_duration = time.perf_counter() - startup_start
+        get_workspace_container_startup().observe(startup_duration)
+        get_workspace_active_containers().inc()
+
         logger.info(
             "コンテナ割り当て完了",
             container_id=info.id,
             conversation_id=conversation_id,
+            startup_seconds=round(startup_duration, 3),
         )
         return info
 
@@ -140,6 +154,7 @@ class ContainerOrchestrator:
                         yield chunk
 
         except httpx.TimeoutException:
+            get_workspace_requests_total().inc(status="timeout")
             logger.error(
                 "コンテナ実行タイムアウト",
                 container_id=info.id,
@@ -147,6 +162,8 @@ class ContainerOrchestrator:
             )
             yield b"event: error\ndata: {\"message\": \"Execution timeout\"}\n\n"
         except Exception as e:
+            get_workspace_requests_total().inc(status="error")
+            get_workspace_container_crashes().inc()
             logger.error(
                 "コンテナ実行エラー",
                 container_id=info.id,
@@ -154,6 +171,8 @@ class ContainerOrchestrator:
                 error=str(e),
             )
             yield b"event: error\ndata: {\"message\": \"Container execution failed\"}\n\n"
+        else:
+            get_workspace_requests_total().inc(status="success")
         finally:
             # ステータスを idle に更新
             info.status = ContainerStatus.IDLE
@@ -248,3 +267,4 @@ class ContainerOrchestrator:
         except Exception as e:
             logger.error("コンテナ破棄エラー", container_id=info.id, error=str(e))
         await self.redis.delete(f"{REDIS_KEY_CONTAINER}:{info.conversation_id}")
+        get_workspace_active_containers().dec()

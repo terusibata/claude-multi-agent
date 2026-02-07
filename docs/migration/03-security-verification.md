@@ -94,19 +94,44 @@ app/main.py
 
 ---
 
-## 4. 残存リスクと推奨対策（Phase 2以降）
+## 4. 残存リスクと推奨対策
 
-| リスク | 重要度 | 推奨対策 | Phase |
-|--------|-------|---------|-------|
-| Docker Socketアクセス | 中 | AppArmorプロファイル、Docker API制限 | 2 |
-| コンテナイメージの脆弱性 | 中 | 定期的なイメージスキャン (Trivy等) | 2 |
-| カスタムseccompプロファイル | 低 | 最小権限原則に基づくシステムコール制限 | 2 |
-| userns-remap | 低 | User Namespace分離 | 2 |
-| gVisor/Firecracker | 低 | より強力なランタイム隔離 | 3 |
+| リスク | 重要度 | 推奨対策 | Phase | ステータス |
+|--------|-------|---------|-------|----------|
+| Docker Socketアクセス | 中 | AppArmorプロファイル、Docker API制限 | 3 | 未対応 |
+| コンテナイメージの脆弱性 | 中 | 定期的なイメージスキャン (Trivy等) | 3 | 未対応 |
+| カスタムseccompプロファイル | 低 | 最小権限原則に基づくシステムコール制限 | 2 | **Phase 2 実装済** |
+| userns-remap | 低 | User Namespace分離 | 2 | **Phase 2 実装済** |
+| gVisor/Firecracker | 低 | より強力なランタイム隔離 | 3 | 未対応 |
 
 ---
 
-## 5. 検証チェックリスト
+## 5. Phase 2 セキュリティレイヤー追加
+
+### Layer 2: カスタムseccomp プロファイル (Phase 2)
+
+- **実装**: `deployment/seccomp/workspace-seccomp.json`
+- **設定**: `SECCOMP_PROFILE_PATH` 環境変数 → `container/config.py` SecurityOpt に適用
+- **方式**: ホワイトリスト方式（`SCMP_ACT_ERRNO` デフォルト）
+- **許可対象**: Python 3.11 + Node.js 20 + pip + git + データ処理に必要なsyscallのみ
+- **明示ブロック**: mount, umount2, reboot, kexec_load, ptrace, init_module, pivot_root, socket(AF_INET/AF_INET6)
+- **二重防御**: `--network none` + seccompでsocket(AF_INET)もブロック
+- **分析レポート**: `docs/migration/07-seccomp-syscall-analysis.md`
+
+### Layer 7: userns-remap (Phase 2)
+
+- **実装**: `deployment/docker/daemon.json` + `subuid`/`subgid`
+- **設定**: `USERNS_REMAP_ENABLED=true` + Docker daemon設定
+- **効果**: コンテナ内root (UID 0) → ホスト上の非特権ユーザー (UID 100000+)
+- **ソケット権限**: `lifecycle.py` でuserns-remap有効時にソケットディレクトリ権限を0o777に調整
+- **検証手順**: `docs/migration/05-userns-remap-verification.md`
+- **デプロイ手順**: `docs/migration/06-userns-remap-deployment.md`
+
+---
+
+## 6. 検証チェックリスト
+
+### Phase 1
 
 - [x] AWS認証情報が環境変数から除去されていること
 - [x] コンテナが `--network none` で起動されること
@@ -118,3 +143,14 @@ app/main.py
 - [x] GCがTTL超過コンテナを適切に破棄すること
 - [x] グレースフルシャットダウンで全コンテナが破棄されること
 - [x] ヘルスチェックにコンテナシステム状態が含まれること
+
+### Phase 2
+
+- [x] カスタムseccompプロファイルが作成されていること (`deployment/seccomp/workspace-seccomp.json`)
+- [x] seccompプロファイルパスがコンテナ設定に反映されること (`SECCOMP_PROFILE_PATH`)
+- [x] userns-remap設定ファイルが作成されていること (`deployment/docker/daemon.json`)
+- [x] userns-remap有効時にソケットディレクトリ権限が調整されること
+- [x] Prometheusメトリクスでセキュリティ関連イベントが記録されること
+- [x] seccomp違反メトリクス (`workspace_seccomp_violations_total`) が定義されていること
+- [x] 監視アラートにセキュリティ関連ルールが含まれること
+- [x] Phase 2統合テストが作成されていること (`tests/integration/test_phase2.py`)

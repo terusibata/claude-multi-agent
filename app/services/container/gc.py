@@ -9,6 +9,7 @@ import structlog
 from redis.asyncio import Redis
 
 from app.config import get_settings
+from app.infrastructure.metrics import get_workspace_gc_cycles
 from app.services.container.config import REDIS_KEY_CONTAINER
 from app.services.container.lifecycle import ContainerLifecycleManager
 from app.services.container.models import ContainerInfo, ContainerStatus
@@ -53,9 +54,11 @@ class ContainerGarbageCollector:
             try:
                 await asyncio.sleep(interval)
                 await self._collect()
+                get_workspace_gc_cycles().inc(result="success")
             except asyncio.CancelledError:
                 break
             except Exception as e:
+                get_workspace_gc_cycles().inc(result="error")
                 logger.error("GCサイクルエラー", error=str(e))
 
     async def _collect(self) -> None:

@@ -7,12 +7,17 @@ Unix Socket上で動作し、コンテナからの全外部通信を中継する
 - 全リクエストの監査ログ出力
 """
 import asyncio
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import httpx
 import structlog
 
+from app.infrastructure.metrics import (
+    get_workspace_proxy_blocked,
+    get_workspace_proxy_request_duration,
+)
 from app.services.proxy.domain_whitelist import DomainWhitelist
 from app.services.proxy.sigv4 import AWSCredentials, sign_request
 
@@ -55,7 +60,14 @@ class CredentialInjectionProxy:
         if socket_file.exists():
             socket_file.unlink()
 
-        self._http_client = httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0))
+        self._http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(60.0, connect=10.0),
+            limits=httpx.Limits(
+                max_connections=100,
+                max_keepalive_connections=20,
+                keepalive_expiry=30.0,
+            ),
+        )
         self._server = await asyncio.start_unix_server(
             self._handle_connection,
             path=self.socket_path,
@@ -146,8 +158,11 @@ class CredentialInjectionProxy:
         Returns:
             (ステータスコード, レスポンスヘッダー, レスポンスボディ)
         """
+        request_start = time.perf_counter()
+
         # ドメインチェック
         if not self._whitelist.is_allowed(url):
+            get_workspace_proxy_blocked().inc()
             if self.config.log_all_requests:
                 logger.warning("Proxy: ドメイン拒否", method=method, url=url)
             return 403, {}, b"Domain not in whitelist"
@@ -166,7 +181,15 @@ class CredentialInjectionProxy:
         if self.config.log_all_requests:
             logger.info("Proxy: 転送", method=method, url=url)
 
-        return await self._forward_request(method, url, headers, body)
+        result = await self._forward_request(method, url, headers, body)
+
+        # レイテンシメトリクス
+        duration = time.perf_counter() - request_start
+        get_workspace_proxy_request_duration().observe(duration, method=method)
+        if self.config.log_all_requests:
+            logger.info("Proxy: 完了", method=method, url=url, duration_ms=round(duration * 1000, 1), status=result[0])
+
+        return result
 
     async def _handle_connect(
         self,
