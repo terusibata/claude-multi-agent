@@ -87,9 +87,107 @@ taskDefinition:
   - 合計 100-150 サンドボックスキャパシティ
 ```
 
-## 5.2 監視・オブザーバビリティ
+## 5.2 コンテナライフサイクル: クリーンアップ戦略と状態復元
 
-### 5.2.1 メトリクス設計
+### 5.2.1 クリーンアップ戦略の比較
+
+| 戦略 | idle TTL | 長所 | 短所 |
+|------|---------|------|------|
+| **A: 短い TTL (1時間)** | 1h | リソース効率最良、セキュリティ窓が狭い | 再作成頻度が高い |
+| **B: 長い TTL (24時間)** | 24h | 再作成ほぼ不要、UX最良 | リソース浪費大、セキュリティ窓が広い |
+| **C: 固定時刻 (毎日0:00)** | N/A | 運用が予測可能 | バースト負荷、タイムゾーン問題 |
+| **D: ハイブリッド (1h TTL + 状態復元)** | 1h | リソース効率◎、UX◎ | 復元ロジックの実装コスト |
+
+### 5.2.2 推奨: ハイブリッド戦略 (D)
+
+**1時間のアイドル TTL + S3 経由の状態復元**を推奨する。
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│       ハイブリッド戦略: 短 TTL + 状態復元                         │
+│                                                                  │
+│  Message 1 (新規会話)                                             │
+│    → Warm Pool or 新規コンテナ                                    │
+│    → S3 → /work 同期                                             │
+│    → SDK 実行                                                     │
+│    → /work → S3 同期 (ファイル + pip state)  ← ★ pip 状態も保存   │
+│    → コンテナ IDLE                                                │
+│                                                                  │
+│  (30分後) Message 2                                               │
+│    → 同じコンテナ再利用（即時、pip 状態そのまま）                   │
+│    → SDK 実行                                                     │
+│    → /work → S3 同期                                             │
+│    → コンテナ IDLE                                                │
+│                                                                  │
+│  (2時間後 = idle 1h 超過) コンテナ破棄                             │
+│    → cleanup_expired() がコンテナを破棄                            │
+│    → ローカルディレクトリ削除                                      │
+│                                                                  │
+│  (3時間後) Message 3                                              │
+│    → 新規コンテナ作成 (Warm Pool or オンデマンド)                  │
+│    → S3 → /work 同期 (ファイル + pip state)  ← ★ pip 状態を復元   │
+│    → SDK 実行（pip install 済パッケージがそのまま使える）           │
+│    → /work → S3 同期                                             │
+│    → コンテナ IDLE                                                │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+**利点**:
+
+- **リソース効率**: idle コンテナは最大1時間で回収される
+- **UX**: 1時間以内の連続操作は即時応答（コンテナ再利用）
+- **状態復元**: 1時間超の間隔でも pip install 等の状態は S3 から復元される
+- **セキュリティ**: コンテナの生存期間が短く、攻撃窓が狭い
+
+### 5.2.3 pip 状態の永続化設計
+
+```
+実行完了時の S3 同期:
+  /work/
+  ├── uploads/        → S3 同期 (既存)
+  ├── output/         → S3 同期 (既存)
+  └── .local/         → S3 同期 (★ 追加)
+      └── lib/python3.11/site-packages/
+          ├── pandas/
+          ├── numpy/
+          └── ...
+
+S3 上のレイアウト:
+  s3://{bucket}/workspaces/{tenant_id}/{conversation_id}/
+  ├── uploads/...
+  ├── output/...
+  └── .local/...      ← pip install 済パッケージ
+```
+
+**同期方式**: `/work/.local/` ディレクトリを tar.gz にアーカイブしてS3に保存する。
+個別ファイル同期ではなくアーカイブにする理由:
+
+1. pip パッケージは数千ファイルになるため、個別同期はAPI呼び出しが多すぎる
+2. アーカイブなら1回のPUT/GETで完結
+3. 差分検出も容易（アーカイブのハッシュ比較）
+
+```python
+# 実行完了時
+async def sync_pip_state_to_s3(workspace_path, tenant_id, conversation_id):
+    pip_dir = Path(workspace_path) / ".local"
+    if pip_dir.exists() and any(pip_dir.iterdir()):
+        archive_path = f"/tmp/pip-state-{conversation_id}.tar.gz"
+        # tar.gz に圧縮
+        await asyncio.to_thread(shutil.make_archive, ...)
+        # S3 にアップロード
+        await s3.upload(tenant_id, conversation_id, "_pip_state.tar.gz", archive_path)
+
+# コンテナ作成時
+async def restore_pip_state_from_s3(workspace_path, tenant_id, conversation_id):
+    if await s3.exists(tenant_id, conversation_id, "_pip_state.tar.gz"):
+        archive = await s3.download(tenant_id, conversation_id, "_pip_state.tar.gz")
+        # /work/.local に展開
+        await asyncio.to_thread(shutil.unpack_archive, ...)
+```
+
+## 5.3 監視・オブザーバビリティ
+
+### 5.3.1 メトリクス設計
 
 ```python
 # app/services/sandbox/metrics.py
@@ -162,7 +260,7 @@ SANDBOX_METRICS = {
 }
 ```
 
-### 5.2.2 ログ設計
+### 5.3.2 ログ設計
 
 ```python
 # 構造化ログの例
@@ -192,7 +290,7 @@ SANDBOX_METRICS = {
 }
 ```
 
-### 5.2.3 アラートルール
+### 5.3.3 アラートルール
 
 | アラート | 条件 | 重要度 | アクション |
 |---------|------|--------|-----------|
@@ -203,7 +301,7 @@ SANDBOX_METRICS = {
 | コンテナクラッシュ | error_total 急増 | High | イメージ / 設定の確認 |
 | ストレージ圧迫 | storage_usage > 80% | Medium | クリーンアップ / 拡張 |
 
-### 5.2.4 監査ログ
+### 5.3.4 監査ログ
 
 ```python
 # 全てのサンドボックス操作を監査ログに記録
@@ -234,31 +332,33 @@ AUDIT_EVENTS = [
 | **Warm Pool 枯渇** | レイテンシ増加 | pool_size メトリクス | 自動: オンデマンド作成 + 補充 |
 | **ネットワーク断** | S3 同期失敗 | 同期エラーログ | 自動: リトライ (指数バックオフ) |
 
-### 5.3.2 データ保護
+### 5.4.2 データ保護 (セッション固定モデル)
 
 ```
-サンドボックスのデータフロー:
+サンドボックスのデータフロー（セッション固定）:
 
-  S3 (永続ストレージ)
+  S3 (永続ストレージ, source of truth)
     │
-    │ 実行前: sync_to_local
+    │ 初回/復元時: sync_to_local (ファイル + pip state)
     ▼
   ローカルディスク (/var/lib/aiagent/workspaces/workspace_{conv_id})
     │
     │ bind mount
     ▼
-  サンドボックスコンテナ (/work)
+  サンドボックスコンテナ (/work)   ← セッション中は維持
     │
-    │ エージェントがファイル操作
-    │
-    │ 実行後: sync_from_local
+    │ 毎メッセージ実行後: sync_from_local (ファイル + pip state)
     ▼
   S3 (永続ストレージ)
 
+  ※ コンテナ破棄（TTL超過）後も S3 に全状態が保存済み
+  ※ 次回メッセージ時に S3 から新コンテナに復元
+
 データ保護ポイント:
   1. S3 が source of truth → コンテナ障害でもデータ喪失なし
-  2. ローカルは一時的 → 実行後にクリーンアップ
-  3. コンテナ内は ephemeral → 障害時は S3 から復元
+  2. 毎メッセージ後に S3 同期 → 最新状態が常に永続化
+  3. pip state も S3 に保存 → コンテナ再作成後も復元可能
+  4. コンテナは一時的 → 障害時は S3 から完全復元
 ```
 
 ### 5.3.3 Orphan コンテナ対策

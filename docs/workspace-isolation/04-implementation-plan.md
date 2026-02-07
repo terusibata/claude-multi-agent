@@ -1,26 +1,61 @@
 # 4. 実装計画
 
-## 4.1 フェーズ概要
+## 4.0 開発方針
+
+> **本プロジェクトは現在開発フェーズにあるため、ベストプラクティスに従い
+> 全フェーズの機能を一括で実装する。**
+>
+> 元のフェーズ分割は本番環境への段階的ロールアウトの指針として残すが、
+> コードベースへの変更は一度に行い、Feature Flag で制御する。
+> これにより、設計の整合性を保ちながら手戻りを最小化できる。
+
+### 一括実装の理由
+
+1. **設計の整合性**: ライフサイクル管理（セッション固定モデル）はセキュリティ設定と
+   密結合しており、分離して実装すると後から大幅な修正が必要になる
+2. **テストの効率**: 隔離・セキュリティ・Warm Pool を統合テストできる
+3. **Feature Flag による安全性**: `SANDBOX_ENABLED=false` で従来動作、
+   `true` で新動作に切り替えられるため、一括実装でもリスクは低い
+
+### 実装順序（コード変更の依存関係に基づく）
 
 ```
-Phase 1: コンテナ隔離の基盤構築         (2-3 weeks)
-  │  サンドボックスコンテナ + Docker API 統合
+1. Dockerfile.sandbox + sandbox イメージビルド
+2. SandboxManager (コンテナ作成・破棄・ヘルスチェック)
+3. セキュリティプロファイル (seccomp / AppArmor / ネットワーク)
+4. Warm Pool + セッション固定ライフサイクル
+5. 定期クリーンアップ (Scheduled Cleanup)
+6. SDK アダプター (Docker exec 統合)
+7. ExecuteService 統合 + Feature Flag
+8. 監視メトリクス + アラート
+9. 統合テスト + 負荷テスト
+```
+
+---
+
+## 4.1 フェーズ概要（本番ロールアウト用）
+
+> 以下のフェーズ分割は、本番環境へのロールアウト計画である。
+> コード実装自体は上記の方針に従い一括で行う。
+
+```
+Phase 1: コンテナ隔離 + セキュリティ + ライフサイクル (一括実装)
+  │  サンドボックスコンテナ + セッション固定 + seccomp/AppArmor
+  │  + Warm Pool + 定期クリーンアップ + Egress Proxy
   │
-Phase 2: セキュリティ強化               (1-2 weeks)
-  │  seccomp + AppArmor + ネットワーク隔離
+Phase 2: 本番ロールアウト (段階的有効化)
+  │  Feature Flag で 0% → 10% → 50% → 100%
   │
-Phase 3: Warm Pool + パフォーマンス最適化 (1-2 weeks)
-  │  プール管理 + 事前起動 + 監視
-  │
-Phase 4: gVisor 統合 (Optional)          (1 week)
+Phase 3: gVisor 統合 (Optional)
      カーネル隔離の強化
 ```
 
-## 4.2 Phase 1: コンテナ隔離の基盤構築
+## 4.2 コンテナ隔離の基盤構築
 
 ### 目標
 
 - エージェント実行を専用コンテナで行う基本フローの確立
+- セッション固定コンテナモデルによる会話内状態の維持
 - 既存の S3 ワークスペースフローとの統合
 
 ### 4.2.1 サンドボックスイメージの作成
@@ -445,29 +480,33 @@ security_opt = [
 ]
 ```
 
-## 4.4 Phase 3: Warm Pool + パフォーマンス最適化
+## 4.4 セッション固定ライフサイクル + 定期クリーンアップ
 
 ### 目標
 
-- Warm Pool によるレイテンシ削減
-- リソース効率の最適化
-- 監視・アラート基盤
+- セッション固定コンテナモデルによる会話内状態の維持
+- 定期クリーンアップによるリソース回収
+- Warm Pool による新規会話のレイテンシ削減
 
-### 4.4.1 WarmPool 実装
+### 4.4.1 SandboxLifecycleManager 実装
 
-**新規ファイル**: `app/services/sandbox/warm_pool.py`
+**新規ファイル**: `app/services/sandbox/lifecycle.py`
 
 ```python
 """
-Warm Pool 管理
+サンドボックスライフサイクル管理
 
-事前にサンドボックスコンテナを起動しておき、
-リクエスト到着時に即座に割り当てることで
-コンテナ起動のレイテンシを排除する。
+セッション固定コンテナモデル:
+  - コンテナは会話に紐付いて維持される
+  - 同一会話の複数メッセージで同じコンテナを再利用
+  - pip install 等のセッション内状態が保持される
+  - 定期クリーンアップで TTL 超過コンテナを回収
 """
 import asyncio
+import random
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 import structlog
 
@@ -477,158 +516,201 @@ logger = structlog.get_logger(__name__)
 
 
 @dataclass
-class WarmPoolConfig:
-    min_size: int = 2
-    max_size: int = 10
-    target_size: int = 5
-    idle_timeout_seconds: int = 300
-    max_lifetime_seconds: int = 3600
-    health_check_interval_seconds: int = 30
+class LifecycleConfig:
+    # Warm Pool
+    warm_pool_min: int = 2
+    warm_pool_max: int = 10
+    warm_pool_target: int = 5
     replenish_interval_seconds: int = 10
 
+    # セッション固定
+    session_idle_timeout: int = 86400    # 24時間 (最終活動からの TTL)
+    session_max_lifetime: int = 172800   # 48時間 (コンテナ絶対寿命)
 
-class WarmPool:
+    # 定期クリーンアップ
+    cleanup_interval_seconds: int = 3600  # 1時間ごとにスイープ
+    cleanup_stagger_max: int = 1800       # 30分間で分散破棄
+    cleanup_grace_period: int = 300       # IDLE→破棄の猶予 (5分)
+
+    # ヘルスチェック
+    health_check_interval: int = 60
+
+
+class SandboxLifecycleManager:
     """
-    サンドボックス Warm Pool
+    セッション固定コンテナのライフサイクルを管理。
 
-    idle 状態のサンドボックスをプールし、
-    リクエスト到着時に即座に提供する。
+    Warm Pool (未割り当てコンテナ) と
+    Session Registry (会話に紐付いたコンテナ) を統合管理する。
     """
 
     def __init__(
         self,
         manager: SandboxManager,
-        config: WarmPoolConfig | None = None,
+        config: LifecycleConfig | None = None,
     ):
         self.manager = manager
-        self.config = config or WarmPoolConfig()
-        self._pool: deque[Sandbox] = deque()
-        self._active: dict[str, Sandbox] = {}  # conversation_id -> Sandbox
+        self.config = config or LifecycleConfig()
+
+        # Warm Pool: 未割り当てコンテナ
+        self._warm_pool: deque[Sandbox] = deque()
+
+        # Session Registry: conversation_id -> Sandbox
+        self._sessions: dict[str, Sandbox] = {}
+
         self._running = False
         self._tasks: list[asyncio.Task] = []
 
     async def start(self) -> None:
-        """Warm Pool を起動"""
+        """ライフサイクル管理を起動"""
         self._running = True
-        self._tasks.append(
-            asyncio.create_task(self._replenish_loop())
-        )
-        self._tasks.append(
-            asyncio.create_task(self._health_check_loop())
-        )
-        # 初期プールを作成
-        await self._replenish()
-        logger.info("Warm Pool 起動完了", target_size=self.config.target_size)
 
-    async def stop(self) -> None:
-        """Warm Pool を停止"""
-        self._running = False
-        for task in self._tasks:
-            task.cancel()
-        # アクティブなサンドボックスを解放
-        for sandbox in list(self._active.values()):
-            await self.manager.release(sandbox)
-        # プール内のサンドボックスを解放
-        while self._pool:
-            sandbox = self._pool.popleft()
-            await self.manager.release(sandbox)
-        logger.info("Warm Pool 停止完了")
+        # Backend 再起動時: 既存コンテナを検出して復旧
+        await self._recover_existing_containers()
 
-    async def acquire(self, conversation_id: str, **kwargs) -> Sandbox:
-        """プールからサンドボックスを取得"""
-        if self._pool:
-            sandbox = self._pool.popleft()
+        # バックグラウンドタスク起動
+        self._tasks = [
+            asyncio.create_task(self._replenish_loop()),
+            asyncio.create_task(self._health_check_loop()),
+            asyncio.create_task(self._cleanup_loop()),
+        ]
+
+        await self._replenish_pool()
+        logger.info(
+            "ライフサイクル管理起動",
+            warm_pool=len(self._warm_pool),
+            sessions=len(self._sessions),
+        )
+
+    async def acquire_or_reuse(
+        self,
+        conversation_id: str,
+        workspace_path: str,
+        env: dict[str, str],
+        **kwargs,
+    ) -> Sandbox:
+        """
+        会話に紐付くコンテナを取得 (セッション固定)
+
+        1. 既存コンテナがあればヘルスチェック後に再利用
+        2. なければ Warm Pool から取得
+        3. Pool も空ならオンデマンド作成
+        """
+        # 1. 既存コンテナの再利用
+        existing = self._sessions.get(conversation_id)
+        if existing and await existing.is_healthy():
+            existing.status = SandboxStatus.RUNNING
+            existing.last_activity_at = datetime.now(timezone.utc)
+            logger.info(
+                "既存コンテナ再利用",
+                conversation_id=conversation_id,
+                container_id=existing.container_id[:12],
+            )
+            return existing
+
+        # 既存が不健全な場合は破棄
+        if existing:
+            logger.warning(
+                "不健全なコンテナを破棄して再作成",
+                container_id=existing.container_id[:12],
+            )
+            await self.manager.release(existing)
+            del self._sessions[conversation_id]
+
+        # 2. Warm Pool から取得
+        sandbox = None
+        if self._warm_pool:
+            sandbox = self._warm_pool.popleft()
+            # 会話に紐付
             sandbox.conversation_id = conversation_id
-            sandbox.status = SandboxStatus.RUNNING
-            # ワークスペースをバインド（動的マウント）
-            # ...
+            sandbox.workspace_path = workspace_path
+            # ワークスペースを bind mount (動的)
+            await self.manager.bind_workspace(sandbox, workspace_path)
         else:
-            # プールが空の場合はオンデマンド作成
-            logger.warning("Warm Pool が空: オンデマンド作成")
+            # 3. オンデマンド作成
+            logger.warning("Warm Pool 空: オンデマンド作成")
             sandbox = await self.manager.acquire(
-                conversation_id=conversation_id, **kwargs
+                conversation_id=conversation_id,
+                workspace_path=workspace_path,
+                env=env,
+                **kwargs,
             )
 
-        self._active[conversation_id] = sandbox
+        sandbox.status = SandboxStatus.RUNNING
+        sandbox.last_activity_at = datetime.now(timezone.utc)
+        self._sessions[conversation_id] = sandbox
         return sandbox
 
-    async def release(self, sandbox: Sandbox) -> None:
-        """サンドボックスをプールに返却"""
-        self._active.pop(sandbox.conversation_id, None)
-        sandbox.conversation_id = None
-        sandbox.status = SandboxStatus.IDLE
+    async def mark_idle(self, conversation_id: str) -> None:
+        """SDK 完了後、コンテナを IDLE に遷移（破棄しない）"""
+        sandbox = self._sessions.get(conversation_id)
+        if sandbox:
+            sandbox.status = SandboxStatus.IDLE
+            sandbox.last_activity_at = datetime.now(timezone.utc)
 
-        if len(self._pool) < self.config.max_size:
-            # クリーンアップしてプールに返却
-            # (ワークスペースをunmount、/work を初期化)
-            self._pool.append(sandbox)
-        else:
-            # プールが満杯なら破棄
-            await self.manager.release(sandbox)
+    # --- 定期クリーンアップ ---
 
-    async def _replenish(self) -> None:
-        """プールを補充"""
-        needed = self.config.target_size - len(self._pool)
-        for _ in range(max(0, needed)):
-            try:
-                sandbox = await self.manager.acquire(
-                    conversation_id="warmpool-idle",
-                    workspace_path="/tmp/warmpool-placeholder",
-                    env={},
+    async def _cleanup_loop(self) -> None:
+        """定期的に TTL 超過コンテナをクリーンアップ"""
+        while self._running:
+            await asyncio.sleep(self.config.cleanup_interval_seconds)
+            await self._cleanup_expired()
+
+    async def _cleanup_expired(self) -> dict:
+        """TTL 超過コンテナを破棄"""
+        now = datetime.now(timezone.utc)
+        expired: list[str] = []
+
+        for conv_id, sandbox in self._sessions.items():
+            # RUNNING 状態は絶対にスキップ
+            if sandbox.status == SandboxStatus.RUNNING:
+                continue
+
+            idle_seconds = (now - sandbox.last_activity_at).total_seconds()
+            lifetime_seconds = (now - sandbox.created_at).total_seconds()
+
+            if (idle_seconds > self.config.session_idle_timeout
+                    or lifetime_seconds > self.config.session_max_lifetime):
+                expired.append(conv_id)
+
+        # 分散破棄（一度に大量破棄しない）
+        cleaned = 0
+        for conv_id in expired:
+            sandbox = self._sessions.pop(conv_id, None)
+            if sandbox:
+                # ランダム遅延で分散
+                delay = random.uniform(0, self.config.cleanup_stagger_max)
+                await asyncio.sleep(min(delay, 5))  # 最大5秒待機
+
+                await sandbox.final_sync_and_destroy()
+                cleaned += 1
+                logger.info(
+                    "TTL超過コンテナ破棄",
+                    conversation_id=conv_id,
+                    container_id=sandbox.container_id[:12],
                 )
-                sandbox.status = SandboxStatus.IDLE
-                self._pool.append(sandbox)
-            except Exception as e:
-                logger.error("Warm Pool 補充エラー", error=str(e))
-                break
 
-    async def _replenish_loop(self) -> None:
-        """定期的にプールを補充"""
-        while self._running:
-            await asyncio.sleep(self.config.replenish_interval_seconds)
-            if len(self._pool) < self.config.min_size:
-                await self._replenish()
-
-    async def _health_check_loop(self) -> None:
-        """定期的にヘルスチェック"""
-        while self._running:
-            await asyncio.sleep(self.config.health_check_interval_seconds)
-            # 不健全なコンテナを検出して置換
-            healthy_pool: deque[Sandbox] = deque()
-            for sandbox in self._pool:
-                if await self._is_healthy(sandbox):
-                    healthy_pool.append(sandbox)
-                else:
-                    await self.manager.release(sandbox)
-            self._pool = healthy_pool
-
-    async def _is_healthy(self, sandbox: Sandbox) -> bool:
-        """サンドボックスのヘルスチェック"""
-        try:
-            container = self.manager.docker_client.containers.get(
-                sandbox.container_id
-            )
-            return container.status == "running"
-        except Exception:
-            return False
-
-    @property
-    def stats(self) -> dict:
-        """プール統計"""
-        return {
-            "pool_size": len(self._pool),
-            "active_count": len(self._active),
-            "target_size": self.config.target_size,
+        report = {
+            "checked": len(self._sessions) + len(expired),
+            "expired": len(expired),
+            "cleaned": cleaned,
         }
+        if cleaned > 0:
+            logger.info("クリーンアップ完了", **report)
+        return report
+
+    # --- 以下 Warm Pool / ヘルスチェック / リカバリ ---
+    # (省略: 02-isolation-strategy.md の設計に準拠)
 ```
 
 ### 4.4.2 パフォーマンス目標
 
-| メトリクス | 現行 | Phase 1 | Phase 3 (Warm Pool) |
-|-----------|------|---------|---------------------|
-| SDK起動レイテンシ | ~100ms | ~600ms (+500ms コンテナ起動) | ~50ms (プールから取得) |
-| メモリオーバーヘッド/セッション | 0 (共有) | ~50MB | ~50MB (idle) |
-| 最大同時セッション | CPU制約のみ | 設定値 | max_size 制約 |
+| メトリクス | 現行 | 新設計 (初回) | 新設計 (2回目以降) |
+|-----------|------|-------------|-------------------|
+| SDK起動レイテンシ | ~100ms | ~600ms (Pool空) / ~50ms (Pool) | **~10ms (既存コンテナ再利用)** |
+| メモリオーバーヘッド/セッション | 0 (共有) | ~50MB | ~50MB (idle 維持) |
+| pip install 再実行 | N/A | 毎回 | **不要 (コンテナ維持)** |
+| 最大同時コンテナ | N/A | warm_pool_max + active sessions | 同左 |
 
 ## 4.5 Phase 4: gVisor 統合 (Optional)
 
@@ -668,41 +750,59 @@ container = self.docker_client.containers.run(
 
 ## 4.6 マイグレーション戦略
 
-### Feature Flag によるグラジュアルロールアウト
+### Feature Flag による制御
 
 ```python
 # app/config.py に追加
 class Settings(BaseSettings):
-    # サンドボックス設定
+    # === サンドボックス全般 ===
     sandbox_enabled: bool = False         # 全体スイッチ
     sandbox_rollout_percent: int = 0      # ロールアウト率 (0-100)
     sandbox_force_tenants: str = ""       # 強制有効テナント (カンマ区切り)
     sandbox_image: str = "ai-agent-sandbox:latest"
+
+    # === リソース制限 ===
     sandbox_network_mode: str = "none"
     sandbox_mem_limit: str = "2g"
     sandbox_cpu_cores: int = 1
     sandbox_pids_limit: int = 256
     sandbox_storage_limit: str = "5g"
+
+    # === Warm Pool ===
     sandbox_warm_pool_target: int = 5
     sandbox_warm_pool_min: int = 2
     sandbox_warm_pool_max: int = 10
+
+    # === セッション固定ライフサイクル ===
+    sandbox_session_idle_timeout: int = 86400    # 24時間
+    sandbox_session_max_lifetime: int = 172800   # 48時間
+    sandbox_cleanup_interval: int = 3600         # 1時間ごとにスイープ
 ```
 
 ### ロールアウト計画
 
-```
-Week 1-2: sandbox_enabled=true, sandbox_rollout_percent=0
-  → 開発環境でテスト
-  → sandbox_force_tenants で特定テナントのみ有効化
+> コード実装は一括で行い、Feature Flag で本番環境に段階的に展開する。
 
-Week 3:   sandbox_rollout_percent=10
+```
+開発環境: sandbox_enabled=true (全テナント有効)
+  → 全機能をテスト
+
+ステージング: sandbox_enabled=true, sandbox_rollout_percent=100
+  → 本番同等環境で負荷テスト
+
+本番 Week 1: sandbox_rollout_percent=0
+  → sandbox_force_tenants で社内テナントのみ有効化
+  → 実運用での挙動確認
+
+本番 Week 2: sandbox_rollout_percent=10
   → 10% のリクエストをサンドボックス実行
 
-Week 4:   sandbox_rollout_percent=50
+本番 Week 3: sandbox_rollout_percent=50
   → 問題なければ 50% に拡大
 
-Week 5:   sandbox_rollout_percent=100
+本番 Week 4: sandbox_rollout_percent=100
   → 全リクエストをサンドボックス実行
+  → フォールバックコードは残存させ、緊急時に切り戻し可能に
 ```
 
 ### フォールバック
@@ -722,3 +822,31 @@ async def _execute_with_sdk(self, context, options, ...):
         async for event in self._execute_direct(context, options, ...):
             yield event
 ```
+
+## 4.7 変更ファイル総覧（一括実装）
+
+> Phase 1-3 を一括で実装する場合の全変更ファイル一覧。
+
+| ファイル | 操作 | 説明 |
+|---------|------|------|
+| `Dockerfile.sandbox` | 新規 | サンドボックスイメージ |
+| `requirements-sandbox.txt` | 新規 | 事前インストールパッケージ |
+| `sandbox-pip.conf` | 新規 | pip 設定 |
+| `sandbox/seccomp/sandbox-seccomp.json` | 新規 | seccomp プロファイル |
+| `sandbox/apparmor/sandbox-profile` | 新規 | AppArmor プロファイル |
+| `sandbox/egress-proxy/squid.conf` | 新規 | Egress Proxy 設定 |
+| `sandbox/egress-proxy/allowlist.txt` | 新規 | 許可ドメインリスト |
+| `app/services/sandbox/__init__.py` | 新規 | パッケージ初期化 |
+| `app/services/sandbox/manager.py` | 新規 | SandboxManager (コンテナ操作) |
+| `app/services/sandbox/lifecycle.py` | 新規 | SandboxLifecycleManager (セッション固定+クリーンアップ) |
+| `app/services/sandbox/sdk_adapter.py` | 新規 | SDK アダプター (Docker exec 統合) |
+| `app/services/sandbox/config.py` | 新規 | サンドボックス設定 |
+| `app/services/sandbox/network.py` | 新規 | ネットワークモード管理 |
+| `app/services/sandbox/credentials.py` | 新規 | 一時認証情報管理 |
+| `app/services/sandbox/metrics.py` | 新規 | 監視メトリクス |
+| `app/services/execute_service.py` | 変更 | SDK 実行部分 → サンドボックス統合 |
+| `app/services/execute/options_builder.py` | 変更 | cwd の決定ロジック変更 |
+| `app/services/workspace_service.py` | 変更 | S3 同期フロー変更（セッション固定対応） |
+| `app/config.py` | 変更 | サンドボックス設定項目追加 |
+| `docker-compose.yml` | 変更 | Docker socket マウント + Egress Proxy 追加 |
+| `requirements.txt` | 変更 | `docker` パッケージ追加 |

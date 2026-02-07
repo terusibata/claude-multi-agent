@@ -341,11 +341,101 @@ blocked_domains:
   - "fd00:ec2::254"
 ```
 
-## 2.7 Warm Pool 設計
+## 2.7 コンテナライフサイクル設計
 
-### 目的
+### 設計方針: セッション固定コンテナモデル (Session-Sticky)
 
-コンテナ起動のレイテンシ（~500ms）をユーザー体験から排除する。
+ユーザーは1つのチャット（会話）内で複数回メッセージを送受信する。
+毎回コンテナを破棄・再作成するとレイテンシが発生し、`pip install` 等の
+セッション内状態も失われてしまう。
+
+そこで、**コンテナを会話に紐付けて維持**するモデルを採用する。
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│            Session-Sticky Container Lifecycle                     │
+│                                                                  │
+│  Message 1 (新規会話)                                             │
+│  ┌──────────┐     ┌──────────┐     ┌──────────────────┐         │
+│  │Warm Pool │────►│Container │────►│ SDK Process #1   │         │
+│  │ or 新規  │     │ 作成     │     │ 実行・完了       │         │
+│  └──────────┘     └──────────┘     └──────────────────┘         │
+│                        │                   │                     │
+│                        │ bind: conv_id     │ SDK プロセス終了     │
+│                        ▼                   ▼                     │
+│                   ┌──────────────────────────────┐               │
+│                   │ Container (alive, idle)       │               │
+│                   │ - /work/ 状態保持             │               │
+│                   │ - pip install 済パッケージ保持│               │
+│                   │ - 生成ファイル保持            │               │
+│                   └──────────────────────────────┘               │
+│                        │                                         │
+│  Message 2 (同一会話)   │ 既存コンテナを再利用                     │
+│                        ▼                                         │
+│                   ┌──────────────────┐                           │
+│                   │ SDK Process #2   │  ← 同じコンテナで実行      │
+│                   │ pip, ファイル等は│     起動レイテンシ≒0       │
+│                   │ 前回から継続     │                            │
+│                   └──────────────────┘                           │
+│                        │                                         │
+│                        ▼                                         │
+│  ... (繰り返し) ...                                               │
+│                        │                                         │
+│  定期クリーンアップ      │ last_activity + TTL 超過                │
+│                        ▼                                         │
+│                   ┌──────────────────┐                           │
+│                   │ S3最終同期       │                            │
+│                   │ → Container破棄  │                            │
+│                   │ → Local cleanup  │                            │
+│                   └──────────────────┘                           │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### コンテナ状態遷移
+
+```
+                    ┌─────────┐
+                    │  WARM   │ ← Warm Pool 内（会話未紐付）
+                    └────┬────┘
+                         │ acquire(conversation_id)
+                         ▼
+                    ┌─────────┐
+           ┌───────│ RUNNING │◄──────┐
+           │       └────┬────┘       │
+           │            │            │
+           │  SDK完了   │            │ 次のメッセージ到着
+           │            ▼            │
+           │       ┌─────────┐       │
+           │       │  IDLE   │───────┘
+           │       └────┬────┘
+           │            │ TTL超過 or 定期クリーンアップ
+           │            ▼
+           │    ┌──────────────┐
+           └───►│  TERMINATED  │
+                └──────────────┘
+```
+
+### S3 同期フローの変更
+
+```
+【旧設計】メッセージごとに完全サイクル
+  Message N: S3→Local → Execute → Local→S3 → Local削除
+
+【新設計】セッション固定
+  Message 1: S3→Local → Execute → Local→S3 (ローカル維持)
+  Message 2:            Execute → Local→S3 (ローカル維持)
+  Message 3: S3→Local差分 → Execute → Local→S3 (ローカル維持)
+  ...
+  Cleanup:   最終S3同期 → Container破棄 → Local削除
+```
+
+**Message 3 の「S3→Local差分」について**: メッセージ間にユーザーが
+フロントエンドからファイルをアップロードした場合、S3 に新規ファイルが
+追加されている可能性がある。差分同期でこれを取り込む。
+
+### Warm Pool
+
+新規会話の初回レイテンシを削減するため、未割り当てコンテナのプールを維持する。
 
 ```
 ┌──────────────────────────────────────────────────────┐
@@ -353,38 +443,42 @@ blocked_domains:
 │                                                      │
 │  ┌───────────┐  ┌───────────┐  ┌───────────┐       │
 │  │ Sandbox   │  │ Sandbox   │  │ Sandbox   │       │
-│  │ (idle)    │  │ (idle)    │  │ (idle)    │       │
-│  │ ready=true│  │ ready=true│  │ ready=true│       │
+│  │ (WARM)    │  │ (WARM)    │  │ (WARM)    │       │
 │  └───────────┘  └───────────┘  └───────────┘       │
 │                                                      │
-│  Pool Size: min=2, max=10, target=5                  │
-│  TTL: 300s (idle timeout)                            │
-│  Health Check: 30s interval                          │
+│  新規会話到着時:                                       │
+│    1. Pool からコンテナ取得 (<10ms)                    │
+│    2. conversation_id を紐付                          │
+│    3. ワークスペースを bind mount                      │
+│    4. SDK プロセス起動                                │
+│                                                      │
+│  Pool が空の場合:                                     │
+│    → オンデマンドでコンテナ作成 (~500ms)               │
+│                                                      │
+│  補充ルール:                                          │
+│    pool_size < min_size → バックグラウンドで補充       │
 └──────────────────────────────────────────────────────┘
-
-リクエスト到着時:
-  1. Warm Pool から idle コンテナを取得 (<10ms)
-  2. ワークスペースディレクトリを bind mount
-  3. 環境変数を設定
-  4. SDK プロセスを起動
-
-実行完了後:
-  1. SDK プロセスを終了
-  2. ワークスペースディレクトリを unmount
-  3. /work をクリーンアップ
-  4. Pool に返却 or 破棄して新規作成
 ```
 
-### Warm Pool 管理
-
 ```python
-class WarmPoolConfig:
-    min_size: int = 2          # 最小プール数
-    max_size: int = 10         # 最大プール数
-    target_size: int = 5       # 目標プール数
-    idle_timeout: int = 300    # アイドルタイムアウト (秒)
-    max_lifetime: int = 3600   # コンテナ最大寿命 (秒)
-    health_check_interval: int = 30  # ヘルスチェック間隔 (秒)
+class ContainerLifecycleConfig:
+    # Warm Pool
+    warm_pool_min: int = 2           # 最小プール数
+    warm_pool_max: int = 10          # 最大プール数
+    warm_pool_target: int = 5        # 目標プール数
+
+    # セッション固定
+    session_idle_timeout: int = 86400   # 24時間 (最終活動からの TTL)
+    session_max_lifetime: int = 172800  # 48時間 (コンテナ最大寿命)
+
+    # クリーンアップ
+    cleanup_schedule: str = "0 0 * * *"  # cron式: 毎日 0:00 UTC
+    cleanup_stagger_seconds: int = 1800  # 30分間にわたって分散実行
+    cleanup_grace_period: int = 300      # 5分のグレース期間
+
+    # ヘルスチェック
+    health_check_interval: int = 60     # 60秒間隔
+    max_zombie_processes: int = 50      # ゾンビ上限（超過→不健全）
 ```
 
 ## 2.8 SDK 統合ポイント
@@ -396,31 +490,35 @@ class WarmPoolConfig:
 async with ClaudeSDKClient(options=sdk_options) as client:
     await client.query(context.request.user_input)
 
-# 新設計
-async with SandboxManager() as sandbox_mgr:
-    sandbox = await sandbox_mgr.acquire(
-        conversation_id=context.conversation_id,
-        workspace_path=cwd,
-        env=options.get("env", {}),
-        network_mode="none",  # or "egress-proxy"
-    )
-    try:
-        # サンドボックス内で SDK を実行
-        async with sandbox.execute_sdk(options=sdk_options) as client:
-            await client.query(context.request.user_input)
-            async for message in client.receive_response():
-                # ...既存の処理...
-    finally:
-        await sandbox_mgr.release(sandbox)
+# 新設計: セッション固定モデル
+# 1. 既存コンテナがあれば再利用、なければ Warm Pool or 新規作成
+sandbox = await sandbox_manager.acquire_or_reuse(
+    conversation_id=context.conversation_id,
+    workspace_path=cwd,
+    env=options.get("env", {}),
+    network_mode="none",
+)
+try:
+    # 2. サンドボックス内で SDK を実行
+    async with sandbox.execute_sdk(options=sdk_options) as client:
+        await client.query(context.request.user_input)
+        async for message in client.receive_response():
+            # ...既存の処理...
+finally:
+    # 3. SDK プロセスのみ終了。コンテナは維持。
+    await sandbox.mark_idle()
+    # ※ sandbox_manager.release() は呼ばない（定期クリーンアップに委譲）
 ```
 
 ### SandboxManager インターフェース
 
 ```python
 class SandboxManager:
-    """サンドボックスライフサイクル管理"""
+    """サンドボックスライフサイクル管理 (セッション固定モデル)"""
 
-    async def acquire(
+    # --- 会話ごとのコンテナ管理 ---
+
+    async def acquire_or_reuse(
         self,
         conversation_id: str,
         workspace_path: str,
@@ -428,25 +526,59 @@ class SandboxManager:
         network_mode: str = "none",
         resource_limits: ResourceLimits | None = None,
     ) -> Sandbox:
-        """Warm Pool からサンドボックスを取得、または新規作成"""
+        """
+        会話に紐付くコンテナを取得。
+
+        1. 既存コンテナがあればヘルスチェック後に再利用
+        2. なければ Warm Pool から取得
+        3. Pool も空ならオンデマンド作成
+        """
 
     async def release(self, sandbox: Sandbox) -> None:
-        """サンドボックスを解放（クリーンアップ後 Pool に返却 or 破棄）"""
+        """コンテナを完全に破棄（定期クリーンアップから呼ばれる）"""
 
-    async def health_check(self) -> PoolStatus:
-        """プール状態のヘルスチェック"""
+    async def discover_existing(self) -> dict[str, Sandbox]:
+        """
+        Docker labels から既存コンテナを検出。
+        Backend 再起動後の復旧に使用。
+        """
+
+    # --- Warm Pool 管理 ---
+
+    async def replenish_pool(self) -> None:
+        """Warm Pool を目標サイズまで補充"""
+
+    # --- 定期クリーンアップ ---
+
+    async def cleanup_expired(self) -> CleanupReport:
+        """
+        TTL 超過コンテナを破棄。
+        - RUNNING 状態のコンテナは絶対にスキップ
+        - S3 最終同期 → コンテナ破棄 → ローカル削除
+        """
+
+    async def health_check_all(self) -> HealthReport:
+        """全コンテナのヘルスチェック"""
 
 
 class Sandbox:
     """個別サンドボックスの操作"""
 
     container_id: str
-    conversation_id: str
-    status: SandboxStatus  # idle | running | error
+    conversation_id: str | None
+    status: SandboxStatus          # warm | running | idle | terminated
+    last_activity_at: datetime     # 最終活動時刻
+    created_at: datetime           # コンテナ作成時刻
 
     async def execute_sdk(self, options: dict) -> ClaudeSDKClient:
         """サンドボックス内で SDK クライアントを起動"""
 
-    async def cleanup(self) -> None:
-        """ワークスペースをクリーンアップしてリセット"""
+    async def mark_idle(self) -> None:
+        """SDK 完了後、コンテナを IDLE 状態に遷移（破棄しない）"""
+
+    async def is_healthy(self) -> bool:
+        """コンテナの健全性チェック（ゾンビ、リソース、プロセス状態）"""
+
+    async def final_sync_and_destroy(self) -> None:
+        """最終 S3 同期後にコンテナとローカルファイルを破棄"""
 ```
