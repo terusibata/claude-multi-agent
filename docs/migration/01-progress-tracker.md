@@ -139,9 +139,29 @@
 
 ---
 
+## Phase 2: 運用品質 + セキュリティ強化
+
+**ステータス**: 計画策定完了・実装待ち
+**計画書**: `docs/migration/04-phase2-migration-plan.md`
+
+### Phase 2 進捗サマリー
+
+| Step | タスク | ステータス | 備考 |
+|------|--------|-----------|------|
+| 1 | WarmPool最適化 | :white_circle: 未着手 | プリヒート、リトライ、メトリクス |
+| 2 | userns-remap | :white_circle: 未着手 | Docker daemon設定、互換性検証 |
+| 3 | カスタムseccomp | :white_circle: 未着手 | syscall分析、ホワイトリストプロファイル |
+| 4 | 監視ダッシュボード + アラート | :white_circle: 未着手 | Prometheus + Grafana |
+| 5 | Proxyレイテンシ最適化 | :white_circle: 未着手 | DNS キャッシュ、コネクションプール |
+| 6 | 統合テスト・検証 | :white_circle: 未着手 | Phase 2 全機能テスト |
+| 7 | ドキュメント整備 | :white_circle: 未着手 | 運用ガイド、セキュリティ設定ガイド |
+
+---
+
 ## 変更履歴
 
 | 日時 | 内容 |
 |------|------|
 | 2026-02-07 | 移行計画書・進捗管理ドキュメント作成 |
 | 2026-02-07 | Step 1-10 全ステップ実装完了 |
+| 2026-02-07 | Phase 2 移行計画書策定 (`04-phase2-migration-plan.md`) |
