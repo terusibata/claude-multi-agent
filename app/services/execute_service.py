@@ -119,21 +119,24 @@ class ExecuteService:
             # ユーザーメッセージを保存
             await self._save_user_message(request)
 
+            # コンテナ取得/作成（1回だけ実行し、以降はこのinfoを使い回す）
+            container_info = await self.orchestrator.get_or_create(request.conversation_id)
+
             # S3 → コンテナへファイル同期
             if request.workspace_enabled:
-                await self._sync_files_to_container(request)
+                await self._sync_files_to_container(request, container_info)
 
             # コンテナ内エージェントにリクエスト送信・SSEストリーム中継
             done_data = None
             async for event in self._stream_from_container(request, model, seq_counter):
-                # doneイベントからメタデータを抽出
-                if event.get("event") == "done":
+                # result イベントからメタデータ（usage/cost）を抽出
+                if event.get("event") == "result":
                     done_data = event.get("data", {})
                 yield event
 
             # コンテナ → S3へファイル同期
             if request.workspace_enabled:
-                await self._sync_files_from_container(request)
+                await self._sync_files_from_container(request, container_info)
 
             # 使用量をDB記録
             if done_data:
@@ -180,11 +183,11 @@ class ExecuteService:
         container_request = {
             "user_input": request.user_input,
             "system_prompt": "",
-            "model": model.bedrock_model_id if hasattr(model, "bedrock_model_id") else model.model_id,
+            "model": model.bedrock_model_id,
             "session_id": None,
-            "max_iterations": getattr(request, "max_iterations", 50),
-            "budget_tokens": getattr(request, "budget_tokens", 200000),
+            "max_turns": None,
             "mcp_servers": [],
+            "allowed_tools": [],
             "cwd": "/workspace",
         }
 
@@ -230,40 +233,36 @@ class ExecuteService:
 
         return {"event": event_type, "data": data}
 
-    async def _sync_files_to_container(self, request: ExecuteRequest) -> None:
+    async def _sync_files_to_container(self, request: ExecuteRequest, container_info) -> None:
         """S3からコンテナへファイルを同期"""
-        # BUG-11修正: S3未設定時はスキップ
         if not settings.s3_bucket_name:
             logger.debug("S3未設定のためファイル同期スキップ（to_container）")
             return
         try:
-            info = await self.orchestrator.get_or_create(request.conversation_id)
             file_sync = WorkspaceFileSync(
                 s3=S3StorageBackend(),
                 lifecycle=self.orchestrator.lifecycle,
                 db=self.db,
             )
             await file_sync.sync_to_container(
-                request.tenant_id, request.conversation_id, info.id
+                request.tenant_id, request.conversation_id, container_info.id
             )
         except Exception as e:
             logger.error("S3→コンテナ同期エラー", error=str(e))
 
-    async def _sync_files_from_container(self, request: ExecuteRequest) -> None:
+    async def _sync_files_from_container(self, request: ExecuteRequest, container_info) -> None:
         """コンテナからS3へファイルを同期"""
-        # BUG-11修正: S3未設定時はスキップ
         if not settings.s3_bucket_name:
             logger.debug("S3未設定のためファイル同期スキップ（from_container）")
             return
         try:
-            info = await self.orchestrator.get_or_create(request.conversation_id)
             file_sync = WorkspaceFileSync(
                 s3=S3StorageBackend(),
                 lifecycle=self.orchestrator.lifecycle,
                 db=self.db,
             )
             await file_sync.sync_from_container(
-                request.tenant_id, request.conversation_id, info.id
+                request.tenant_id, request.conversation_id, container_info.id
             )
         except Exception as e:
             logger.error("コンテナ→S3同期エラー", error=str(e))
@@ -294,6 +293,7 @@ class ExecuteService:
     ) -> None:
         """使用量をDBに記録"""
         try:
+            # SDK ResultMessage 形式またはフォールバック
             usage = done_data.get("usage", {})
             input_tokens = usage.get("input_tokens", 0)
             output_tokens = usage.get("output_tokens", 0)
@@ -303,7 +303,7 @@ class ExecuteService:
 
             cost = model.calculate_cost(
                 input_tokens, output_tokens, cache_5m, cache_1h, cache_read
-            ) if hasattr(model, "calculate_cost") else Decimal("0")
+            )
 
             await self.usage_service.save_usage_log(
                 tenant_id=request.tenant_id,

@@ -191,6 +191,16 @@ class ContainerOrchestrator:
     async def destroy_all(self) -> None:
         """全コンテナを破棄（シャットダウン時）"""
         logger.info("全コンテナ破棄開始")
+
+        # 全Proxyを先に停止
+        proxy_ids = list(self._proxies.keys())
+        for proxy_id in proxy_ids:
+            try:
+                await self._stop_proxy(proxy_id)
+            except Exception as e:
+                logger.warning("Proxy停止エラー", container_id=proxy_id, error=str(e))
+
+        # 全コンテナを破棄
         containers = await self.lifecycle.list_workspace_containers()
         tasks = []
         for c in containers:

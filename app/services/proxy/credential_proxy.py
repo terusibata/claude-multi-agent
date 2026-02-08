@@ -18,6 +18,7 @@ from app.infrastructure.metrics import (
     get_workspace_proxy_blocked,
     get_workspace_proxy_request_duration,
 )
+from app.services.proxy.dns_cache import DNSCache
 from app.services.proxy.domain_whitelist import DomainWhitelist
 from app.services.proxy.sigv4 import AWSCredentials, sign_request
 
@@ -47,6 +48,7 @@ class CredentialInjectionProxy:
         self.config = config
         self.socket_path = socket_path
         self._whitelist = DomainWhitelist(config.whitelist_domains)
+        self._dns_cache = DNSCache(ttl_seconds=300)
         self._http_client: httpx.AsyncClient | None = None
         self._server: asyncio.AbstractServer | None = None
 
@@ -216,8 +218,7 @@ class CredentialInjectionProxy:
             logger.warning("Proxy: CONNECT拒否", host=host_port)
             writer.write(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 26\r\n\r\nDomain not in whitelist\r\n")
             await writer.drain()
-            writer.close()
-            return
+            return  # writer は caller (_handle_connection) の finally でクローズ
 
         logger.info("Proxy: CONNECT", host=host_port)
         # 200 Connection Established を返してTLS tunnel を確立
@@ -235,13 +236,15 @@ class CredentialInjectionProxy:
         remote_reader = None
         remote_writer = None
         try:
+            # DNSキャッシュ経由でホスト名を解決
+            resolved_addrs = await self._dns_cache.resolve(target_host)
+            connect_host = resolved_addrs[0] if resolved_addrs else target_host
             remote_reader, remote_writer = await asyncio.open_connection(
-                target_host, target_port
+                connect_host, target_port
             )
         except Exception as e:
             logger.error("Proxy: CONNECT先接続失敗", host=host_port, error=str(e))
-            writer.close()
-            return
+            return  # writer は caller (_handle_connection) の finally でクローズ
 
         async def _pipe(src: asyncio.StreamReader, dst: asyncio.StreamWriter) -> None:
             try:
@@ -260,11 +263,11 @@ class CredentialInjectionProxy:
                 _pipe(remote_reader, writer),
             )
         finally:
-            # 両方のwriterを確実にクローズ
-            for w in (remote_writer, writer):
+            # remote_writer のみクローズ（writer は caller がクローズ）
+            if remote_writer:
                 try:
-                    if w and not w.is_closing():
-                        w.close()
+                    if not remote_writer.is_closing():
+                        remote_writer.close()
                 except Exception:
                     pass
 

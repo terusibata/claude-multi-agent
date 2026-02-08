@@ -127,7 +127,7 @@ class Settings(BaseSettings):
     container_image: str = "workspace-base:latest"
     container_cpu_quota: int = 200000  # 2 cores (CpuPeriod=100000)
     container_memory_limit: int = 2 * 1024 ** 3  # 2GB
-    container_pids_limit: int = 100
+    container_pids_limit: int = 256  # SDK CLIサブプロセス + socat を考慮
     container_disk_limit: str = "5G"
     container_inactive_ttl: int = 3600  # 60分
     container_absolute_ttl: int = 28800  # 8時間
@@ -152,8 +152,8 @@ class Settings(BaseSettings):
     # ============================================
     # セキュリティ強化設定 (Phase 2)
     # ============================================
-    seccomp_profile_path: str = ""  # 空=Dockerデフォルト, パス指定=カスタムプロファイル
-    userns_remap_enabled: bool = False  # userns-remap有効化（Docker daemon設定と連動）
+    seccomp_profile_path: str = "deployment/seccomp/workspace-seccomp.json"
+    userns_remap_enabled: bool = True  # userns-remap有効化（Docker daemon設定と連動）
 
     # ============================================
     # Docker設定

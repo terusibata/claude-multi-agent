@@ -30,11 +30,12 @@ def get_container_create_config(container_id: str) -> dict:
     return {
         "Image": image,
         "Env": [
-            # Proxy socketはディレクトリBind mount内のパス
-            "ANTHROPIC_BASE_URL=http+unix:///var/run/ws/proxy.sock",
-            "HTTP_PROXY=http+unix:///var/run/ws/proxy.sock",
-            "HTTPS_PROXY=http+unix:///var/run/ws/proxy.sock",
-            "NODE_USE_ENV_PROXY=1",
+            # socat TCP→UDS リバースプロキシ経由で外部通信
+            "ANTHROPIC_BASE_URL=http://127.0.0.1:8080",
+            "HTTP_PROXY=http://127.0.0.1:8080",
+            "HTTPS_PROXY=http://127.0.0.1:8080",
+            "NO_PROXY=localhost,127.0.0.1",
+            "CLAUDE_CODE_USE_BEDROCK=1",
             "PIP_REQUIRE_VIRTUALENV=true",
         ],
         "User": "1000:1000",
@@ -55,7 +56,7 @@ def get_container_create_config(container_id: str) -> dict:
             "Privileged": False,
             "ReadonlyRootfs": True,
             "IpcMode": "private",
-            "UsernsMode": "host" if not settings.userns_remap_enabled else "",
+            # userns-remap はデーモンレベルで有効化（コンテナ単位の指定不要）
             "Tmpfs": {
                 "/tmp": "rw,noexec,nosuid,size=512M",
                 "/var/tmp": "rw,noexec,nosuid,size=256M",

@@ -276,17 +276,20 @@ class ConversationService:
         if not conversation:
             return False
 
-        # S3ワークスペースファイルの削除
-        try:
-            from app.services.workspace.s3_storage import S3StorageBackend
-            s3 = S3StorageBackend()
-            await s3.delete_prefix(tenant_id, conversation_id)
-        except Exception as e:
-            logger.warning(
-                "S3ワークスペースファイル削除エラー（続行）",
-                conversation_id=conversation_id,
-                error=str(e),
-            )
+        # S3ワークスペースファイルの削除（S3設定済みの場合のみ）
+        from app.config import get_settings
+        _settings = get_settings()
+        if _settings.s3_bucket_name:
+            try:
+                from app.services.workspace.s3_storage import S3StorageBackend
+                s3 = S3StorageBackend()
+                await s3.delete_prefix(tenant_id, conversation_id)
+            except Exception as e:
+                logger.warning(
+                    "S3ワークスペースファイル削除エラー（続行）",
+                    conversation_id=conversation_id,
+                    error=str(e),
+                )
 
         # 関連するConversationFileレコードを削除
         from app.models.conversation_file import ConversationFile

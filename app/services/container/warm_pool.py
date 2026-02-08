@@ -51,6 +51,7 @@ class WarmPoolManager:
         self.redis = redis
         self.min_size = min_size or settings.warm_pool_min_size
         self.max_size = max_size or settings.warm_pool_max_size
+        self._background_tasks: set[asyncio.Task] = set()
 
     async def preheat(self) -> int:
         """
@@ -100,7 +101,7 @@ class WarmPoolManager:
                 # プール情報を削除
                 await self.redis.delete(f"{REDIS_KEY_WARM_POOL_INFO}:{container_id}")
                 # 非同期で補充をスケジュール
-                asyncio.create_task(self.replenish())
+                self._schedule_task(self.replenish())
                 self._update_pool_size_metric()
                 duration = time.perf_counter() - start_time
                 acquire_histogram.observe(duration)
@@ -110,7 +111,7 @@ class WarmPoolManager:
             # 不健全なコンテナは破棄
             logger.warning("WarmPool: 不健全コンテナを破棄", container_id=container_id)
             await self.redis.delete(f"{REDIS_KEY_WARM_POOL_INFO}:{container_id}")
-            asyncio.create_task(self._cleanup_unhealthy(container_id))
+            self._schedule_task(self._cleanup_unhealthy(container_id))
 
         # プール空 → 枯渇メトリクス記録 + 新規作成
         get_workspace_warm_pool_exhausted().inc()
@@ -241,9 +242,21 @@ class WarmPoolManager:
         except Exception:
             pass
 
+    def _schedule_task(self, coro) -> None:
+        """バックグラウンドタスクをスケジュールし参照を保持する"""
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._on_task_done)
+
+    def _on_task_done(self, task: asyncio.Task) -> None:
+        """タスク完了時のコールバック"""
+        self._background_tasks.discard(task)
+        if not task.cancelled() and task.exception():
+            logger.error("WarmPool: バックグラウンドタスクエラー", error=str(task.exception()))
+
     def _update_pool_size_metric(self) -> None:
         """プールサイズメトリクスを非同期更新"""
-        asyncio.create_task(self._async_update_pool_size_metric())
+        self._schedule_task(self._async_update_pool_size_metric())
 
     async def _async_update_pool_size_metric(self) -> None:
         """プールサイズメトリクスを更新"""

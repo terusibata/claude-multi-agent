@@ -40,11 +40,10 @@ class ContainerLifecycleManager:
         socket_base = Path(settings.workspace_socket_base_path) / container_id
         socket_base.mkdir(parents=True, exist_ok=True)
 
-        # userns-remap有効時: ソケットディレクトリの権限を調整
-        # remappedユーザー（UID 100000+）がアクセスできるよう0o777に設定
-        if settings.userns_remap_enabled:
-            import os
-            os.chmod(socket_base, 0o777)
+        # ソケットディレクトリの権限を設定
+        # コンテナ内appuser (UID 1000) および userns-remap時のremappedユーザーがアクセスできるよう設定
+        import os
+        os.chmod(socket_base, 0o777)
 
         # ソケットパス: バックエンドコンテナ内から見たパス
         agent_socket = str(socket_base / "agent.sock")

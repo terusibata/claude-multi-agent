@@ -203,45 +203,26 @@ class TestSeccompConfig:
 
 
 class TestUsernsRemapConfig:
-    """userns-remap設定のテスト"""
+    """userns-remap設定のテスト（Phase 4: デーモンレベル設定に統一）"""
 
-    def test_userns_mode_host_when_disabled(self):
-        """userns-remap無効時にUsernsMode=hostが設定されること"""
+    def test_no_userns_mode_in_container_config(self):
+        """コンテナ設定にUsernsMode が含まれないこと（デーモンレベルで管理）"""
         with patch("app.services.container.config.get_settings") as mock_settings:
             mock_settings.return_value = MagicMock(
                 container_image="workspace-base:latest",
                 container_cpu_quota=200000,
                 container_memory_limit=2 * 1024**3,
-                container_pids_limit=100,
+                container_pids_limit=256,
                 container_disk_limit="5G",
                 resolved_socket_host_path="/var/run/ws",
-                seccomp_profile_path="",
-                userns_remap_enabled=False,
-            )
-
-            from app.services.container.config import get_container_create_config
-
-            config = get_container_create_config("ws-test")
-            assert config["HostConfig"]["UsernsMode"] == "host"
-
-    def test_userns_mode_empty_when_enabled(self):
-        """userns-remap有効時にUsernsMode=空文字（デーモン設定に従う）であること"""
-        with patch("app.services.container.config.get_settings") as mock_settings:
-            mock_settings.return_value = MagicMock(
-                container_image="workspace-base:latest",
-                container_cpu_quota=200000,
-                container_memory_limit=2 * 1024**3,
-                container_pids_limit=100,
-                container_disk_limit="5G",
-                resolved_socket_host_path="/var/run/ws",
-                seccomp_profile_path="",
+                seccomp_profile_path="deployment/seccomp/workspace-seccomp.json",
                 userns_remap_enabled=True,
             )
 
             from app.services.container.config import get_container_create_config
 
             config = get_container_create_config("ws-test")
-            assert config["HostConfig"]["UsernsMode"] == ""
+            assert "UsernsMode" not in config["HostConfig"]
 
 
 class TestOrchestratorMetrics:

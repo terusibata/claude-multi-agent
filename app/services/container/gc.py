@@ -3,6 +3,7 @@
 TTL超過・不健全なコンテナを定期的に検出・破棄する
 """
 import asyncio
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 
 import structlog
@@ -17,6 +18,9 @@ from app.services.container.models import ContainerInfo, ContainerStatus
 logger = structlog.get_logger(__name__)
 settings = get_settings()
 
+# 孤立コンテナの最小経過時間（作成直後の正常コンテナを誤回収しない）
+_ORPHAN_MIN_AGE_SECONDS = 300
+
 
 class ContainerGarbageCollector:
     """コンテナGCループ"""
@@ -25,7 +29,7 @@ class ContainerGarbageCollector:
         self,
         lifecycle: ContainerLifecycleManager,
         redis: Redis,
-        proxy_stop_callback: "asyncio.coroutines | None" = None,
+        proxy_stop_callback: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         self.lifecycle = lifecycle
         self.redis = redis
@@ -98,10 +102,28 @@ class ContainerGarbageCollector:
                     destroyed_count += 1
             else:
                 # Redisにメタデータがないコンテナ（孤立コンテナ）
-                state = container_info.get("State", {})
-                if not state.get("Running", False):
+                # 作成から一定時間経過したものは状態に関わらず回収
+                created_str = container_info.get("Created", "")
+                is_old_enough = True
+                if created_str:
+                    try:
+                        # Docker APIのCreatedはUnixタイムスタンプ（int/float）
+                        created_ts = float(created_str) if isinstance(created_str, (int, float, str)) else 0
+                        created_at = datetime.fromtimestamp(created_ts, tz=timezone.utc)
+                        age = (datetime.now(timezone.utc) - created_at).total_seconds()
+                        is_old_enough = age > _ORPHAN_MIN_AGE_SECONDS
+                    except (ValueError, TypeError, OSError):
+                        is_old_enough = True
+
+                if is_old_enough:
                     logger.warning("GC: 孤立コンテナ破棄", container_id=container_id)
+                    if self._proxy_stop_callback:
+                        try:
+                            await self._proxy_stop_callback(container_id)
+                        except Exception:
+                            pass
                     await self.lifecycle.destroy_container(container_id, grace_period=5)
+                    get_workspace_active_containers().dec()
                     destroyed_count += 1
 
         if destroyed_count > 0:
