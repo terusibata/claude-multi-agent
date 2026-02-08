@@ -100,6 +100,8 @@ profile workspace-container flags=(attach_disconnected,mediate_deleted) {
   /sys/** r,
 
   # ===== 拒否: 機密システムファイル =====
+  # /etc/passwd: 読み取りは許可（Python/Node.js の UID 解決に必要）、書き込みは拒否
+  deny /etc/passwd w,
   deny /etc/shadow r,
   deny /etc/gshadow r,
   deny /etc/sudoers r,

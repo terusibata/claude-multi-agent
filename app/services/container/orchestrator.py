@@ -174,6 +174,40 @@ class ContainerOrchestrator:
                 conversation_id=conversation_id,
             )
             yield b"event: error\ndata: {\"message\": \"Execution timeout\"}\n\n"
+        except ConnectionError as e:
+            # Proxy接続エラー: まずProxy単体の再起動を試行（Step 3-3）
+            get_workspace_requests_total().inc(status="error")
+            logger.warning(
+                "Proxy接続エラー検出、Proxy再起動試行",
+                container_id=info.id,
+                conversation_id=conversation_id,
+                error=str(e),
+            )
+            yield b"event: error\ndata: {\"message\": \"Container execution failed\"}\n\n"
+            try:
+                await self._restart_proxy(info)
+                yield b'event: container_recovered\ndata: {"message": "Container recovered", "recovered": true}\n\n'
+            except Exception as proxy_err:
+                logger.error("Proxy再起動失敗、コンテナ全体復旧へ", error=str(proxy_err))
+                get_workspace_container_crashes().inc()
+                audit_container_crashed(
+                    container_id=info.id,
+                    conversation_id=conversation_id,
+                    error=str(e),
+                )
+                try:
+                    await self._cleanup_container(info)
+                    new_info = await self.get_or_create(conversation_id)
+                    logger.info(
+                        "コンテナ復旧完了",
+                        old_container_id=info.id,
+                        new_container_id=new_info.id,
+                        conversation_id=conversation_id,
+                    )
+                    yield b'event: container_recovered\ndata: {"message": "Container recovered", "recovered": true}\n\n'
+                except Exception as recovery_err:
+                    logger.error("コンテナ復旧失敗", error=str(recovery_err))
+
         except Exception as e:
             get_workspace_requests_total().inc(status="error")
             get_workspace_container_crashes().inc()
