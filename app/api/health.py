@@ -74,7 +74,7 @@ async def check_redis_component_health() -> ComponentHealth:
     import time
     start = time.perf_counter()
 
-    healthy, error = await check_redis_health()
+    healthy, error, _latency = await check_redis_health()
     latency = (time.perf_counter() - start) * 1000
 
     if healthy:
@@ -126,6 +126,48 @@ async def check_s3_health() -> ComponentHealth:
         )
 
 
+async def check_container_system_health() -> ComponentHealth:
+    """コンテナ隔離システムのヘルスチェック"""
+    import time
+
+    start = time.perf_counter()
+
+    try:
+        from app.main import app as main_app
+
+        orchestrator = getattr(main_app.state, "orchestrator", None)
+        if orchestrator is None:
+            return ComponentHealth(
+                status=HealthStatus.UNHEALTHY,
+                message="Orchestrator未初期化",
+            )
+
+        # WarmPoolサイズ確認
+        pool_size = await orchestrator.warm_pool.get_pool_size()
+        latency = (time.perf_counter() - start) * 1000
+
+        if pool_size == 0:
+            return ComponentHealth(
+                status=HealthStatus.DEGRADED,
+                message=f"WarmPool空（補充中の可能性あり）",
+                latency_ms=round(latency, 2),
+            )
+
+        return ComponentHealth(
+            status=HealthStatus.HEALTHY,
+            message=f"WarmPool: {pool_size}コンテナ待機中",
+            latency_ms=round(latency, 2),
+        )
+    except Exception as e:
+        latency = (time.perf_counter() - start) * 1000
+        logger.error("コンテナシステムヘルスチェック失敗", error=str(e))
+        return ComponentHealth(
+            status=HealthStatus.UNHEALTHY,
+            message=str(e),
+            latency_ms=round(latency, 2),
+        )
+
+
 def determine_overall_status(checks: dict[str, ComponentHealth]) -> HealthStatus:
     """
     全体のヘルスステータスを判定
@@ -169,10 +211,12 @@ async def health_check(db: AsyncSession = Depends(get_db)) -> HealthResponse:
 
     db_health_task = check_database_health(db)
     redis_health_task = check_redis_component_health()
+    container_health_task = check_container_system_health()
 
-    db_health, redis_health = await asyncio.gather(
+    db_health, redis_health, container_health = await asyncio.gather(
         db_health_task,
         redis_health_task,
+        container_health_task,
     )
 
     # S3は同期APIなので別途実行
@@ -182,6 +226,7 @@ async def health_check(db: AsyncSession = Depends(get_db)) -> HealthResponse:
         "database": db_health,
         "redis": redis_health,
         "s3": s3_health,
+        "container_system": container_health,
     }
 
     overall_status = determine_overall_status(checks)

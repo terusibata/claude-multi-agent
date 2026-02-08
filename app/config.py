@@ -122,6 +122,50 @@ class Settings(BaseSettings):
     hsts_max_age: int = 31536000  # 1年
 
     # ============================================
+    # コンテナ隔離設定
+    # ============================================
+    container_image: str = "workspace-base:latest"
+    container_cpu_quota: int = 200000  # 2 cores (CpuPeriod=100000)
+    container_memory_limit: int = 2 * 1024 ** 3  # 2GB
+    container_pids_limit: int = 256  # SDK CLIサブプロセス + socat を考慮
+    container_disk_limit: str = "5G"
+    container_inactive_ttl: int = 3600  # 60分
+    container_absolute_ttl: int = 28800  # 8時間
+    container_execution_timeout: int = 600  # 10分
+    container_grace_period: int = 30  # 秒
+    container_healthcheck_interval: int = 30  # 秒
+    container_gc_interval: int = 60  # GCループ間隔（秒）
+
+    # ============================================
+    # WarmPool設定
+    # ============================================
+    warm_pool_min_size: int = 2
+    warm_pool_max_size: int = 10
+    warm_pool_ttl: int = 1800  # 30分
+
+    # ============================================
+    # Proxy設定
+    # ============================================
+    proxy_domain_whitelist: str = "pypi.org,files.pythonhosted.org,registry.npmjs.org,api.anthropic.com,bedrock-runtime.us-east-1.amazonaws.com,bedrock-runtime.us-west-2.amazonaws.com,bedrock-runtime.ap-northeast-1.amazonaws.com"
+    proxy_log_all_requests: bool = True
+
+    # ============================================
+    # セキュリティ強化設定 (Phase 2/5)
+    # ============================================
+    seccomp_profile_path: str = "deployment/seccomp/workspace-seccomp.json"
+    userns_remap_enabled: bool = True  # userns-remap有効化（Docker daemon設定と連動）
+    apparmor_profile_name: str = "workspace-container"  # AppArmorプロファイル名（Phase 5）
+
+    # ============================================
+    # Docker設定
+    # ============================================
+    docker_socket_path: str = "unix:///var/run/docker.sock"
+    workspace_socket_base_path: str = "/var/run/workspace-sockets"
+    # Docker-in-Docker環境でホスト側のパスが異なる場合に指定
+    # 未設定時は workspace_socket_base_path と同じ値を使用
+    workspace_socket_host_path: str = ""
+
+    # ============================================
     # メトリクス設定
     # ============================================
     metrics_enabled: bool = True
@@ -205,6 +249,16 @@ class Settings(BaseSettings):
     def api_keys_list(self) -> list[str]:
         """APIキーをリストとして取得"""
         return [key.strip() for key in self.api_keys.split(",") if key.strip()]
+
+    @property
+    def proxy_domain_whitelist_list(self) -> list[str]:
+        """Proxyドメインホワイトリストをリストとして取得"""
+        return [d.strip() for d in self.proxy_domain_whitelist.split(",") if d.strip()]
+
+    @property
+    def resolved_socket_host_path(self) -> str:
+        """コンテナBind mount用のホスト側ソケットパスを取得"""
+        return self.workspace_socket_host_path or self.workspace_socket_base_path
 
     @property
     def is_production(self) -> bool:

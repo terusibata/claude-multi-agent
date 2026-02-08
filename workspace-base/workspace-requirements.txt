@@ -1,0 +1,36 @@
+# ワークスペースコンテナ内プリインストールパッケージ
+
+# データサイエンス
+numpy
+pandas
+scipy
+scikit-learn
+statsmodels
+
+# 可視化
+matplotlib
+seaborn
+plotly
+
+# ファイル処理
+openpyxl
+python-docx
+pymupdf
+Pillow
+
+# HTTP・Web
+requests
+httpx
+beautifulsoup4
+lxml
+
+# ユーティリティ
+pyyaml
+python-dotenv
+tqdm
+rich
+
+# エージェント実行基盤
+fastapi
+uvicorn[standard]
+claude-agent-sdk>=0.1.33

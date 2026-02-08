@@ -35,6 +35,12 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
 # 非rootユーザーの作成
 RUN useradd -m -u 1000 appuser
 
+# Docker Socket アクセス用グループ設定
+# ホスト側のdocker GIDに合わせてランタイム時にgroup_addで追加
+ARG DOCKER_GID=999
+RUN groupadd -g ${DOCKER_GID} docker 2>/dev/null || true \
+    && usermod -aG docker appuser 2>/dev/null || true
+
 # 作業ディレクトリの設定
 WORKDIR /app
 
@@ -55,6 +61,9 @@ RUN mkdir -p /skills && chown appuser:appuser /skills
 
 # ワークスペース用ディレクトリの作成
 RUN mkdir -p /var/lib/aiagent/workspaces && chown -R appuser:appuser /var/lib/aiagent
+
+# ワークスペースSocket用ディレクトリの作成
+RUN mkdir -p /var/run/workspace-sockets && chown appuser:appuser /var/run/workspace-sockets
 
 # ユーザー切り替え
 USER appuser

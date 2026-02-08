@@ -61,10 +61,20 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       SKILLS_BASE_PATH: /skills
       WORKSPACE_TEMP_DIR: /var/lib/aiagent/workspaces
+      # コンテナ隔離設定
+      DOCKER_SOCKET_PATH: unix:///var/run/docker.sock
+      WORKSPACE_SOCKET_BASE_PATH: /var/run/workspace-sockets
+      # Docker-in-Docker: コンテナBind mountにはホスト上の実パスを使用
+      WORKSPACE_SOCKET_HOST_PATH: ${WORKSPACE_SOCKET_HOST_PATH:-/var/run/workspace-sockets}
+      CONTAINER_IMAGE: ${CONTAINER_IMAGE:-workspace-base:latest}
     volumes:
       - ./app:/app/app
       - skills_data:/skills
       - workspaces_data:/var/lib/aiagent/workspaces
+      # Docker Socket（コンテナ管理用）
+      - /var/run/docker.sock:/var/run/docker.sock
+      # ワークスペースSocket（ホストバインドマウント: DinD環境でパス整合性を保証）
+      - ${WORKSPACE_SOCKET_HOST_PATH:-/var/run/workspace-sockets}:/var/run/workspace-sockets
     ports:
       - "${APP_PORT:-8000}:8000"
     depends_on:
@@ -73,6 +83,9 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
+    # Docker Socketアクセスに必要
+    group_add:
+      - ${DOCKER_GID:-999}
 
   # 本番環境用バックエンド
   backend-prod:
@@ -100,9 +113,18 @@ services:
       API_KEYS: ${API_KEYS}
       METRICS_ENABLED: "true"
       SHUTDOWN_TIMEOUT: "30.0"
+      # コンテナ隔離設定
+      DOCKER_SOCKET_PATH: unix:///var/run/docker.sock
+      WORKSPACE_SOCKET_BASE_PATH: /var/run/workspace-sockets
+      WORKSPACE_SOCKET_HOST_PATH: ${WORKSPACE_SOCKET_HOST_PATH:-/var/run/workspace-sockets}
+      CONTAINER_IMAGE: ${CONTAINER_IMAGE:-workspace-base:latest}
     volumes:
       - skills_data:/skills
       - workspaces_data:/var/lib/aiagent/workspaces
+      # Docker Socket（コンテナ管理用）
+      - /var/run/docker.sock:/var/run/docker.sock
+      # ワークスペースSocket（ホストバインドマウント: DinD環境でパス整合性を保証）
+      - ${WORKSPACE_SOCKET_HOST_PATH:-/var/run/workspace-sockets}:/var/run/workspace-sockets
     ports:
       - "${APP_PORT:-8000}:8000"
     depends_on:
@@ -111,6 +133,9 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
+    # Docker Socketアクセスに必要
+    group_add:
+      - ${DOCKER_GID:-999}
     deploy:
       resources:
         limits:
@@ -122,6 +147,47 @@ services:
     # グレースフルシャットダウン
     stop_grace_period: 30s
 
+  # ============================================
+  # 監視スタック (Phase 2)
+  # ============================================
+
+  # Prometheus
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: ai-agent-prometheus
+    profiles:
+      - monitoring
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/alerts:/etc/prometheus/alerts:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.enable-lifecycle'
+    restart: unless-stopped
+
+  # Grafana
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: ai-agent-grafana
+    profiles:
+      - monitoring
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/workspace-containers.json
+    volumes:
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_PORT:-3002}:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
 volumes:
   postgres_data:
     driver: local
@@ -130,4 +196,8 @@ volumes:
   skills_data:
     driver: local
   workspaces_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
     driver: local

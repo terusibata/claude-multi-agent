@@ -35,11 +35,18 @@ from app.schemas.conversation import (
     MessageLogResponse,
 )
 from app.schemas.execute import ExecuteRequest, StreamRequest
+from app.services.container.orchestrator import ContainerOrchestrator
 from app.services.conversation_service import ConversationService
 from app.services.execute_service import ExecuteService
 from app.services.tenant_service import TenantService
 from app.services.workspace_service import WorkspaceService
 from app.utils.streaming import format_error_event, format_ping_event
+
+
+def _get_orchestrator() -> ContainerOrchestrator:
+    """アプリケーション状態からオーケストレーターを取得"""
+    from app.main import app
+    return app.state.orchestrator
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -63,7 +70,7 @@ HEARTBEAT_INTERVAL_SECONDS = 10  # ハートビート送信間隔（秒）
 async def get_conversations(
     tenant_id: str,
     user_id: Optional[str] = Query(None, description="ユーザーIDフィルター"),
-    status: Optional[str] = Query(None, description="ステータスフィルター"),
+    status_filter: Optional[str] = Query(None, alias="status", description="ステータスフィルター"),
     from_date: Optional[datetime] = Query(None, description="開始日時（タイムゾーンなしの場合JSTとして扱う）"),
     to_date: Optional[datetime] = Query(None, description="終了日時（タイムゾーンなしの場合JSTとして扱う）"),
     limit: int = Query(50, ge=1, le=100, description="取得件数"),
@@ -86,7 +93,7 @@ async def get_conversations(
     return await service.get_conversations_by_tenant(
         tenant_id=tenant_id,
         user_id=user_id,
-        status=status,
+        status=status_filter,
         from_date=from_date,
         to_date=to_date,
         limit=limit,
@@ -298,9 +305,10 @@ async def _background_execution(
     tenant: Tenant,
     model: Model,
     event_queue: asyncio.Queue,
+    orchestrator: "ContainerOrchestrator",
 ) -> None:
     """
-    バックグラウンドでエージェントを実行し、イベントをキューに送信
+    バックグラウンドでコンテナ隔離エージェントを実行し、イベントをキューに送信
 
     リクエストスコープのセッションはレスポンス返却後にクリーンアップされるため、
     独立したDBセッションを使用する。
@@ -310,12 +318,13 @@ async def _background_execution(
         tenant: テナント
         model: モデル定義
         event_queue: イベントキュー
+        orchestrator: コンテナオーケストレーター
     """
     from app.database import async_session_maker
 
     async with async_session_maker() as db:
         try:
-            execute_service = ExecuteService(db)
+            execute_service = ExecuteService(db, orchestrator)
             async for event in execute_service.execute_streaming(
                 request=request,
                 tenant=tenant,
@@ -343,9 +352,10 @@ async def _event_generator(
     request: ExecuteRequest,
     tenant: Tenant,
     model: Model,
+    orchestrator: "ContainerOrchestrator",
 ) -> AsyncIterator[dict]:
     """
-    SSEイベントジェネレータ
+    SSEイベントジェネレータ（コンテナ隔離版）
     クライアントが切断しても、バックグラウンド処理は継続します。
     定期的にハートビートを送信して接続を維持します。
 
@@ -353,6 +363,7 @@ async def _event_generator(
         request: 実行リクエスト
         tenant: テナント
         model: モデル定義
+        orchestrator: コンテナオーケストレーター
 
     Yields:
         SSEイベント
@@ -368,6 +379,7 @@ async def _event_generator(
             tenant,
             model,
             event_queue,
+            orchestrator,
         )
     )
 
@@ -665,12 +677,16 @@ async def stream_conversation(
         preferred_skills=stream_request.preferred_skills,
     )
 
+    # オーケストレーターを取得
+    orchestrator = _get_orchestrator()
+
     # SSEレスポンスを返す
     return EventSourceResponse(
         _event_generator(
             request=execute_request,
             tenant=tenant,
             model=model,
+            orchestrator=orchestrator,
         ),
         media_type="text/event-stream",
     )
