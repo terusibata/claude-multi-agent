@@ -143,8 +143,8 @@ class TestWarmPoolHotReload:
         mock_redis = AsyncMock()
         mock_redis.hset.return_value = True
         mock_redis.hgetall.return_value = {
-            b"min_size": b"5",
-            b"max_size": b"20",
+            "min_size": "5",
+            "max_size": "20",
         }
 
         pool = WarmPoolManager(mock_lifecycle, mock_redis, min_size=2, max_size=10)
@@ -167,7 +167,7 @@ class TestSeccompConfig:
                 container_memory_limit=2 * 1024**3,
                 container_pids_limit=100,
                 container_disk_limit="5G",
-                workspace_socket_base_path="/var/run/ws",
+                resolved_socket_host_path="/var/run/ws",
                 seccomp_profile_path="/etc/docker/seccomp/workspace.json",
                 userns_remap_enabled=False,
             )
@@ -189,7 +189,7 @@ class TestSeccompConfig:
                 container_memory_limit=2 * 1024**3,
                 container_pids_limit=100,
                 container_disk_limit="5G",
-                workspace_socket_base_path="/var/run/ws",
+                resolved_socket_host_path="/var/run/ws",
                 seccomp_profile_path="",
                 userns_remap_enabled=False,
             )
@@ -214,7 +214,7 @@ class TestUsernsRemapConfig:
                 container_memory_limit=2 * 1024**3,
                 container_pids_limit=100,
                 container_disk_limit="5G",
-                workspace_socket_base_path="/var/run/ws",
+                resolved_socket_host_path="/var/run/ws",
                 seccomp_profile_path="",
                 userns_remap_enabled=False,
             )
@@ -233,7 +233,7 @@ class TestUsernsRemapConfig:
                 container_memory_limit=2 * 1024**3,
                 container_pids_limit=100,
                 container_disk_limit="5G",
-                workspace_socket_base_path="/var/run/ws",
+                resolved_socket_host_path="/var/run/ws",
                 seccomp_profile_path="",
                 userns_remap_enabled=True,
             )

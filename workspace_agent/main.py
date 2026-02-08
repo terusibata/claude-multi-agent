@@ -19,7 +19,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-AGENT_SOCKET = "/var/run/agent.sock"
+AGENT_SOCKET = "/var/run/ws/agent.sock"
 
 app = FastAPI(title="Workspace Agent", docs_url=None, redoc_url=None)
 

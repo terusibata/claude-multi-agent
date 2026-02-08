@@ -9,7 +9,7 @@ import structlog
 from redis.asyncio import Redis
 
 from app.config import get_settings
-from app.infrastructure.metrics import get_workspace_gc_cycles
+from app.infrastructure.metrics import get_workspace_active_containers, get_workspace_gc_cycles
 from app.services.container.config import REDIS_KEY_CONTAINER
 from app.services.container.lifecycle import ContainerLifecycleManager
 from app.services.container.models import ContainerInfo, ContainerStatus
@@ -25,9 +25,12 @@ class ContainerGarbageCollector:
         self,
         lifecycle: ContainerLifecycleManager,
         redis: Redis,
+        proxy_stop_callback: "asyncio.coroutines | None" = None,
     ) -> None:
         self.lifecycle = lifecycle
         self.redis = redis
+        # Orchestrator由来のProxy停止コールバック（BUG-12修正）
+        self._proxy_stop_callback = proxy_stop_callback
         self._running = False
         self._task: asyncio.Task | None = None
 
@@ -82,12 +85,7 @@ class ContainerGarbageCollector:
             )
 
             if redis_data:
-                str_data = {
-                    k.decode("utf-8") if isinstance(k, bytes) else k:
-                    v.decode("utf-8") if isinstance(v, bytes) else v
-                    for k, v in redis_data.items()
-                }
-                info = ContainerInfo.from_redis_hash(str_data)
+                info = ContainerInfo.from_redis_hash(redis_data)
 
                 if self._should_destroy(info):
                     logger.info(
@@ -139,6 +137,13 @@ class ContainerGarbageCollector:
                 ContainerStatus.DRAINING.value,
             )
 
+            # BUG-12修正: Proxy停止（リークを防ぐ）
+            if self._proxy_stop_callback:
+                try:
+                    await self._proxy_stop_callback(info.id)
+                except Exception as e:
+                    logger.warning("GC: Proxy停止エラー", container_id=info.id, error=str(e))
+
             # コンテナ破棄
             await self.lifecycle.destroy_container(
                 info.id, grace_period=settings.container_grace_period
@@ -146,6 +151,9 @@ class ContainerGarbageCollector:
 
             # Redis メタデータ削除
             await self.redis.delete(f"{REDIS_KEY_CONTAINER}:{info.conversation_id}")
+
+            # BUG-13修正: アクティブコンテナメトリクスをデクリメント
+            get_workspace_active_containers().dec()
 
         except Exception as e:
             logger.error(

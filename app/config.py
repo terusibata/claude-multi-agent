@@ -134,6 +134,7 @@ class Settings(BaseSettings):
     container_execution_timeout: int = 600  # 10分
     container_grace_period: int = 30  # 秒
     container_healthcheck_interval: int = 30  # 秒
+    container_gc_interval: int = 60  # GCループ間隔（秒）
 
     # ============================================
     # WarmPool設定
@@ -157,8 +158,11 @@ class Settings(BaseSettings):
     # ============================================
     # Docker設定
     # ============================================
-    docker_socket_path: str = "/var/run/docker.sock"
-    workspace_socket_base_path: str = "/var/run/ws"
+    docker_socket_path: str = "unix:///var/run/docker.sock"
+    workspace_socket_base_path: str = "/var/run/workspace-sockets"
+    # Docker-in-Docker環境でホスト側のパスが異なる場合に指定
+    # 未設定時は workspace_socket_base_path と同じ値を使用
+    workspace_socket_host_path: str = ""
 
     # ============================================
     # メトリクス設定
@@ -249,6 +253,11 @@ class Settings(BaseSettings):
     def proxy_domain_whitelist_list(self) -> list[str]:
         """Proxyドメインホワイトリストをリストとして取得"""
         return [d.strip() for d in self.proxy_domain_whitelist.split(",") if d.strip()]
+
+    @property
+    def resolved_socket_host_path(self) -> str:
+        """コンテナBind mount用のホスト側ソケットパスを取得"""
+        return self.workspace_socket_host_path or self.workspace_socket_base_path
 
     @property
     def is_production(self) -> bool:

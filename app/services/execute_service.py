@@ -232,8 +232,11 @@ class ExecuteService:
 
     async def _sync_files_to_container(self, request: ExecuteRequest) -> None:
         """S3からコンテナへファイルを同期"""
+        # BUG-11修正: S3未設定時はスキップ
+        if not settings.s3_bucket_name:
+            logger.debug("S3未設定のためファイル同期スキップ（to_container）")
+            return
         try:
-            from app.services.container.lifecycle import ContainerLifecycleManager
             info = await self.orchestrator.get_or_create(request.conversation_id)
             file_sync = WorkspaceFileSync(
                 s3=S3StorageBackend(),
@@ -248,6 +251,10 @@ class ExecuteService:
 
     async def _sync_files_from_container(self, request: ExecuteRequest) -> None:
         """コンテナからS3へファイルを同期"""
+        # BUG-11修正: S3未設定時はスキップ
+        if not settings.s3_bucket_name:
+            logger.debug("S3未設定のためファイル同期スキップ（from_container）")
+            return
         try:
             info = await self.orchestrator.get_or_create(request.conversation_id)
             file_sync = WorkspaceFileSync(

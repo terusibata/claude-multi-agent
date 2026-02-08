@@ -16,11 +16,15 @@ RUN pip install --no-cache-dir -r /tmp/workspace-requirements.txt
 
 COPY workspace_agent/ /opt/workspace_agent/
 
+# PYTHONPATH: /opt配下のworkspace_agentモジュールをインポート可能にする
+ENV PYTHONPATH="/opt:$PYTHONPATH"
+
 RUN useradd -m -u 1000 appuser && mkdir -p /workspace && chown appuser:appuser /workspace
 USER appuser
 WORKDIR /workspace
 
+# BUG-09修正: urllib.requestはhttp+unix://非対応のため、curlを使用
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http+unix://%2Fvar%2Frun%2Fagent.sock/health')" || exit 1
+  CMD curl -sf --unix-socket /var/run/ws/agent.sock http://localhost/health || exit 1
 
 CMD ["python", "-m", "workspace_agent.main"]

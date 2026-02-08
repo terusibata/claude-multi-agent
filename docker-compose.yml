@@ -64,6 +64,8 @@ services:
       # コンテナ隔離設定
       DOCKER_SOCKET_PATH: unix:///var/run/docker.sock
       WORKSPACE_SOCKET_BASE_PATH: /var/run/workspace-sockets
+      # Docker-in-Docker: コンテナBind mountにはホスト上の実パスを使用
+      WORKSPACE_SOCKET_HOST_PATH: ${WORKSPACE_SOCKET_HOST_PATH:-/var/run/workspace-sockets}
       CONTAINER_IMAGE: ${CONTAINER_IMAGE:-workspace-base:latest}
     volumes:
       - ./app:/app/app
@@ -71,8 +73,8 @@ services:
       - workspaces_data:/var/lib/aiagent/workspaces
       # Docker Socket（コンテナ管理用）
       - /var/run/docker.sock:/var/run/docker.sock
-      # ワークスペースSocket（コンテナ間UDS通信用）
-      - workspace_sockets:/var/run/workspace-sockets
+      # ワークスペースSocket（ホストバインドマウント: DinD環境でパス整合性を保証）
+      - ${WORKSPACE_SOCKET_HOST_PATH:-/var/run/workspace-sockets}:/var/run/workspace-sockets
     ports:
       - "${APP_PORT:-8000}:8000"
     depends_on:
@@ -114,14 +116,15 @@ services:
       # コンテナ隔離設定
       DOCKER_SOCKET_PATH: unix:///var/run/docker.sock
       WORKSPACE_SOCKET_BASE_PATH: /var/run/workspace-sockets
+      WORKSPACE_SOCKET_HOST_PATH: ${WORKSPACE_SOCKET_HOST_PATH:-/var/run/workspace-sockets}
       CONTAINER_IMAGE: ${CONTAINER_IMAGE:-workspace-base:latest}
     volumes:
       - skills_data:/skills
       - workspaces_data:/var/lib/aiagent/workspaces
       # Docker Socket（コンテナ管理用）
       - /var/run/docker.sock:/var/run/docker.sock
-      # ワークスペースSocket（コンテナ間UDS通信用）
-      - workspace_sockets:/var/run/workspace-sockets
+      # ワークスペースSocket（ホストバインドマウント: DinD環境でパス整合性を保証）
+      - ${WORKSPACE_SOCKET_HOST_PATH:-/var/run/workspace-sockets}:/var/run/workspace-sockets
     ports:
       - "${APP_PORT:-8000}:8000"
     depends_on:
@@ -193,8 +196,6 @@ volumes:
   skills_data:
     driver: local
   workspaces_data:
-    driver: local
-  workspace_sockets:
     driver: local
   prometheus_data:
     driver: local

@@ -235,12 +235,7 @@ class ContainerOrchestrator:
         data = await self.redis.hgetall(f"{REDIS_KEY_CONTAINER}:{conversation_id}")
         if not data:
             return None
-        str_data = {
-            k.decode("utf-8") if isinstance(k, bytes) else k:
-            v.decode("utf-8") if isinstance(v, bytes) else v
-            for k, v in data.items()
-        }
-        return ContainerInfo.from_redis_hash(str_data)
+        return ContainerInfo.from_redis_hash(data)
 
     async def _save_to_redis(self, info: ContainerInfo) -> None:
         """コンテナ情報をRedisに保存"""

@@ -74,7 +74,7 @@ async def check_redis_component_health() -> ComponentHealth:
     import time
     start = time.perf_counter()
 
-    healthy, error = await check_redis_health()
+    healthy, error, _latency = await check_redis_health()
     latency = (time.perf_counter() - start) * 1000
 
     if healthy:

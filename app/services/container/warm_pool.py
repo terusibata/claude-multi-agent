@@ -95,9 +95,6 @@ class WarmPoolManager:
             if not container_id:
                 break
 
-            if isinstance(container_id, bytes):
-                container_id = container_id.decode("utf-8")
-
             info = await self._get_pool_container_info(container_id)
             if info and await self.lifecycle.is_healthy(container_id):
                 # プール情報を削除
@@ -184,12 +181,7 @@ class WarmPoolManager:
         data = await self.redis.hgetall(f"{REDIS_KEY_WARM_POOL_INFO}:{container_id}")
         if not data:
             return None
-        str_data = {
-            k.decode("utf-8") if isinstance(k, bytes) else k:
-            v.decode("utf-8") if isinstance(v, bytes) else v
-            for k, v in data.items()
-        }
-        return ContainerInfo.from_redis_hash(str_data)
+        return ContainerInfo.from_redis_hash(data)
 
     async def _cleanup_unhealthy(self, container_id: str) -> None:
         """不健全なコンテナを破棄"""
@@ -209,8 +201,6 @@ class WarmPoolManager:
             container_id = await self.redis.lpop(REDIS_KEY_WARM_POOL)
             if not container_id:
                 break
-            if isinstance(container_id, bytes):
-                container_id = container_id.decode("utf-8")
             await self.redis.delete(f"{REDIS_KEY_WARM_POOL_INFO}:{container_id}")
             try:
                 await self.lifecycle.destroy_container(container_id, grace_period=5)
@@ -244,15 +234,10 @@ class WarmPoolManager:
             config = await self.redis.hgetall(REDIS_KEY_WARM_POOL_CONFIG)
             if not config:
                 return
-            str_config = {
-                k.decode("utf-8") if isinstance(k, bytes) else k:
-                v.decode("utf-8") if isinstance(v, bytes) else v
-                for k, v in config.items()
-            }
-            if "min_size" in str_config:
-                self.min_size = int(str_config["min_size"])
-            if "max_size" in str_config:
-                self.max_size = int(str_config["max_size"])
+            if "min_size" in config:
+                self.min_size = int(config["min_size"])
+            if "max_size" in config:
+                self.max_size = int(config["max_size"])
         except Exception:
             pass
 

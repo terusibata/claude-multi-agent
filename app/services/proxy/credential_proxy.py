@@ -121,16 +121,18 @@ class CredentialInjectionProxy:
                 body = await reader.readexactly(content_length)
 
             # CONNECT メソッド（TLSパススルー）
+            # CONNECTはトンネル確立後に双方向パイプで通信するため、
+            # _handle_connect内でレスポンス送信とwriter closeが完了する。
+            # したがってCONNECT後はearly returnする（BUG-04修正）。
             if method == "CONNECT":
-                status, resp_headers, resp_body = await self._handle_connect(
-                    url, reader, writer
-                )
-            else:
-                status, resp_headers, resp_body = await self.handle_request(
-                    method, url, headers, body
-                )
+                await self._handle_connect(url, reader, writer)
+                return
 
-            # レスポンス送信
+            status, resp_headers, resp_body = await self.handle_request(
+                method, url, headers, body
+            )
+
+            # レスポンス送信（HTTP平文リクエストのみ）
             response_line = f"HTTP/1.1 {status} {'OK' if status < 400 else 'Error'}\r\n"
             writer.write(response_line.encode())
             for k, v in resp_headers.items():
@@ -143,7 +145,10 @@ class CredentialInjectionProxy:
         except Exception as e:
             logger.error("Proxy接続エラー", error=str(e))
         finally:
-            writer.close()
+            try:
+                writer.close()
+            except Exception:
+                pass
 
     async def handle_request(
         self,
@@ -196,15 +201,23 @@ class CredentialInjectionProxy:
         host_port: str,
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
-    ) -> tuple[int, dict[str, str], bytes]:
-        """CONNECT メソッド（TLSパススルー）"""
+    ) -> None:
+        """
+        CONNECT メソッド（TLSパススルー）
+
+        レスポンス送信・writerクローズまで全てこのメソッド内で完結する。
+        """
         # ホスト名を検証
         host = host_port.split(":")[0]
         dummy_url = f"https://{host}/"
 
         if not self._whitelist.is_allowed(dummy_url):
+            get_workspace_proxy_blocked().inc()
             logger.warning("Proxy: CONNECT拒否", host=host_port)
-            return 403, {}, b"Domain not in whitelist"
+            writer.write(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 26\r\n\r\nDomain not in whitelist\r\n")
+            await writer.drain()
+            writer.close()
+            return
 
         logger.info("Proxy: CONNECT", host=host_port)
         # 200 Connection Established を返してTLS tunnel を確立
@@ -219,13 +232,16 @@ class CredentialInjectionProxy:
             target_host = host_port
             target_port = 443
 
+        remote_reader = None
+        remote_writer = None
         try:
             remote_reader, remote_writer = await asyncio.open_connection(
                 target_host, target_port
             )
         except Exception as e:
             logger.error("Proxy: CONNECT先接続失敗", host=host_port, error=str(e))
-            return 502, {}, b"Connection failed"
+            writer.close()
+            return
 
         async def _pipe(src: asyncio.StreamReader, dst: asyncio.StreamWriter) -> None:
             try:
@@ -237,14 +253,20 @@ class CredentialInjectionProxy:
                     await dst.drain()
             except Exception:
                 pass
-            finally:
-                dst.close()
 
-        await asyncio.gather(
-            _pipe(reader, remote_writer),
-            _pipe(remote_reader, writer),
-        )
-        return 200, {}, b""
+        try:
+            await asyncio.gather(
+                _pipe(reader, remote_writer),
+                _pipe(remote_reader, writer),
+            )
+        finally:
+            # 両方のwriterを確実にクローズ
+            for w in (remote_writer, writer):
+                try:
+                    if w and not w.is_closing():
+                        w.close()
+                except Exception:
+                    pass
 
     async def _forward_request(
         self,

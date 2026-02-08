@@ -34,6 +34,9 @@ class ContainerLifecycleManager:
             作成されたコンテナ情報
         """
         container_id = f"ws-{uuid4().hex[:12]}"
+
+        # ソケットディレクトリを作成（バックエンドコンテナ内パス）
+        # Bind mountはディレクトリ単位（BUG-06修正: ソケット競合状態回避）
         socket_base = Path(settings.workspace_socket_base_path) / container_id
         socket_base.mkdir(parents=True, exist_ok=True)
 
@@ -43,6 +46,7 @@ class ContainerLifecycleManager:
             import os
             os.chmod(socket_base, 0o777)
 
+        # ソケットパス: バックエンドコンテナ内から見たパス
         agent_socket = str(socket_base / "agent.sock")
         proxy_socket = str(socket_base / "proxy.sock")
 

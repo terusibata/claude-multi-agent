@@ -130,8 +130,11 @@ async def lifespan(app: FastAPI):
     app.state.orchestrator = orchestrator
     app.state.docker_client = docker_client
 
-    # GC（ガベージコレクター）
-    gc = ContainerGarbageCollector(lifecycle, redis)
+    # GC（ガベージコレクター）- Proxy停止コールバックを渡す（BUG-12修正）
+    gc = ContainerGarbageCollector(
+        lifecycle, redis,
+        proxy_stop_callback=orchestrator._stop_proxy,
+    )
     app.state.gc = gc
 
     # WarmPoolプリヒート（min_sizeまで充填、リトライ付き）

@@ -23,12 +23,17 @@ def get_container_create_config(container_id: str) -> dict:
     if settings.seccomp_profile_path:
         security_opt.append(f"seccomp={settings.seccomp_profile_path}")
 
+    # BUG-06/07修正: ソケットディレクトリ単位でBind mount
+    # Docker-in-Docker環境ではresolved_socket_host_pathを使用
+    host_socket_dir = f"{settings.resolved_socket_host_path}/{container_id}"
+
     return {
         "Image": image,
         "Env": [
-            "ANTHROPIC_BASE_URL=http+unix:///var/run/proxy.sock",
-            "HTTP_PROXY=http+unix:///var/run/proxy.sock",
-            "HTTPS_PROXY=http+unix:///var/run/proxy.sock",
+            # Proxy socketはディレクトリBind mount内のパス
+            "ANTHROPIC_BASE_URL=http+unix:///var/run/ws/proxy.sock",
+            "HTTP_PROXY=http+unix:///var/run/ws/proxy.sock",
+            "HTTPS_PROXY=http+unix:///var/run/ws/proxy.sock",
             "NODE_USE_ENV_PROXY=1",
             "PIP_REQUIRE_VIRTUALENV=true",
         ],
@@ -59,8 +64,9 @@ def get_container_create_config(container_id: str) -> dict:
                 "/home/appuser": "rw,noexec,nosuid,size=64M",
             },
             "Binds": [
-                f"{settings.workspace_socket_base_path}/{container_id}/proxy.sock:/var/run/proxy.sock:ro",
-                f"{settings.workspace_socket_base_path}/{container_id}/agent.sock:/var/run/agent.sock:rw",
+                # ディレクトリ単位でBind mount（ソケット競合状態を回避）
+                # ホスト: {host_socket_dir}/ → コンテナ: /var/run/ws/
+                f"{host_socket_dir}:/var/run/ws:rw",
             ],
             "StorageOpt": {"size": settings.container_disk_limit},
         },

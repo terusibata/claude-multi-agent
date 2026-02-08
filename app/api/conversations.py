@@ -70,7 +70,7 @@ HEARTBEAT_INTERVAL_SECONDS = 10  # ハートビート送信間隔（秒）
 async def get_conversations(
     tenant_id: str,
     user_id: Optional[str] = Query(None, description="ユーザーIDフィルター"),
-    status: Optional[str] = Query(None, description="ステータスフィルター"),
+    status_filter: Optional[str] = Query(None, alias="status", description="ステータスフィルター"),
     from_date: Optional[datetime] = Query(None, description="開始日時（タイムゾーンなしの場合JSTとして扱う）"),
     to_date: Optional[datetime] = Query(None, description="終了日時（タイムゾーンなしの場合JSTとして扱う）"),
     limit: int = Query(50, ge=1, le=100, description="取得件数"),
@@ -93,7 +93,7 @@ async def get_conversations(
     return await service.get_conversations_by_tenant(
         tenant_id=tenant_id,
         user_id=user_id,
-        status=status,
+        status=status_filter,
         from_date=from_date,
         to_date=to_date,
         limit=limit,
