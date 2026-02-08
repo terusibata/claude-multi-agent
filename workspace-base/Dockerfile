@@ -10,7 +10,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH" PIP_REQUIRE_VIRTUALENV=true
 
-COPY workspace-requirements.txt /tmp/
+COPY workspace-base/workspace-requirements.txt /tmp/workspace-requirements.txt
 RUN pip install --no-cache-dir -r /tmp/workspace-requirements.txt
 
 COPY workspace_agent/ /opt/workspace_agent/

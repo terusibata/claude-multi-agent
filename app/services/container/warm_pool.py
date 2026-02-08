@@ -116,7 +116,7 @@ class WarmPoolManager:
         # プール空 → 枯渇メトリクス記録 + 新規作成
         get_workspace_warm_pool_exhausted().inc()
         logger.warning("WarmPool: プール枯渇、新規作成にフォールバック")
-        asyncio.create_task(self.replenish())
+        self._schedule_task(self.replenish())
 
         info = await self.lifecycle.create_container()
         self._update_pool_size_metric()

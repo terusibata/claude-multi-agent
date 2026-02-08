@@ -63,6 +63,9 @@ def get_container_create_config(container_id: str) -> dict:
                 "/run": "rw,noexec,nosuid,size=64M",
                 "/home/appuser/.cache": "rw,noexec,nosuid,size=512M",
                 "/home/appuser": "rw,noexec,nosuid,size=64M",
+                # /workspace はエージェントの作業ディレクトリ（コード実行あり）
+                # ReadonlyRootfs: True のため Tmpfs が必要。S3同期で永続化。
+                "/workspace": "rw,nosuid,size=1G",
             },
             "Binds": [
                 # ディレクトリ単位でBind mount（ソケット競合状態を回避）

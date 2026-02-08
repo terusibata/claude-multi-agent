@@ -59,6 +59,31 @@ class TestContainerEnvVars:
 
             assert "NO_PROXY=localhost,127.0.0.1" in env_list
 
+    def test_workspace_tmpfs_writable(self):
+        """/workspace が Tmpfs マウントで書き込み可能なこと (ReadonlyRootfs対応)"""
+        with patch("app.services.container.config.get_settings") as mock_settings:
+            mock_settings.return_value = MagicMock(
+                container_image="workspace-base:latest",
+                container_cpu_quota=200000,
+                container_memory_limit=2 * 1024**3,
+                container_pids_limit=256,
+                container_disk_limit="5G",
+                resolved_socket_host_path="/var/run/ws",
+                seccomp_profile_path="",
+                userns_remap_enabled=True,
+            )
+
+            from app.services.container.config import get_container_create_config
+
+            config = get_container_create_config("ws-test")
+            tmpfs = config["HostConfig"]["Tmpfs"]
+
+            assert "/workspace" in tmpfs
+            # noexec がないこと（コード実行が必要）
+            assert "noexec" not in tmpfs["/workspace"]
+            # rw であること
+            assert "rw" in tmpfs["/workspace"]
+
 
 class TestDefaultSettings:
     """デフォルト設定のテスト"""

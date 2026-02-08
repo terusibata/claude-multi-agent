@@ -9,7 +9,7 @@ Unix Socket経由でSSEイベントを中継する。
   2. ContainerOrchestrator経由でコンテナ取得・作成
   3. S3 → コンテナへファイル同期
   4. コンテナ内workspace_agentにリクエスト送信（Unix Socket）
-  5. SSEイベントを中継しつつ、doneイベントから使用量を抽出
+  5. SSEイベントを中継しつつ、resultイベントから使用量を抽出
   6. コンテナ → S3へファイル同期
   7. DB記録（使用量、メッセージログ、タイトル生成）
 """
