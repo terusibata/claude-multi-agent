@@ -127,6 +127,11 @@ app/
 ├── config.py              # 設定管理
 ├── database.py            # データベース接続
 └── main.py                # エントリーポイント (create_app呼び出し)
+deployment/                # デプロイメント設定
+├── docker/                # Docker デーモン設定 (userns-remap)
+├── seccomp/               # seccomp プロファイル (システムコール制限)
+├── apparmor/              # AppArmor プロファイル (ファイルアクセス制限)
+└── s3/                    # S3 ライフサイクルポリシー
 alembic/                   # DBマイグレーション
 docs/                      # ドキュメント
 tests/                     # テスト
@@ -387,6 +392,7 @@ AWS認証情報には **Bedrock** と **S3** の両方の権限が必要です�
 
 - [API仕様書](docs/api-specification/) - エンドポイントの詳細仕様
 - [使い方ガイド](docs/usage-guide.md) - 基本的な使い方
+- [デプロイメント設定](docs/deployment-guide.md) - コンテナセキュリティ、S3ライフサイクル
 - [セキュリティ設定](docs/operations/security-config-guide.md) - 認証、レート制限、セキュリティヘッダー
 - [監視ガイド](docs/operations/monitoring-guide.md) - メトリクス、アラート
 
