@@ -36,6 +36,7 @@ from app.services.container.orchestrator import ContainerOrchestrator
 from app.services.workspace.file_sync import WorkspaceFileSync
 from app.services.workspace.s3_storage import S3StorageBackend
 from app.services.conversation_service import ConversationService
+from app.services.message_log_service import MessageLogService
 from app.services.usage_service import UsageService
 from app.infrastructure.distributed_lock import (
     ConversationLockError,
@@ -74,6 +75,7 @@ class ExecuteService:
         self.db = db
         self.orchestrator = orchestrator
         self.conversation_service = ConversationService(db)
+        self.message_log_service = MessageLogService(db)
         self.usage_service = UsageService(db)
 
     async def execute_streaming(
@@ -333,7 +335,7 @@ class ExecuteService:
 
     async def _save_user_message(self, request: ExecuteRequest) -> None:
         """ユーザーメッセージをDBに保存"""
-        message_seq = await self.conversation_service.get_max_message_seq(
+        message_seq = await self.message_log_service.get_max_message_seq(
             request.conversation_id
         ) + 1
 
@@ -344,7 +346,7 @@ class ExecuteService:
             "text": request.user_input,
         }
 
-        await self.conversation_service.save_message_log(
+        await self.message_log_service.save_message_log(
             conversation_id=request.conversation_id,
             message_seq=message_seq,
             message_type="user",

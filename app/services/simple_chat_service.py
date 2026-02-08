@@ -5,18 +5,21 @@ SDKを使わない直接Bedrock呼び出しによるチャット管理
 import asyncio
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator
 from uuid import uuid4
 
 import structlog
-from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.model import Model
 from app.models.simple_chat import SimpleChat
 from app.models.simple_chat_message import SimpleChatMessage
-from app.services.bedrock_client import BedrockChatClient, SimpleChatTitleGenerator
+from app.repositories.simple_chat_repository import (
+    SimpleChatMessageRepository,
+    SimpleChatRepository,
+)
 from app.services.aws_config import AWSConfig
+from app.services.bedrock_client import BedrockChatClient, SimpleChatTitleGenerator
 from app.services.usage_service import UsageService
 
 logger = structlog.get_logger(__name__)
@@ -26,13 +29,9 @@ class SimpleChatService:
     """シンプルチャットサービスクラス"""
 
     def __init__(self, db: AsyncSession):
-        """
-        初期化
-
-        Args:
-            db: データベースセッション
-        """
         self.db = db
+        self.chat_repo = SimpleChatRepository(db)
+        self.message_repo = SimpleChatMessageRepository(db)
         self.aws_config = AWSConfig()
         self.bedrock_client = BedrockChatClient(self.aws_config)
         self.title_generator = SimpleChatTitleGenerator(self.bedrock_client)
@@ -50,19 +49,7 @@ class SimpleChatService:
         application_type: str,
         system_prompt: str,
     ) -> SimpleChat:
-        """
-        新規チャットを作成
-
-        Args:
-            tenant_id: テナントID
-            user_id: ユーザーID
-            model_id: モデルID
-            application_type: アプリケーションタイプ
-            system_prompt: システムプロンプト
-
-        Returns:
-            作成されたチャット
-        """
+        """新規チャットを作成"""
         chat = SimpleChat(
             chat_id=str(uuid4()),
             tenant_id=tenant_id,
@@ -72,106 +59,51 @@ class SimpleChatService:
             system_prompt=system_prompt,
             status="active",
         )
-        self.db.add(chat)
-        await self.db.flush()
-        await self.db.refresh(chat)
+        created = await self.chat_repo.create(chat)
 
         logger.info(
             "シンプルチャット作成",
-            chat_id=chat.chat_id,
+            chat_id=created.chat_id,
             tenant_id=tenant_id,
             application_type=application_type,
         )
-
-        return chat
+        return created
 
     async def get_chat_by_id(
         self,
         chat_id: str,
         tenant_id: str,
-    ) -> Optional[SimpleChat]:
-        """
-        IDでチャットを取得
-
-        Args:
-            chat_id: チャットID
-            tenant_id: テナントID
-
-        Returns:
-            チャット（存在しない場合はNone）
-        """
-        query = select(SimpleChat).where(
-            SimpleChat.chat_id == chat_id,
-            SimpleChat.tenant_id == tenant_id,
-        )
-        result = await self.db.execute(query)
-        return result.scalar_one_or_none()
+    ) -> SimpleChat | None:
+        """IDでチャットを取得"""
+        return await self.chat_repo.get_by_id(chat_id, tenant_id)
 
     async def get_chats_by_tenant(
         self,
         tenant_id: str,
-        user_id: Optional[str] = None,
-        application_type: Optional[str] = None,
-        status: Optional[str] = None,
+        user_id: str | None = None,
+        application_type: str | None = None,
+        status: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[SimpleChat], int]:
-        """
-        テナントのチャット一覧を取得
-
-        Args:
-            tenant_id: テナントID
-            user_id: フィルタリング用ユーザーID
-            application_type: フィルタリング用アプリケーションタイプ
-            status: フィルタリング用ステータス
-            limit: 取得件数
-            offset: オフセット
-
-        Returns:
-            (チャットリスト, 総件数)
-        """
-        # ベースクエリ
-        base_query = select(SimpleChat).where(SimpleChat.tenant_id == tenant_id)
-
-        if user_id:
-            base_query = base_query.where(SimpleChat.user_id == user_id)
-        if application_type:
-            base_query = base_query.where(SimpleChat.application_type == application_type)
-        if status:
-            base_query = base_query.where(SimpleChat.status == status)
-
-        # 総件数取得
-        count_query = select(func.count()).select_from(base_query.subquery())
-        count_result = await self.db.execute(count_query)
-        total = count_result.scalar() or 0
-
-        # データ取得
-        query = base_query.order_by(SimpleChat.updated_at.desc())
-        query = query.limit(limit).offset(offset)
-
-        result = await self.db.execute(query)
-        chats = list(result.scalars().all())
-
-        return chats, total
+        """テナントのチャット一覧を取得"""
+        return await self.chat_repo.find_by_tenant(
+            tenant_id,
+            user_id=user_id,
+            application_type=application_type,
+            status=status,
+            limit=limit,
+            offset=offset,
+        )
 
     async def update_chat_title(
         self,
         chat_id: str,
         tenant_id: str,
         title: str,
-    ) -> Optional[SimpleChat]:
-        """
-        チャットのタイトルを更新
-
-        Args:
-            chat_id: チャットID
-            tenant_id: テナントID
-            title: 新しいタイトル
-
-        Returns:
-            更新されたチャット
-        """
-        chat = await self.get_chat_by_id(chat_id, tenant_id)
+    ) -> SimpleChat | None:
+        """チャットのタイトルを更新"""
+        chat = await self.chat_repo.get_by_id(chat_id, tenant_id)
         if not chat:
             return None
 
@@ -185,39 +117,16 @@ class SimpleChatService:
         chat_id: str,
         tenant_id: str,
     ) -> bool:
-        """
-        チャットを削除
-
-        Args:
-            chat_id: チャットID
-            tenant_id: テナントID
-
-        Returns:
-            削除成功かどうか
-        """
-        chat = await self.get_chat_by_id(chat_id, tenant_id)
-        if not chat:
-            return False
-
-        await self.db.delete(chat)
-        return True
+        """チャットを削除"""
+        return await self.chat_repo.delete(chat_id, tenant_id)
 
     async def archive_chat(
         self,
         chat_id: str,
         tenant_id: str,
-    ) -> Optional[SimpleChat]:
-        """
-        チャットをアーカイブ
-
-        Args:
-            chat_id: チャットID
-            tenant_id: テナントID
-
-        Returns:
-            更新されたチャット（存在しない場合はNone）
-        """
-        chat = await self.get_chat_by_id(chat_id, tenant_id)
+    ) -> SimpleChat | None:
+        """チャットをアーカイブ"""
+        chat = await self.chat_repo.get_by_id(chat_id, tenant_id)
         if not chat:
             return None
 
@@ -230,33 +139,15 @@ class SimpleChatService:
             chat_id=chat.chat_id,
             tenant_id=tenant_id,
         )
-
         return chat
 
     # ============================================
     # メッセージ操作
     # ============================================
 
-    async def get_messages(
-        self,
-        chat_id: str,
-    ) -> list[SimpleChatMessage]:
-        """
-        チャットのメッセージ一覧を取得
-
-        Args:
-            chat_id: チャットID
-
-        Returns:
-            メッセージリスト
-        """
-        query = (
-            select(SimpleChatMessage)
-            .where(SimpleChatMessage.chat_id == chat_id)
-            .order_by(SimpleChatMessage.message_seq)
-        )
-        result = await self.db.execute(query)
-        return list(result.scalars().all())
+    async def get_messages(self, chat_id: str) -> list[SimpleChatMessage]:
+        """チャットのメッセージ一覧を取得"""
+        return await self.message_repo.find_by_chat(chat_id)
 
     async def _save_message(
         self,
@@ -264,24 +155,8 @@ class SimpleChatService:
         role: str,
         content: str,
     ) -> SimpleChatMessage:
-        """
-        メッセージを保存
-
-        Args:
-            chat_id: チャットID
-            role: ロール (user / assistant)
-            content: メッセージ内容
-
-        Returns:
-            保存されたメッセージ
-        """
-        # 最大シーケンス番号を取得
-        max_seq_query = (
-            select(func.max(SimpleChatMessage.message_seq))
-            .where(SimpleChatMessage.chat_id == chat_id)
-        )
-        result = await self.db.execute(max_seq_query)
-        max_seq = result.scalar() or 0
+        """メッセージを保存"""
+        max_seq = await self.message_repo.get_max_seq(chat_id)
 
         message = SimpleChatMessage(
             message_id=str(uuid4()),
@@ -304,32 +179,20 @@ class SimpleChatService:
         model: Model,
         user_message: str,
     ) -> AsyncGenerator[dict, None]:
-        """
-        メッセージを送信してストリーミング応答を取得
-
-        Args:
-            chat: チャット
-            model: モデル
-            user_message: ユーザーメッセージ
-
-        Yields:
-            ストリーミングイベント
-        """
+        """メッセージを送信してストリーミング応答を取得"""
         seq = 1
 
         try:
-            # ユーザーメッセージを保存（ストリーミングエラー時もメッセージを保持するため即座にコミット）
+            # ユーザーメッセージを保存
             await self._save_message(chat.chat_id, "user", user_message)
             await self.db.commit()
 
             # 過去のメッセージ履歴を取得
             messages = await self.get_messages(chat.chat_id)
             message_history = [
-                {"role": msg.role, "content": msg.content}
-                for msg in messages
+                {"role": msg.role, "content": msg.content} for msg in messages
             ]
 
-            # タイトルが未設定かチェック（初回判定）
             is_first_message = chat.title is None
 
             # アシスタント応答を収集
@@ -352,7 +215,6 @@ class SimpleChatService:
                         "content": chunk.content,
                     }
                     seq += 1
-
                 elif chunk.type == "metadata":
                     input_tokens = chunk.input_tokens
                     output_tokens = chunk.output_tokens
@@ -361,7 +223,6 @@ class SimpleChatService:
             await self._save_message(chat.chat_id, "assistant", assistant_response)
 
             # タイトル生成（初回のみ）
-            # イベントループのブロックを防止するため、同期的なBedrock呼び出しを別スレッドで実行
             title = None
             if is_first_message and assistant_response:
                 title = await asyncio.to_thread(
@@ -369,8 +230,8 @@ class SimpleChatService:
                 )
                 await self.update_chat_title(chat.chat_id, chat.tenant_id, title)
 
-            # コスト計算
-            cost_usd = self._calculate_cost(model, input_tokens, output_tokens)
+            # コスト計算 - Model.calculate_cost を使用
+            cost_usd = model.calculate_cost(input_tokens, output_tokens)
 
             # 使用状況ログを保存
             await self.usage_service.save_usage_log(
@@ -411,25 +272,3 @@ class SimpleChatService:
                 "error_type": type(e).__name__,
                 "recoverable": False,
             }
-
-    def _calculate_cost(
-        self,
-        model: Model,
-        input_tokens: int,
-        output_tokens: int,
-    ) -> Decimal:
-        """
-        コストを計算
-
-        Args:
-            model: モデル
-            input_tokens: 入力トークン数
-            output_tokens: 出力トークン数
-
-        Returns:
-            コスト（USD）
-        """
-        # 料金は1Kトークンあたりの価格
-        input_cost = (Decimal(input_tokens) / 1000) * model.input_token_price
-        output_cost = (Decimal(output_tokens) / 1000) * model.output_token_price
-        return input_cost + output_cost

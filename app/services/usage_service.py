@@ -4,29 +4,24 @@
 """
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
 from uuid import uuid4
 
-from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.model import Model
 from app.models.tool_execution_log import ToolExecutionLog
 from app.models.usage_log import UsageLog
-from app.utils.timezone import to_utc
+from app.repositories.model_repository import ModelRepository
+from app.repositories.usage_repository import ToolExecutionLogRepository, UsageRepository
 
 
 class UsageService:
     """使用状況・コストサービスクラス"""
 
     def __init__(self, db: AsyncSession):
-        """
-        初期化
-
-        Args:
-            db: データベースセッション
-        """
         self.db = db
+        self.repo = UsageRepository(db)
+        self.tool_repo = ToolExecutionLogRepository(db)
+        self.model_repo = ModelRepository(db)
 
     # ============================================
     # 使用状況ログ操作
@@ -43,33 +38,16 @@ class UsageService:
         cache_creation_1h_tokens: int = 0,
         cache_read_tokens: int = 0,
         cost_usd: Decimal = Decimal("0"),
-        session_id: Optional[str] = None,
-        conversation_id: Optional[str] = None,
-        simple_chat_id: Optional[str] = None,
+        session_id: str | None = None,
+        conversation_id: str | None = None,
+        simple_chat_id: str | None = None,
     ) -> UsageLog:
-        """
-        使用状況ログを保存
-
-        Args:
-            tenant_id: テナントID
-            user_id: ユーザーID
-            model_id: モデルID
-            input_tokens: 入力トークン数
-            output_tokens: 出力トークン数
-            cache_creation_5m_tokens: 5分キャッシュ作成トークン数
-            cache_creation_1h_tokens: 1時間キャッシュ作成トークン数
-            cache_read_tokens: キャッシュ読み込みトークン数
-            cost_usd: コスト（USD）
-            session_id: SDKセッションID
-            conversation_id: 会話ID（エージェント実行時）
-            simple_chat_id: シンプルチャットID（シンプルチャット実行時）
-
-        Returns:
-            保存された使用状況ログ
-        """
+        """使用状況ログを保存"""
         total_tokens = (
-            input_tokens + output_tokens
-            + cache_creation_5m_tokens + cache_creation_1h_tokens
+            input_tokens
+            + output_tokens
+            + cache_creation_5m_tokens
+            + cache_creation_1h_tokens
             + cache_read_tokens
         )
 
@@ -96,177 +74,66 @@ class UsageService:
     async def get_usage_logs(
         self,
         tenant_id: str,
-        user_id: Optional[str] = None,
-        from_date: Optional[datetime] = None,
-        to_date: Optional[datetime] = None,
+        user_id: str | None = None,
+        from_date: datetime | None = None,
+        to_date: datetime | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[UsageLog]:
-        """
-        使用状況ログを取得
-
-        Args:
-            tenant_id: テナントID
-            user_id: フィルタリング用ユーザーID
-            from_date: 開始日時（タイムゾーンなしの場合JSTとして扱う）
-            to_date: 終了日時（タイムゾーンなしの場合JSTとして扱う）
-            limit: 取得件数
-            offset: オフセット
-
-        Returns:
-            使用状況ログリスト
-        """
-        query = select(UsageLog).where(UsageLog.tenant_id == tenant_id)
-
-        # タイムゾーンなしの日時はJSTとして扱い、UTCに変換
-        from_date_utc = to_utc(from_date)
-        to_date_utc = to_utc(to_date)
-
-        if user_id:
-            query = query.where(UsageLog.user_id == user_id)
-        if from_date_utc:
-            query = query.where(UsageLog.executed_at >= from_date_utc)
-        if to_date_utc:
-            query = query.where(UsageLog.executed_at <= to_date_utc)
-
-        query = query.order_by(UsageLog.executed_at.desc())
-        query = query.limit(limit).offset(offset)
-
-        result = await self.db.execute(query)
-        return list(result.scalars().all())
+        """使用状況ログを取得"""
+        return await self.repo.find_by_tenant(
+            tenant_id,
+            user_id=user_id,
+            from_date=from_date,
+            to_date=to_date,
+            limit=limit,
+            offset=offset,
+        )
 
     async def get_usage_summary(
         self,
         tenant_id: str,
-        from_date: Optional[datetime] = None,
-        to_date: Optional[datetime] = None,
+        from_date: datetime | None = None,
+        to_date: datetime | None = None,
         group_by: str = "day",
     ) -> list[dict]:
-        """
-        使用状況サマリーを取得
-
-        Args:
-            tenant_id: テナントID
-            from_date: 開始日時（タイムゾーンなしの場合JSTとして扱う）
-            to_date: 終了日時（タイムゾーンなしの場合JSTとして扱う）
-            group_by: グループ化単位 (day / week / month)
-
-        Returns:
-            使用状況サマリーリスト
-        """
-        # タイムゾーンなしの日時はJSTとして扱い、UTCに変換
-        from_date_utc = to_utc(from_date)
-        to_date_utc = to_utc(to_date)
-
-        # グループ化関数の決定
-        if group_by == "month":
-            date_trunc = func.date_trunc("month", UsageLog.executed_at)
-        elif group_by == "week":
-            date_trunc = func.date_trunc("week", UsageLog.executed_at)
-        else:
-            date_trunc = func.date_trunc("day", UsageLog.executed_at)
-
-        # クエリ構築
-        query = select(
-            date_trunc.label("period"),
-            func.sum(UsageLog.total_tokens).label("total_tokens"),
-            func.sum(UsageLog.input_tokens).label("input_tokens"),
-            func.sum(UsageLog.output_tokens).label("output_tokens"),
-            func.sum(UsageLog.cache_creation_5m_tokens).label("cache_creation_5m_tokens"),
-            func.sum(UsageLog.cache_creation_1h_tokens).label("cache_creation_1h_tokens"),
-            func.sum(UsageLog.cache_read_tokens).label("cache_read_tokens"),
-            func.sum(UsageLog.cost_usd).label("total_cost_usd"),
-            func.count(UsageLog.usage_log_id).label("execution_count"),
-        ).where(UsageLog.tenant_id == tenant_id)
-
-        if from_date_utc:
-            query = query.where(UsageLog.executed_at >= from_date_utc)
-        if to_date_utc:
-            query = query.where(UsageLog.executed_at <= to_date_utc)
-
-        query = query.group_by(date_trunc).order_by(date_trunc)
-
-        result = await self.db.execute(query)
-        rows = result.all()
-
-        return [
-            {
-                "period": str(row.period),
-                "total_tokens": row.total_tokens or 0,
-                "input_tokens": row.input_tokens or 0,
-                "output_tokens": row.output_tokens or 0,
-                "cache_creation_5m_tokens": row.cache_creation_5m_tokens or 0,
-                "cache_creation_1h_tokens": row.cache_creation_1h_tokens or 0,
-                "cache_read_tokens": row.cache_read_tokens or 0,
-                "total_cost_usd": float(row.total_cost_usd or 0),
-                "execution_count": row.execution_count or 0,
-            }
-            for row in rows
-        ]
+        """使用状況サマリーを取得"""
+        return await self.repo.get_summary(
+            tenant_id,
+            from_date=from_date,
+            to_date=to_date,
+            group_by=group_by,
+        )
 
     async def get_cost_report(
         self,
         tenant_id: str,
         from_date: datetime,
         to_date: datetime,
-        model_id: Optional[str] = None,
-        user_id: Optional[str] = None,
+        model_id: str | None = None,
+        user_id: str | None = None,
     ) -> dict:
-        """
-        コストレポートを生成
-
-        Args:
-            tenant_id: テナントID
-            from_date: 開始日時（タイムゾーンなしの場合JSTとして扱う）
-            to_date: 終了日時（タイムゾーンなしの場合JSTとして扱う）
-            model_id: フィルタリング用モデルID
-            user_id: フィルタリング用ユーザーID
-
-        Returns:
-            コストレポート
-        """
-        # タイムゾーンなしの日時はJSTとして扱い、UTCに変換
-        from_date_utc = to_utc(from_date)
-        to_date_utc = to_utc(to_date)
-
-        # モデル別集計
-        model_query = select(
-            UsageLog.model_id,
-            func.sum(UsageLog.total_tokens).label("total_tokens"),
-            func.sum(UsageLog.input_tokens).label("input_tokens"),
-            func.sum(UsageLog.output_tokens).label("output_tokens"),
-            func.sum(UsageLog.cache_creation_5m_tokens).label("cache_creation_5m_tokens"),
-            func.sum(UsageLog.cache_creation_1h_tokens).label("cache_creation_1h_tokens"),
-            func.sum(UsageLog.cache_read_tokens).label("cache_read_tokens"),
-            func.sum(UsageLog.cost_usd).label("cost_usd"),
-            func.count(UsageLog.usage_log_id).label("execution_count"),
-        ).where(
-            and_(
-                UsageLog.tenant_id == tenant_id,
-                UsageLog.executed_at >= from_date_utc,
-                UsageLog.executed_at <= to_date_utc,
-            )
+        """コストレポートを生成"""
+        model_rows = await self.repo.get_cost_by_model(
+            tenant_id,
+            from_date,
+            to_date,
+            model_id=model_id,
+            user_id=user_id,
         )
-
-        if model_id:
-            model_query = model_query.where(UsageLog.model_id == model_id)
-        if user_id:
-            model_query = model_query.where(UsageLog.user_id == user_id)
-
-        model_query = model_query.group_by(UsageLog.model_id)
-        model_result = await self.db.execute(model_query)
-        model_rows = model_result.all()
 
         # モデル名を取得
         model_ids = [row.model_id for row in model_rows]
-        models_query = select(Model).where(Model.model_id.in_(model_ids))
-        models_result = await self.db.execute(models_query)
-        models = {m.model_id: m.display_name for m in models_result.scalars().all()}
+        models = await self.model_repo.get_by_ids(model_ids)
 
         by_model = [
             {
                 "model_id": row.model_id,
-                "model_name": models.get(row.model_id, row.model_id),
+                "model_name": (
+                    models[row.model_id].display_name
+                    if row.model_id in models
+                    else row.model_id
+                ),
                 "total_tokens": row.total_tokens or 0,
                 "input_tokens": row.input_tokens or 0,
                 "output_tokens": row.output_tokens or 0,
@@ -279,7 +146,6 @@ class UsageService:
             for row in model_rows
         ]
 
-        # 合計計算
         total_cost = sum(item["cost_usd"] for item in by_model)
         total_tokens = sum(item["total_tokens"] for item in by_model)
         total_executions = sum(item["execution_count"] for item in by_model)
@@ -302,29 +168,14 @@ class UsageService:
         self,
         session_id: str,
         tool_name: str,
-        tool_use_id: Optional[str] = None,
-        tool_input: Optional[dict] = None,
-        tool_output: Optional[dict] = None,
+        tool_use_id: str | None = None,
+        tool_input: dict | None = None,
+        tool_output: dict | None = None,
         status: str = "success",
-        execution_time_ms: Optional[int] = None,
-        conversation_id: Optional[str] = None,
+        execution_time_ms: int | None = None,
+        conversation_id: str | None = None,
     ) -> ToolExecutionLog:
-        """
-        ツール実行ログを保存
-
-        Args:
-            session_id: SDKセッションID
-            tool_name: ツール名
-            tool_use_id: ツール使用ID
-            tool_input: ツール入力
-            tool_output: ツール出力
-            status: ステータス
-            execution_time_ms: 実行時間（ミリ秒）
-            conversation_id: 会話ID
-
-        Returns:
-            保存されたツール実行ログ
-        """
+        """ツール実行ログを保存"""
         log = ToolExecutionLog(
             tool_log_id=str(uuid4()),
             session_id=session_id,
@@ -343,45 +194,19 @@ class UsageService:
     async def get_tool_logs(
         self,
         tenant_id: str,
-        session_id: Optional[str] = None,
-        tool_name: Optional[str] = None,
-        from_date: Optional[datetime] = None,
-        to_date: Optional[datetime] = None,
+        session_id: str | None = None,
+        tool_name: str | None = None,
+        from_date: datetime | None = None,
+        to_date: datetime | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[ToolExecutionLog]:
-        """
-        ツール実行ログを取得
-
-        Args:
-            tenant_id: テナントID（権限チェック用）
-            session_id: フィルタリング用セッションID
-            tool_name: フィルタリング用ツール名
-            from_date: 開始日時（タイムゾーンなしの場合JSTとして扱う）
-            to_date: 終了日時（タイムゾーンなしの場合JSTとして扱う）
-            limit: 取得件数
-            offset: オフセット
-
-        Returns:
-            ツール実行ログリスト
-        """
-        # タイムゾーンなしの日時はJSTとして扱い、UTCに変換
-        from_date_utc = to_utc(from_date)
-        to_date_utc = to_utc(to_date)
-
-        query = select(ToolExecutionLog)
-
-        if session_id:
-            query = query.where(ToolExecutionLog.session_id == session_id)
-        if tool_name:
-            query = query.where(ToolExecutionLog.tool_name == tool_name)
-        if from_date_utc:
-            query = query.where(ToolExecutionLog.executed_at >= from_date_utc)
-        if to_date_utc:
-            query = query.where(ToolExecutionLog.executed_at <= to_date_utc)
-
-        query = query.order_by(ToolExecutionLog.executed_at.desc())
-        query = query.limit(limit).offset(offset)
-
-        result = await self.db.execute(query)
-        return list(result.scalars().all())
+        """ツール実行ログを取得"""
+        return await self.tool_repo.find_logs(
+            session_id=session_id,
+            tool_name=tool_name,
+            from_date=from_date,
+            to_date=to_date,
+            limit=limit,
+            offset=offset,
+        )
