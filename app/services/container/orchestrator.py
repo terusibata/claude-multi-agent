@@ -26,6 +26,11 @@ import structlog
 from redis.asyncio import Redis
 
 from app.config import get_settings
+from app.infrastructure.audit_log import (
+    audit_container_crashed,
+    audit_container_created,
+    audit_container_destroyed,
+)
 from app.infrastructure.metrics import (
     get_workspace_active_containers,
     get_workspace_container_crashes,
@@ -115,6 +120,12 @@ class ContainerOrchestrator:
             conversation_id=conversation_id,
             startup_seconds=round(startup_duration, 3),
         )
+        audit_container_created(
+            container_id=info.id,
+            conversation_id=conversation_id,
+            source="warm_pool",
+            duration_ms=int(startup_duration * 1000),
+        )
         return info
 
     async def execute(
@@ -124,6 +135,8 @@ class ContainerOrchestrator:
     ) -> AsyncIterator[bytes]:
         """
         コンテナ内のエージェントにリクエストを転送し、SSEストリームを中継
+
+        コンテナクラッシュ時は自動復旧を試み、container_recovered イベントを通知する。
 
         Args:
             conversation_id: 会話ID
@@ -170,7 +183,26 @@ class ContainerOrchestrator:
                 conversation_id=conversation_id,
                 error=str(e),
             )
+            audit_container_crashed(
+                container_id=info.id,
+                conversation_id=conversation_id,
+                error=str(e),
+            )
             yield b"event: error\ndata: {\"message\": \"Container execution failed\"}\n\n"
+
+            # クラッシュ復旧: 不健全コンテナをクリーンアップし新コンテナを準備
+            try:
+                await self._cleanup_container(info)
+                new_info = await self.get_or_create(conversation_id)
+                logger.info(
+                    "コンテナ復旧完了",
+                    old_container_id=info.id,
+                    new_container_id=new_info.id,
+                    conversation_id=conversation_id,
+                )
+                yield b'event: container_recovered\ndata: {"message": "Container recovered", "recovered": true}\n\n'
+            except Exception as recovery_err:
+                logger.error("コンテナ復旧失敗", error=str(recovery_err))
         else:
             get_workspace_requests_total().inc(status="success")
         finally:
@@ -240,6 +272,12 @@ class ContainerOrchestrator:
         if proxy:
             await proxy.stop()
 
+    async def _restart_proxy(self, info: ContainerInfo) -> None:
+        """Proxyクラッシュ時の自動再起動"""
+        logger.warning("Proxy再起動", container_id=info.id)
+        await self._stop_proxy(info.id)
+        await self._start_proxy(info)
+
     async def _get_container_from_redis(self, conversation_id: str) -> ContainerInfo | None:
         """Redisからコンテナ情報を取得"""
         data = await self.redis.hgetall(f"{REDIS_KEY_CONTAINER}:{conversation_id}")
@@ -273,3 +311,8 @@ class ContainerOrchestrator:
             logger.error("コンテナ破棄エラー", container_id=info.id, error=str(e))
         await self.redis.delete(f"{REDIS_KEY_CONTAINER}:{info.conversation_id}")
         get_workspace_active_containers().dec()
+        audit_container_destroyed(
+            container_id=info.id,
+            conversation_id=info.conversation_id,
+            reason="cleanup",
+        )

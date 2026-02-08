@@ -7,6 +7,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs && rm -rf /var/lib/apt/lists/*
 
+# global-agent: Node.js 20でHTTP_PROXYをfetch()に適用するために必要
+RUN npm install -g global-agent
+
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH" PIP_REQUIRE_VIRTUALENV=true
 

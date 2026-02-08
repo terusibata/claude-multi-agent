@@ -1,0 +1,119 @@
+#include <tunables/global>
+
+# AppArmor プロファイル: workspace-container
+# ワークスペースコンテナのファイルアクセスを制限する
+#
+# 適用方法:
+#   sudo apparmor_parser -r deployment/apparmor/workspace-container
+#   sudo apparmor_parser -a deployment/apparmor/workspace-container
+#
+# Docker コンテナへの適用:
+#   SecurityOpt: ["apparmor=workspace-container"]
+
+profile workspace-container flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  # ===== ネットワーク =====
+  # Unix ソケット通信のみ許可（--network none 環境）
+  network unix,
+
+  # ===== 許可: ワークスペースディレクトリ =====
+  /workspace/** rw,
+  /workspace/ r,
+
+  # ===== 許可: Python venv =====
+  /opt/venv/** rw,
+  /opt/venv/ r,
+  /opt/venv/bin/* ix,
+
+  # ===== 許可: workspace_agent =====
+  /opt/workspace_agent/** r,
+
+  # ===== 許可: tmpfs マウント =====
+  /tmp/** rw,
+  /var/tmp/** rw,
+  /run/** rw,
+  /home/appuser/** rw,
+  /home/appuser/.cache/** rw,
+
+  # ===== 許可: システムライブラリ・実行ファイル (read-only rootfs) =====
+  /usr/** r,
+  /usr/bin/* ix,
+  /usr/local/** r,
+  /usr/local/bin/* ix,
+  /usr/lib/** r,
+  /lib/** r,
+  /lib64/** r,
+  /etc/** r,
+  /bin/* ix,
+  /sbin/* ix,
+
+  # ===== 許可: Python / Node.js ランタイム =====
+  /usr/bin/python* ix,
+  /usr/local/bin/python* ix,
+  /usr/bin/node ix,
+  /usr/local/bin/node ix,
+
+  # ===== 許可: proc (限定的) =====
+  /proc/ r,
+  /proc/sys/kernel/random/uuid r,
+  /proc/sys/kernel/osrelease r,
+  /proc/sys/vm/overcommit_memory r,
+  /proc/self/fd/ r,
+  /proc/self/fd/** rw,
+  /proc/self/exe r,
+  /proc/self/maps r,
+  /proc/self/stat r,
+  /proc/self/status r,
+  /proc/self/cgroup r,
+  /proc/self/mountinfo r,
+  /proc/self/mounts r,
+  /proc/cpuinfo r,
+  /proc/meminfo r,
+  /proc/loadavg r,
+  /proc/uptime r,
+  /proc/version r,
+  /proc/filesystems r,
+
+  # ===== 許可: デバイス =====
+  /dev/null rw,
+  /dev/zero r,
+  /dev/urandom r,
+  /dev/random r,
+  /dev/pts/* rw,
+  /dev/tty rw,
+  /dev/fd/** rw,
+
+  # ===== 許可: Unix ソケット =====
+  /var/run/ws/** rw,
+  /var/run/agent.sock rw,
+  /var/run/proxy.sock r,
+
+  # ===== 拒否: 機密ファイル =====
+  deny /proc/*/mem rwklx,
+  deny /proc/kcore rwklx,
+  deny /proc/sysrq-trigger rwklx,
+  deny /proc/sys/kernel/core_pattern w,
+
+  # ===== 拒否: /sys (カーネルパラメータ) =====
+  deny /sys/** w,
+  /sys/** r,
+
+  # ===== 拒否: 機密システムファイル =====
+  deny /etc/shadow r,
+  deny /etc/gshadow r,
+  deny /etc/sudoers r,
+  deny /etc/sudoers.d/** r,
+
+  # ===== 拒否: マウント操作 =====
+  deny mount,
+  deny umount,
+  deny pivot_root,
+
+  # ===== 拒否: ptrace =====
+  deny ptrace,
+
+  # ===== シグナル =====
+  signal (send) peer=workspace-container,
+  signal (receive),
+}

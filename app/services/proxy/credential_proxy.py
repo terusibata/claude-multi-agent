@@ -14,6 +14,10 @@ from pathlib import Path
 import httpx
 import structlog
 
+from app.infrastructure.audit_log import (
+    audit_proxy_request_allowed,
+    audit_proxy_request_blocked,
+)
 from app.infrastructure.metrics import (
     get_workspace_proxy_blocked,
     get_workspace_proxy_request_duration,
@@ -170,6 +174,7 @@ class CredentialInjectionProxy:
         # ドメインチェック
         if not self._whitelist.is_allowed(url):
             get_workspace_proxy_blocked().inc()
+            audit_proxy_request_blocked(method=method, url=url)
             if self.config.log_all_requests:
                 logger.warning("Proxy: ドメイン拒否", method=method, url=url)
             return 403, {}, b"Domain not in whitelist"
@@ -193,6 +198,10 @@ class CredentialInjectionProxy:
         # レイテンシメトリクス
         duration = time.perf_counter() - request_start
         get_workspace_proxy_request_duration().observe(duration, method=method)
+        audit_proxy_request_allowed(
+            method=method, url=url,
+            status=result[0], duration_ms=int(duration * 1000),
+        )
         if self.config.log_all_requests:
             logger.info("Proxy: 完了", method=method, url=url, duration_ms=round(duration * 1000, 1), status=result[0])
 

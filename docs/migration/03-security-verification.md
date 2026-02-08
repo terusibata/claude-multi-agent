@@ -98,11 +98,12 @@ app/main.py
 
 | リスク | 重要度 | 推奨対策 | Phase | ステータス |
 |--------|-------|---------|-------|----------|
-| Docker Socketアクセス | 中 | AppArmorプロファイル、Docker API制限 | 3 | 未対応 |
-| コンテナイメージの脆弱性 | 中 | 定期的なイメージスキャン (Trivy等) | 3 | 未対応 |
+| Docker Socketアクセス | 中 | AppArmorプロファイル、Docker API制限 | 3 | 本番運用時に対応推奨 |
+| コンテナイメージの脆弱性 | 中 | 定期的なイメージスキャン (Trivy等) | 3 | 本番運用時に対応推奨 |
 | カスタムseccompプロファイル | 低 | 最小権限原則に基づくシステムコール制限 | 2 | **Phase 2 実装済** |
 | userns-remap | 低 | User Namespace分離 | 2 | **Phase 2 実装済** |
-| gVisor/Firecracker | 低 | より強力なランタイム隔離 | 3 | 未対応 |
+| AppArmorプロファイル | 低 | ファイルパスベースアクセス制御 | 5 | **Phase 5 実装済** |
+| gVisor/Firecracker | 低 | より強力なランタイム隔離 | 3 | 本番運用時に検討 |
 
 ---
 
@@ -129,7 +130,33 @@ app/main.py
 
 ---
 
-## 6. 検証チェックリスト
+## 7. Phase 5 セキュリティレイヤー追加
+
+### Layer 8: AppArmor プロファイル (Phase 5)
+
+- **実装**: `deployment/apparmor/workspace-container`
+- **設定**: `APPARMOR_PROFILE_NAME` 環境変数 → `container/config.py` SecurityOpt に適用
+- **許可**: `/workspace/**`, `/opt/venv/**`, `/tmp/**`, Unix Socket
+- **拒否**: `/proc/*/mem`, `/sys/** w`, `/etc/shadow`, mount, ptrace
+- **seccompとの補完**: seccomp=syscall制御、AppArmor=ファイルパス制御
+- **ペネトレーションテスト**: `docs/security/penetration-test-report.md`
+
+### セキュリティ監査ログ (Phase 5)
+
+- **実装**: `app/infrastructure/audit_log.py`
+- **イベント型**: `container_created`, `container_destroyed`, `container_crashed`, `proxy_request_allowed`, `proxy_request_blocked`, `file_sync_to_container`, `file_sync_from_container`, `agent_execution_started`, `agent_execution_completed`, `agent_execution_failed`
+- **統一フォーマット**: 全イベントに `service`, `event`, `conversation_id`, `tenant_id`, `container_id` を含む
+- **統合先**: `orchestrator.py`, `credential_proxy.py`, `file_sync.py`, `execute_service.py`
+
+### クラッシュ復旧通知 (Phase 5)
+
+- **実装**: `app/services/container/orchestrator.py` - `execute()` メソッド
+- **フロー**: コンテナクラッシュ検知 → `event: error` 送信 → 旧コンテナクリーンアップ → 新コンテナ割当 → `event: container_recovered` 送信
+- **Proxy復旧**: `_restart_proxy()` による自動再起動
+
+---
+
+## 8. 検証チェックリスト
 
 ### Phase 1
 
@@ -154,3 +181,18 @@ app/main.py
 - [x] seccomp違反メトリクス (`workspace_seccomp_violations_total`) が定義されていること
 - [x] 監視アラートにセキュリティ関連ルールが含まれること
 - [x] Phase 2統合テストが作成されていること (`tests/integration/test_phase2.py`)
+
+### Phase 5
+
+- [x] AppArmorプロファイルが作成され、コンテナに適用されていること (`deployment/apparmor/workspace-container`)
+- [x] AppArmor が `/proc/*/mem`, `/sys/**`, `/etc/shadow` を deny すること
+- [x] AppArmor が `/workspace/**`, `/opt/venv/**`, `/tmp/**` に rw を許可すること
+- [x] コンテナ設定の SecurityOpt に `apparmor=workspace-container` が含まれること
+- [x] 全ライフサイクルイベントが統一フォーマットの監査ログとして出力されること (`app/infrastructure/audit_log.py`)
+- [x] コンテナクラッシュ時に `container_recovered` SSEイベントが送信されること
+- [x] Proxy クラッシュ時の自動再起動が実装されていること (`orchestrator._restart_proxy()`)
+- [x] S3 ライフサイクルポリシーが定義されていること (`deployment/s3/lifecycle-policy.json`)
+- [x] 実行中のツール結果ごとファイル同期が動作すること (`execute_service.py`)
+- [x] Node.js が global-agent 経由でProxy通信できること
+- [x] E2E統合テストが作成されていること (`tests/e2e/test_container_lifecycle.py`)
+- [x] 全ペネトレーションテストシナリオが防御されていること (`docs/security/penetration-test-report.md`)

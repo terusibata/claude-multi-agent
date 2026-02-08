@@ -1,0 +1,37 @@
+{
+  "Rules": [
+    {
+      "ID": "workspace-noncurrent-version-cleanup",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": "workspaces/"
+      },
+      "NoncurrentVersionExpiration": {
+        "NoncurrentDays": 30
+      }
+    },
+    {
+      "ID": "workspace-glacier-transition",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": "workspaces/"
+      },
+      "Transitions": [
+        {
+          "Days": 90,
+          "StorageClass": "GLACIER"
+        }
+      ]
+    },
+    {
+      "ID": "workspace-glacier-expiration",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": "workspaces/"
+      },
+      "Expiration": {
+        "Days": 270
+      }
+    }
+  ]
+}

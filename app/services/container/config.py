@@ -18,10 +18,12 @@ def get_container_create_config(container_id: str) -> dict:
     settings = get_settings()
     image = settings.container_image
 
-    # SecurityOpt: no-new-privileges + カスタムseccomp（Phase 2）
+    # SecurityOpt: no-new-privileges + カスタムseccomp（Phase 2）+ AppArmor（Phase 5）
     security_opt = ["no-new-privileges:true"]
     if settings.seccomp_profile_path:
         security_opt.append(f"seccomp={settings.seccomp_profile_path}")
+    if settings.apparmor_profile_name:
+        security_opt.append(f"apparmor={settings.apparmor_profile_name}")
 
     # BUG-06/07修正: ソケットディレクトリ単位でBind mount
     # Docker-in-Docker環境ではresolved_socket_host_pathを使用
@@ -37,6 +39,11 @@ def get_container_create_config(container_id: str) -> dict:
             "NO_PROXY=localhost,127.0.0.1",
             "CLAUDE_CODE_USE_BEDROCK=1",
             "PIP_REQUIRE_VIRTUALENV=true",
+            # Node.js 20: global-agentでHTTP_PROXYをfetch()に適用（Phase 5）
+            "GLOBAL_AGENT_HTTP_PROXY=http://127.0.0.1:8080",
+            "GLOBAL_AGENT_HTTPS_PROXY=http://127.0.0.1:8080",
+            "GLOBAL_AGENT_NO_PROXY=localhost,127.0.0.1",
+            "NODE_OPTIONS=--require global-agent/bootstrap",
         ],
         "User": "1000:1000",
         "Labels": {
