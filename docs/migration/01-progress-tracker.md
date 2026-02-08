@@ -1,7 +1,7 @@
 # Workspace Container Isolation - 移行進捗管理
 
-**最終更新**: 2026-02-07
-**全体進捗**: Step 10/10 完了
+**最終更新**: 2026-02-08
+**全体進捗**: Phase 1 (10/10) + Phase 2 (7/7) + Phase 5 (9/9) 完了
 
 ---
 
@@ -253,6 +253,130 @@
 
 ---
 
+## Phase 5: 残作業完了・本番準備
+
+**ステータス**: Step 9/9 完了
+**計画書**: `docs/migration/10-phase5-remaining-work-plan.md`
+
+### Phase 5 進捗サマリー
+
+| Step | タスク | ステータス | 備考 |
+|------|--------|-----------|------|
+| 1 | AppArmor プロファイル | :white_check_mark: 完了 | プロファイル作成、コンテナ設定適用 |
+| 2 | セキュリティ監査ログ | :white_check_mark: 完了 | 10種イベント定義、4モジュールに統合 |
+| 3 | クラッシュ復旧フロー | :white_check_mark: 完了 | container_recovered SSE通知、Proxy自動再起動 |
+| 4 | S3 ライフサイクルポリシー | :white_check_mark: 完了 | lifecycle-policy.json、適用スクリプト |
+| 5 | 定期ファイル同期 | :white_check_mark: 完了 | tool_result検知、デバウンス付き非同期同期 |
+| 6 | Node.js Proxy対応 | :white_check_mark: 完了 | global-agent、GLOBAL_AGENT_* 環境変数 |
+| 7 | E2E 統合テスト | :white_check_mark: 完了 | 9テストクラス、22テストケース |
+| 8 | ペネトレーションテスト | :white_check_mark: 完了 | 11シナリオ全合格、レポート文書化 |
+| 9 | ドキュメント整備 | :white_check_mark: 完了 | 進捗管理、セキュリティ検証更新 |
+
+### Phase 5 詳細進捗
+
+#### Step 1: AppArmor プロファイル作成・適用
+
+- [x] 1.1 AppArmor プロファイル作成 → `deployment/apparmor/workspace-container`
+- [x] 1.2 コンテナ設定に AppArmor 適用追加 → `app/services/container/config.py`
+- [x] 1.3 設定の環境変数化 → `app/config.py` (`APPARMOR_PROFILE_NAME`)
+
+#### Step 2: セキュリティ監査ログの構造化・集約
+
+- [x] 2.1 監査ログモジュール作成 → `app/infrastructure/audit_log.py`
+- [x] 2.2 コンテナ操作イベント統合 → `app/services/container/orchestrator.py`
+- [x] 2.3 Proxy通信イベント統合 → `app/services/proxy/credential_proxy.py`
+- [x] 2.4 ファイル同期イベント統合 → `app/services/workspace/file_sync.py`
+- [x] 2.5 エージェント実行イベント統合 → `app/services/execute_service.py`
+
+#### Step 3: クラッシュ復旧フロー完成
+
+- [x] 3.1 `container_recovered` SSEイベント送信 → `orchestrator.execute()`
+- [x] 3.2 コンテナクラッシュ時の自動リカバリ → `orchestrator.execute()`
+- [x] 3.3 Proxy クラッシュ時の自動再起動 → `orchestrator._restart_proxy()`
+
+#### Step 4: S3 ライフサイクルポリシー定義
+
+- [x] 4.1 ライフサイクルポリシー JSON → `deployment/s3/lifecycle-policy.json`
+- [x] 4.2 適用スクリプト → `deployment/s3/apply-lifecycle.sh`
+
+#### Step 5: 実行中のファイル定期同期
+
+- [x] 5.1 SSEストリーム内の `tool_result` イベント検知 → `execute_service.py`
+- [x] 5.2 非同期バックグラウンド同期トリガー → `execute_service.py`
+- [x] 5.3 デバウンス（10秒間隔）による重複防止 → `execute_service.py`
+
+#### Step 6: Node.js Proxy 設定対応
+
+- [x] 6.1 `global-agent` npm パッケージインストール → `workspace-base/Dockerfile`
+- [x] 6.2 コンテナ環境変数に `GLOBAL_AGENT_*` 追加 → `container/config.py`
+- [x] 6.3 `NODE_OPTIONS=--require global-agent/bootstrap` 設定 → `container/config.py`
+
+#### Step 7: E2E 統合テスト整備
+
+- [x] 7.1 コンテナ作成設定テスト（network none, readonly rootfs, pids limit, cap drop, security opt）
+- [x] 7.2 Proxy ドメインホワイトリストテスト（許可/拒否/Bedrock）
+- [x] 7.3 SSE イベントパーステスト（text_delta, result, error）
+- [x] 7.4 クラッシュ復旧テスト（container_recovered イベント）
+- [x] 7.5 監査ログテスト（container_created, proxy_request_blocked）
+- [x] 7.6 定期ファイル同期テスト（_is_file_tool_result 判定）
+- [x] 7.7 S3 ライフサイクルポリシーテスト（JSON検証、Glacierルール）
+- [x] 7.8 AppArmor プロファイルテスト（deny/allow検証、コンテナ設定）
+
+#### Step 8: ペネトレーションテスト実施・文書化
+
+- [x] 8.1 11テストシナリオ定義・実施結果記録 → `docs/security/penetration-test-report.md`
+- [x] 8.2 セキュリティ検証レポート更新 → `docs/migration/03-security-verification.md`
+
+#### Step 9: ドキュメント整備・進捗管理更新
+
+- [x] 9.1 進捗管理ドキュメント更新 → `docs/migration/01-progress-tracker.md`
+- [x] 9.2 セキュリティ検証レポートにPhase 5追加 → `docs/migration/03-security-verification.md`
+- [x] 9.3 本番デプロイ向け残課題整理 → 下記参照
+
+---
+
+### Phase 5 新規作成ファイル
+
+| ファイル | 目的 |
+|---------|------|
+| `deployment/apparmor/workspace-container` | AppArmor プロファイル |
+| `deployment/s3/lifecycle-policy.json` | S3 ライフサイクルポリシー |
+| `deployment/s3/apply-lifecycle.sh` | ライフサイクル適用スクリプト |
+| `app/infrastructure/audit_log.py` | セキュリティ監査ログモジュール |
+| `tests/e2e/test_container_lifecycle.py` | E2E 統合テスト |
+| `docs/security/penetration-test-report.md` | ペネトレーションテスト報告書 |
+
+### Phase 5 改修ファイル
+
+| ファイル | 変更内容 |
+|---------|---------|
+| `app/config.py` | AppArmor プロファイル名設定追加 |
+| `app/services/container/config.py` | AppArmor SecurityOpt / Node.js global-agent 環境変数 |
+| `app/services/container/orchestrator.py` | 監査ログ統合 / クラッシュ復旧フロー |
+| `app/services/proxy/credential_proxy.py` | 監査ログイベント統合 |
+| `app/services/workspace/file_sync.py` | 監査ログイベント統合 |
+| `app/services/execute_service.py` | 監査ログ / 定期ファイル同期 |
+| `workspace-base/Dockerfile` | global-agent npm インストール |
+| `.env.example` | APPARMOR_PROFILE_NAME 追加 |
+| `docs/migration/03-security-verification.md` | Phase 5 セキュリティレイヤー追記 |
+
+---
+
+## 本番デプロイ向け残課題
+
+| 優先度 | 課題 | 説明 |
+|--------|------|------|
+| 高 | AppArmor プロファイルのホストロード | `apparmor_parser -r deployment/apparmor/workspace-container` の実行が必要 |
+| 高 | S3 ライフサイクルポリシー適用 | `deployment/s3/apply-lifecycle.sh` の実行が必要 |
+| 高 | コンテナイメージの脆弱性スキャン | Trivy/Grype による定期スキャンの CI/CD 統合 |
+| 中 | Docker Socket アクセス制限 | AuthZ Plugin または API プロキシによる制限 |
+| 中 | マルチホスト対応 | ASG/ECS 環境でのコンテナ分散 |
+| 中 | gVisor (runsc) ランタイム | カーネル共有排除による強力な隔離 |
+| 低 | Falco ランタイム監視 | 想定外 syscall の検知 |
+| 低 | コンテナイメージ署名 | cosign/Notary によるサプライチェーン対策 |
+
+---
+
 ## 変更履歴
 
 | 日時 | 内容 |
@@ -261,3 +385,5 @@
 | 2026-02-07 | Step 1-10 全ステップ実装完了 |
 | 2026-02-07 | Phase 2 移行計画書策定 (`04-phase2-migration-plan.md`) |
 | 2026-02-07 | Phase 2 全7ステップ実装完了 |
+| 2026-02-08 | Phase 5 計画書策定 (`10-phase5-remaining-work-plan.md`) |
+| 2026-02-08 | Phase 5 全9ステップ実装完了 |

@@ -13,6 +13,10 @@ import aiodocker
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.infrastructure.audit_log import (
+    audit_file_sync_from_container,
+    audit_file_sync_to_container,
+)
 from app.models.conversation_file import ConversationFile
 from app.services.container.lifecycle import ContainerLifecycleManager
 from app.services.workspace.s3_storage import S3StorageBackend
@@ -89,6 +93,13 @@ class WorkspaceFileSync:
             synced=synced,
             total=len(files),
         )
+        audit_file_sync_to_container(
+            conversation_id=conversation_id,
+            container_id=container_id,
+            tenant_id=tenant_id,
+            synced_count=synced,
+            total_count=len(files),
+        )
         return synced
 
     async def sync_from_container(
@@ -149,6 +160,12 @@ class WorkspaceFileSync:
             conversation_id=conversation_id,
             container_id=container_id,
             synced=synced,
+        )
+        audit_file_sync_from_container(
+            conversation_id=conversation_id,
+            container_id=container_id,
+            tenant_id=tenant_id,
+            synced_count=synced,
         )
         return synced
 

@@ -24,6 +24,11 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.infrastructure.audit_log import (
+    audit_agent_execution_completed,
+    audit_agent_execution_failed,
+    audit_agent_execution_started,
+)
 from app.models.model import Model
 from app.models.tenant import Tenant
 from app.schemas.execute import ExecuteRequest
@@ -46,6 +51,16 @@ from app.utils.streaming import (
 
 settings = get_settings()
 logger = structlog.get_logger(__name__)
+
+
+# ファイル操作ツール名のセット（tool_result同期トリガー用）
+_FILE_TOOL_NAMES = frozenset({
+    "write_file", "create_file", "edit_file", "replace_file",
+    "Write", "Edit", "write", "create", "save_file",
+})
+
+# 定期同期のデバウンス間隔（秒）
+_SYNC_DEBOUNCE_SECONDS = 10
 
 
 class ExecuteService:
@@ -115,12 +130,21 @@ class ExecuteService:
         )
 
         execution_success = False
+        container_id = ""
         try:
             # ユーザーメッセージを保存
             await self._save_user_message(request)
 
             # コンテナ取得/作成（1回だけ実行し、以降はこのinfoを使い回す）
             container_info = await self.orchestrator.get_or_create(request.conversation_id)
+            container_id = container_info.id
+
+            audit_agent_execution_started(
+                conversation_id=conversation_id,
+                container_id=container_id,
+                tenant_id=request.tenant_id,
+                model_id=model.model_id,
+            )
 
             # S3 → コンテナへファイル同期
             if request.workspace_enabled:
@@ -128,11 +152,34 @@ class ExecuteService:
 
             # コンテナ内エージェントにリクエスト送信・SSEストリーム中継
             done_data = None
+            last_sync_time = 0.0
+            background_sync_tasks: set[asyncio.Task] = set()
+
             async for event in self._stream_from_container(request, model, seq_counter):
                 # result イベントからメタデータ（usage/cost）を抽出
                 if event.get("event") == "result":
                     done_data = event.get("data", {})
+
+                # tool_result イベント検出時に非同期ファイル同期をトリガー
+                if (
+                    request.workspace_enabled
+                    and settings.s3_bucket_name
+                    and event.get("event") == "tool_result"
+                    and self._is_file_tool_result(event)
+                    and (time.time() - last_sync_time) > _SYNC_DEBOUNCE_SECONDS
+                ):
+                    last_sync_time = time.time()
+                    task = asyncio.create_task(
+                        self._sync_files_from_container(request, container_info)
+                    )
+                    background_sync_tasks.add(task)
+                    task.add_done_callback(background_sync_tasks.discard)
+
                 yield event
+
+            # バックグラウンド同期タスクの完了待ち（最大5秒）
+            if background_sync_tasks:
+                await asyncio.wait(background_sync_tasks, timeout=5.0)
 
             # コンテナ → S3へファイル同期
             if request.workspace_enabled:
@@ -141,11 +188,28 @@ class ExecuteService:
             # 使用量をDB記録
             if done_data:
                 await self._record_usage(request, model, done_data)
+                usage = done_data.get("usage", {})
+                audit_agent_execution_completed(
+                    conversation_id=conversation_id,
+                    container_id=container_id,
+                    tenant_id=request.tenant_id,
+                    duration_ms=int((time.time() - start_time) * 1000),
+                    input_tokens=usage.get("input_tokens", 0),
+                    output_tokens=usage.get("output_tokens", 0),
+                    cost_usd=str(done_data.get("cost_usd", "0")),
+                )
 
             execution_success = True
 
         except Exception as e:
             logger.error("エージェント実行エラー", error=str(e), exc_info=True)
+            audit_agent_execution_failed(
+                conversation_id=conversation_id,
+                container_id=container_id,
+                tenant_id=request.tenant_id,
+                error=str(e),
+                error_type="execution_error",
+            )
             yield format_error_event(
                 seq=seq_counter.next(),
                 error_type="execution_error",
@@ -383,6 +447,13 @@ class ExecuteService:
             estimated_context_tokens=estimated,
             context_limit_reached=limit_reached,
         )
+
+    @staticmethod
+    def _is_file_tool_result(event: dict) -> bool:
+        """tool_resultイベントがファイル操作ツールの結果かどうかを判定"""
+        data = event.get("data", {})
+        tool_name = data.get("tool_name", "")
+        return tool_name in _FILE_TOOL_NAMES
 
     def _error_done(self, start_time: float, seq_counter: SequenceCounter) -> dict:
         """エラー時のdoneイベントを生成"""
