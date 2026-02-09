@@ -55,7 +55,6 @@ from app.infrastructure.distributed_lock import (
     DistributedLockManager as ConversationLockManager,
     get_conversation_lock_manager,
 )
-from app.utils.repository import BaseRepository
 
 __all__ = [
     # Streaming
@@ -107,6 +106,4 @@ __all__ = [
     "ConversationLockError",
     "ConversationLockManager",
     "get_conversation_lock_manager",
-    # Repository
-    "BaseRepository",
 ]
