@@ -17,7 +17,7 @@ from sqlalchemy import and_, select, update, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.utils.exceptions import FileSizeExceededError
+from app.utils.exceptions import FileSizeError
 from app.models.conversation import Conversation
 from app.models.conversation_file import ConversationFile
 from app.schemas.workspace import (
@@ -31,7 +31,6 @@ from app.services.workspace.s3_storage import S3StorageBackend
 from app.services.workspace.context_builder import AIContextBuilder
 from app.services.workspace.file_processors import FileTypeClassifier
 
-# 後方互換性のため例外クラスを再エクスポート
 from app.utils.exceptions import WorkspaceSecurityError
 
 settings = get_settings()
@@ -75,7 +74,7 @@ class WorkspaceService:
             アップロードされたファイル情報
 
         Raises:
-            FileSizeExceededError: ファイルサイズが制限を超えた場合
+            FileSizeError: ファイルサイズが制限を超えた場合
         """
         content_type = metadata.content_type
 
@@ -84,7 +83,7 @@ class WorkspaceService:
 
         # 申告サイズチェック
         if metadata.size > max_size:
-            raise FileSizeExceededError(
+            raise FileSizeError(
                 filename=metadata.filename,
                 size=metadata.size,
                 max_size=max_size,

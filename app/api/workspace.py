@@ -20,7 +20,8 @@ from app.schemas.workspace import (
     PresentedFileList,
     WorkspaceFileList,
 )
-from app.services.workspace_service import WorkspaceSecurityError, WorkspaceService
+from app.services.workspace_service import WorkspaceService
+from app.utils.exceptions import WorkspaceSecurityError
 
 router = APIRouter()
 logger = logging.getLogger(__name__)

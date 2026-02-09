@@ -124,21 +124,7 @@ class PathTraversalError(SecurityError):
 
 
 class FileSizeError(AppError):
-    """ファイルサイズエラー"""
-
-    def __init__(self, file_size: int, max_size: int):
-        super().__init__(
-            message=f"ファイルサイズ ({file_size} bytes) が上限 ({max_size} bytes) を超えています",
-            error_code="FILE_SIZE_ERROR",
-            details={
-                "file_size": file_size,
-                "max_size": max_size,
-            },
-        )
-
-
-class FileSizeExceededError(AppError):
-    """ファイルアップロードサイズ超過エラー"""
+    """ファイルサイズ超過エラー"""
 
     def __init__(self, filename: str, size: int, max_size: int):
         max_size_mb = max_size // (1024 * 1024)
@@ -218,34 +204,3 @@ class FileEncodingError(AppError):
         )
 
 
-class ContextLimitExceededError(AppError):
-    """コンテキスト制限超過エラー
-
-    会話のコンテキストトークンがモデルの上限に達した場合に発生。
-    このエラーが発生した会話では、新しいメッセージを送信できない。
-    """
-
-    def __init__(
-        self,
-        current_tokens: int,
-        max_tokens: int,
-        conversation_id: str,
-    ):
-        self.current_tokens = current_tokens
-        self.max_tokens = max_tokens
-        self.conversation_id = conversation_id
-        usage_percent = (current_tokens / max_tokens) * 100 if max_tokens > 0 else 0
-
-        super().__init__(
-            message=(
-                f"コンテキスト制限に達しました（使用率: {usage_percent:.1f}%）。"
-                "新しいチャットを開始してください。"
-            ),
-            error_code="CONTEXT_LIMIT_EXCEEDED",
-            details={
-                "current_tokens": current_tokens,
-                "max_tokens": max_tokens,
-                "usage_percent": round(usage_percent, 1),
-                "conversation_id": conversation_id,
-            },
-        )

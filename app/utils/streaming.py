@@ -58,12 +58,12 @@ class SequenceCounter:
 # =============================================================================
 
 
-def _get_timestamp() -> str:
+def get_timestamp() -> str:
     """現在のタイムスタンプをISO形式で取得"""
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _create_event(event_type: str, seq: int, data: dict[str, Any]) -> dict:
+def create_event(event_type: str, seq: int, data: dict[str, Any]) -> dict:
     """
     イベントを生成
 
@@ -79,7 +79,7 @@ def _create_event(event_type: str, seq: int, data: dict[str, Any]) -> dict:
         "event": event_type,
         "data": {
             "seq": seq,
-            "timestamp": _get_timestamp(),
+            "timestamp": get_timestamp(),
             **data,
         },
     }
@@ -135,7 +135,7 @@ def format_init_event(
     if conversation_id:
         data["conversation_id"] = conversation_id
 
-    return _create_event("init", seq, data)
+    return create_event("init", seq, data)
 
 
 def format_thinking_event(
@@ -160,7 +160,7 @@ def format_thinking_event(
     if parent_agent_id:
         data["parent_agent_id"] = parent_agent_id
 
-    return _create_event("thinking", seq, data)
+    return create_event("thinking", seq, data)
 
 
 def format_assistant_event(
@@ -185,7 +185,7 @@ def format_assistant_event(
     if parent_agent_id:
         data["parent_agent_id"] = parent_agent_id
 
-    return _create_event("assistant", seq, data)
+    return create_event("assistant", seq, data)
 
 
 def format_tool_call_event(
@@ -227,7 +227,7 @@ def format_tool_call_event(
     if parent_agent_id:
         data["parent_agent_id"] = parent_agent_id
 
-    return _create_event("tool_call", seq, data)
+    return create_event("tool_call", seq, data)
 
 
 def format_tool_result_event(
@@ -264,7 +264,7 @@ def format_tool_result_event(
     if parent_agent_id:
         data["parent_agent_id"] = parent_agent_id
 
-    return _create_event("tool_result", seq, data)
+    return create_event("tool_result", seq, data)
 
 
 def format_subagent_start_event(
@@ -295,7 +295,7 @@ def format_subagent_start_event(
     if model:
         data["model"] = model
 
-    return _create_event("subagent_start", seq, data)
+    return create_event("subagent_start", seq, data)
 
 
 def format_subagent_end_event(
@@ -326,7 +326,7 @@ def format_subagent_end_event(
     if result_preview:
         data["result_preview"] = result_preview
 
-    return _create_event("subagent_end", seq, data)
+    return create_event("subagent_end", seq, data)
 
 
 def format_progress_event(
@@ -367,7 +367,7 @@ def format_progress_event(
     if parent_agent_id:
         data["parent_agent_id"] = parent_agent_id
 
-    return _create_event("progress", seq, data)
+    return create_event("progress", seq, data)
 
 
 def format_title_event(seq: int, title: str) -> dict:
@@ -381,7 +381,7 @@ def format_title_event(seq: int, title: str) -> dict:
     Returns:
         イベントデータ
     """
-    return _create_event("title", seq, {"title": title})
+    return create_event("title", seq, {"title": title})
 
 
 def format_ping_event(seq: int, elapsed_ms: int) -> dict:
@@ -395,7 +395,7 @@ def format_ping_event(seq: int, elapsed_ms: int) -> dict:
     Returns:
         イベントデータ
     """
-    return _create_event("ping", seq, {"elapsed_ms": elapsed_ms})
+    return create_event("ping", seq, {"elapsed_ms": elapsed_ms})
 
 
 def format_context_status_event(
@@ -445,7 +445,7 @@ def format_context_status_event(
     if recommended_action:
         data["recommended_action"] = recommended_action
 
-    return _create_event("context_status", seq, data)
+    return create_event("context_status", seq, data)
 
 
 def format_done_event(
@@ -497,7 +497,7 @@ def format_done_event(
     if model_usage is not None:
         data["model_usage"] = model_usage
 
-    return _create_event("done", seq, data)
+    return create_event("done", seq, data)
 
 
 def format_error_event(
@@ -518,82 +518,8 @@ def format_error_event(
     Returns:
         イベントデータ
     """
-    return _create_event("error", seq, {
+    return create_event("error", seq, {
         "error_type": error_type,
         "message": message,
         "recoverable": recoverable,
     })
-
-
-# =============================================================================
-# 後方互換性のためのエイリアス関数（非推奨）
-# 新しいコードでは上記の関数を直接使用してください
-# =============================================================================
-
-
-def format_heartbeat_event(elapsed_ms: int) -> dict:
-    """
-    ハートビートイベントをフォーマット（後方互換性用）
-
-    注: seq番号が0になるため、新しいコードでは format_ping_event を使用してください
-
-    Args:
-        elapsed_ms: 経過時間（ミリ秒）
-
-    Returns:
-        イベントデータ
-    """
-    return format_ping_event(0, elapsed_ms)
-
-
-# =============================================================================
-# 旧形式からのマイグレーション用ヘルパー
-# =============================================================================
-
-
-def convert_legacy_message_event(legacy_event: dict) -> dict:
-    """
-    旧形式のmessageイベントを新形式に変換
-
-    Args:
-        legacy_event: 旧形式のイベント
-
-    Returns:
-        新形式のイベント
-    """
-    data = legacy_event.get("data", {})
-    msg_type = data.get("type")
-    subtype = data.get("subtype")
-
-    # シーケンス番号は呼び出し側で管理
-    seq = data.get("seq", 0)
-
-    if msg_type == "system" and subtype == "init":
-        return format_init_event(
-            seq=seq,
-            session_id=data.get("data", {}).get("session_id", ""),
-            tools=data.get("data", {}).get("tools", []),
-            model=data.get("data", {}).get("model", ""),
-        )
-
-    elif msg_type == "assistant":
-        content_blocks = data.get("content_blocks", [])
-        return format_assistant_event(seq=seq, content_blocks=content_blocks)
-
-    elif msg_type == "result":
-        return format_done_event(
-            seq=seq,
-            status=subtype if subtype == "success" else "error",
-            result=data.get("result"),
-            errors=data.get("errors"),
-            usage=data.get("usage", {}),
-            cost_usd=data.get("total_cost_usd", 0),
-            turn_count=data.get("num_turns", 0),
-            duration_ms=data.get("duration_ms", 0),
-            session_id=data.get("session_id"),
-            messages=data.get("messages"),
-            model_usage=data.get("model_usage"),
-        )
-
-    # 変換不可能な場合はそのまま返す
-    return legacy_event
