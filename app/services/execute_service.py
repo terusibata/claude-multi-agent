@@ -17,7 +17,6 @@ import asyncio
 import json
 import time
 from datetime import datetime, timezone
-from decimal import Decimal
 from typing import Any, AsyncGenerator
 
 import structlog
