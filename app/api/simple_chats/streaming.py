@@ -5,8 +5,8 @@
 サービス層から返されるイベントは {"event": <type>, "data": {...}} 形式。
 """
 import json
-import logging
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
@@ -20,7 +20,7 @@ from app.services.simple_chat_service import SimpleChatService
 from app.utils.streaming import format_error_event
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 async def _simple_chat_event_generator(service, chat, model: Model, user_message: str):
@@ -40,9 +40,10 @@ async def _simple_chat_event_generator(service, chat, model: Model, user_message
             }
     except Exception as e:
         logger.error(
-            f"シンプルチャットストリーミングエラー: {e}",
+            "シンプルチャットストリーミングエラー",
+            error=str(e),
+            chat_id=chat.chat_id,
             exc_info=True,
-            extra={"chat_id": chat.chat_id},
         )
         error_event = format_error_event(
             seq=0,

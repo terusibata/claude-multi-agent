@@ -3,7 +3,7 @@
 """
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -14,7 +14,7 @@ class ExecutorInfo(BaseModel):
     user_id: str = Field(..., description="ユーザーID")
     name: str = Field(..., description="名前")
     email: str = Field(..., description="メールアドレス")
-    employee_id: Optional[str] = Field(None, description="社員番号")
+    employee_id: str | None = Field(None, description="社員番号")
 
 
 class StreamRequest(BaseModel):
@@ -31,13 +31,13 @@ class StreamRequest(BaseModel):
     executor: ExecutorInfo = Field(..., description="実行者情報")
 
     # MCPサーバー用認証情報（一時トークン）
-    tokens: Optional[dict[str, str]] = Field(
+    tokens: dict[str, str] | None = Field(
         None,
         description="MCPサーバー用認証情報（例: {'servicenowToken': 'xxx'}）",
     )
 
     # Skill/ツール優先指定
-    preferred_skills: Optional[list[str]] = Field(
+    preferred_skills: list[str] | None = Field(
         None,
         description="優先的に使用するSkill名のリスト",
     )
@@ -62,13 +62,13 @@ class ExecuteRequest(BaseModel):
     executor: ExecutorInfo = Field(..., description="実行者情報")
 
     # MCPサーバー用認証情報
-    tokens: Optional[dict[str, str]] = Field(
+    tokens: dict[str, str] | None = Field(
         None,
         description="MCPサーバー用認証情報",
     )
 
     # Skill優先指定
-    preferred_skills: Optional[list[str]] = Field(
+    preferred_skills: list[str] | None = Field(
         None,
         description="優先的に使用するSkill名のリスト",
     )
@@ -136,8 +136,8 @@ class ResultData(BaseModel):
     """結果イベントデータ"""
 
     subtype: str  # success / error_during_execution
-    result: Optional[str] = None
-    errors: Optional[list[str]] = None
+    result: str | None = None
+    errors: list[str] | None = None
     usage: UsageInfo
     cost_usd: Decimal
     num_turns: int
@@ -149,7 +149,7 @@ class ExecuteResponse(BaseModel):
 
     conversation_id: str
     session_id: str
-    result: Optional[str]
+    result: str | None
     usage: UsageInfo
     cost_usd: Decimal
     num_turns: int

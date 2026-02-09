@@ -3,7 +3,6 @@
 """
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -15,8 +14,8 @@ class UsageLogResponse(BaseModel):
     tenant_id: str
     user_id: str
     model_id: str
-    session_id: Optional[str] = None
-    conversation_id: Optional[str] = None
+    session_id: str | None = None
+    conversation_id: str | None = None
     input_tokens: int
     output_tokens: int
     cache_creation_5m_tokens: int
@@ -46,8 +45,8 @@ class UsageSummary(BaseModel):
 class UsageQuery(BaseModel):
     """使用状況クエリ"""
 
-    from_date: Optional[datetime] = None
-    to_date: Optional[datetime] = None
+    from_date: datetime | None = None
+    to_date: datetime | None = None
     group_by: str = Field(default="day", pattern="^(day|week|month)$")
 
 
@@ -76,16 +75,16 @@ class CostReportResponse(BaseModel):
     total_tokens: int
     total_executions: int
     by_model: list[CostReportItem]
-    by_user: Optional[list[dict]] = None
+    by_user: list[dict] | None = None
 
 
 class ToolLogQuery(BaseModel):
     """ツール実行ログクエリ"""
 
-    session_id: Optional[str] = None
-    tool_name: Optional[str] = None
-    from_date: Optional[datetime] = None
-    to_date: Optional[datetime] = None
+    session_id: str | None = None
+    tool_name: str | None = None
+    from_date: datetime | None = None
+    to_date: datetime | None = None
     limit: int = Field(default=100, ge=1, le=1000)
     offset: int = Field(default=0, ge=0)
 
@@ -95,13 +94,13 @@ class ToolLogResponse(BaseModel):
 
     tool_log_id: str
     session_id: str
-    conversation_id: Optional[str] = None
+    conversation_id: str | None = None
     tool_name: str
-    tool_use_id: Optional[str] = None
-    tool_input: Optional[dict] = None
-    tool_output: Optional[dict] = None
+    tool_use_id: str | None = None
+    tool_input: dict | None = None
+    tool_output: dict | None = None
     status: str
-    execution_time_ms: Optional[int] = None
+    execution_time_ms: int | None = None
     executed_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

@@ -4,7 +4,6 @@ SDKを使わない直接Bedrock呼び出しによるチャット用
 """
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -23,17 +22,17 @@ class SimpleChatStreamRequest(BaseModel):
     """
 
     # 継続時に必要（指定がなければ新規作成）
-    chat_id: Optional[str] = Field(None, description="チャットID（継続時に指定）")
+    chat_id: str | None = Field(None, description="チャットID（継続時に指定）")
 
     # 新規作成時に必要
-    user_id: Optional[str] = Field(None, description="ユーザーID（新規作成時に必須）")
-    application_type: Optional[str] = Field(
+    user_id: str | None = Field(None, description="ユーザーID（新規作成時に必須）")
+    application_type: str | None = Field(
         None,
         description="アプリケーションタイプ（新規作成時に必須）",
         examples=["translationApp", "summarizer", "chatbot"],
     )
-    system_prompt: Optional[str] = Field(None, description="システムプロンプト（新規作成時に必須）")
-    model_id: Optional[str] = Field(None, description="モデルID（新規作成時に必須）")
+    system_prompt: str | None = Field(None, description="システムプロンプト（新規作成時に必須）")
+    model_id: str | None = Field(None, description="モデルID（新規作成時に必須）")
 
     # 常に必要
     message: str = Field(..., description="ユーザーメッセージ")
@@ -42,9 +41,9 @@ class SimpleChatStreamRequest(BaseModel):
 class SimpleChatListQuery(BaseModel):
     """シンプルチャット一覧クエリ"""
 
-    user_id: Optional[str] = Field(None, description="ユーザーIDでフィルタ")
-    application_type: Optional[str] = Field(None, description="アプリケーションタイプでフィルタ")
-    status: Optional[str] = Field(None, description="ステータスでフィルタ")
+    user_id: str | None = Field(None, description="ユーザーIDでフィルタ")
+    application_type: str | None = Field(None, description="アプリケーションタイプでフィルタ")
+    status: str | None = Field(None, description="ステータスでフィルタ")
     limit: int = Field(default=50, ge=1, le=100)
     offset: int = Field(default=0, ge=0)
 
@@ -76,7 +75,7 @@ class SimpleChatResponse(BaseModel):
     model_id: str
     application_type: str
     system_prompt: str
-    title: Optional[str] = None
+    title: str | None = None
     status: str
     created_at: datetime
     updated_at: datetime
@@ -93,7 +92,7 @@ class SimpleChatDetailResponse(BaseModel):
     model_id: str
     application_type: str
     system_prompt: str
-    title: Optional[str] = None
+    title: str | None = None
     status: str
     created_at: datetime
     updated_at: datetime
@@ -139,7 +138,7 @@ class DoneEvent(BaseModel):
     seq: int
     timestamp: str
     event_type: str = "done"
-    title: Optional[str] = None  # 初回のみ
+    title: str | None = None  # 初回のみ
     usage: SimpleChatUsageInfo
     cost_usd: Decimal
 
