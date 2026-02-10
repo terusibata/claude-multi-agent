@@ -2,7 +2,7 @@
 MCPサーバー定義スキーマ
 """
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -12,7 +12,7 @@ class McpToolInputSchema(BaseModel):
 
     type: str = Field(default="object", description="JSONスキーマのタイプ")
     properties: dict[str, Any] = Field(default_factory=dict, description="プロパティ定義")
-    required: Optional[list[str]] = Field(None, description="必須プロパティ")
+    required: list[str] | None = Field(None, description="必須プロパティ")
 
 
 class McpToolDefinition(BaseModel):
@@ -27,36 +27,36 @@ class McpServerBase(BaseModel):
     """MCPサーバー定義の共通フィールド"""
 
     name: str = Field(..., description="MCPサーバー名（識別子）", max_length=200)
-    display_name: Optional[str] = Field(None, description="表示名", max_length=300)
+    display_name: str | None = Field(None, description="表示名", max_length=300)
     type: str = Field(
         ...,
         description="タイプ (http / sse / stdio / builtin / openapi)",
     )
-    url: Optional[str] = Field(
+    url: str | None = Field(
         None, description="サーバーURL（http/sseの場合）", max_length=500
     )
-    command: Optional[str] = Field(
+    command: str | None = Field(
         None, description="起動コマンド（stdioの場合）", max_length=500
     )
-    args: Optional[list[str]] = Field(None, description="コマンド引数（stdioの場合）")
-    env: Optional[dict[str, str]] = Field(None, description="環境変数")
-    headers_template: Optional[dict[str, str]] = Field(
+    args: list[str] | None = Field(None, description="コマンド引数（stdioの場合）")
+    env: dict[str, str] | None = Field(None, description="環境変数")
+    headers_template: dict[str, str] | None = Field(
         None,
         description="ヘッダーテンプレート（例: {'Authorization': 'Bearer ${token}'}）",
     )
-    allowed_tools: Optional[list[str]] = Field(
+    allowed_tools: list[str] | None = Field(
         None, description="許可するツール名のリスト"
     )
-    tools: Optional[list[McpToolDefinition]] = Field(
+    tools: list[McpToolDefinition] | None = Field(
         None, description="ツール定義リスト（builtinタイプの場合）"
     )
-    description: Optional[str] = Field(None, description="説明")
+    description: str | None = Field(None, description="説明")
     # OpenAPIタイプ用のフィールド
-    openapi_spec: Optional[dict[str, Any]] = Field(
+    openapi_spec: dict[str, Any] | None = Field(
         None,
         description="OpenAPI仕様（JSON形式）。openapiタイプの場合に使用",
     )
-    openapi_base_url: Optional[str] = Field(
+    openapi_base_url: str | None = Field(
         None,
         description="OpenAPI APIのベースURL。仕様のserversセクションを上書き",
         max_length=500,
@@ -72,17 +72,17 @@ class McpServerCreate(McpServerBase):
 class McpServerUpdate(BaseModel):
     """MCPサーバー更新リクエスト"""
 
-    display_name: Optional[str] = Field(None, max_length=300)
-    type: Optional[str] = None
-    url: Optional[str] = Field(None, max_length=500)
-    command: Optional[str] = Field(None, max_length=500)
-    args: Optional[list[str]] = None
-    env: Optional[dict[str, str]] = None
-    headers_template: Optional[dict[str, str]] = None
-    allowed_tools: Optional[list[str]] = None
-    tools: Optional[list[McpToolDefinition]] = None
-    description: Optional[str] = None
-    status: Optional[str] = Field(None, pattern="^(active|inactive)$")
+    display_name: str | None = Field(None, max_length=300)
+    type: str | None = None
+    url: str | None = Field(None, max_length=500)
+    command: str | None = Field(None, max_length=500)
+    args: list[str] | None = None
+    env: dict[str, str] | None = None
+    headers_template: dict[str, str] | None = None
+    allowed_tools: list[str] | None = None
+    tools: list[McpToolDefinition] | None = None
+    description: str | None = None
+    status: str | None = Field(None, pattern="^(active|inactive)$")
 
 
 class McpServerResponse(McpServerBase):
@@ -90,7 +90,7 @@ class McpServerResponse(McpServerBase):
 
     mcp_server_id: str
     tenant_id: str
-    tools: Optional[list[McpToolDefinition]] = None
+    tools: list[McpToolDefinition] | None = None
     status: str
     created_at: datetime
     updated_at: datetime

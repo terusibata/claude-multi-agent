@@ -1,9 +1,12 @@
 """
 シンプルチャットストリーミング実行エンドポイント
+
+会話ストリーミングと統一されたイベント形式を使用。
+サービス層から返されるイベントは {"event": <type>, "data": {...}} 形式。
 """
 import json
-import logging
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
@@ -14,36 +17,44 @@ from app.models.model import Model
 from app.models.tenant import Tenant
 from app.schemas.simple_chat import SimpleChatStreamRequest
 from app.services.simple_chat_service import SimpleChatService
+from app.utils.streaming import format_error_event
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 async def _simple_chat_event_generator(service, chat, model: Model, user_message: str):
-    """シンプルチャットのSSEイベントジェネレータ"""
+    """
+    シンプルチャットのSSEイベントジェネレータ
+
+    サービス層が返す {"event": <type>, "data": {...}} 形式のイベントを
+    SSE形式に変換して返す。会話ストリーミングと同じ形式を使用。
+    """
     try:
         async for event in service.stream_message(chat, model, user_message):
             yield {
-                "event": event["event_type"],
-                "data": json.dumps(event, ensure_ascii=False, default=str),
+                "event": event["event"],
+                "data": json.dumps(
+                    event["data"], ensure_ascii=False, default=str
+                ),
             }
     except Exception as e:
         logger.error(
-            f"Simple chat streaming error: {e}",
+            "シンプルチャットストリーミングエラー",
+            error=str(e),
+            chat_id=chat.chat_id,
             exc_info=True,
-            extra={"chat_id": chat.chat_id},
+        )
+        error_event = format_error_event(
+            seq=0,
+            error_type=type(e).__name__,
+            message=str(e),
+            recoverable=False,
         )
         yield {
-            "event": "error",
+            "event": error_event["event"],
             "data": json.dumps(
-                {
-                    "seq": 0,
-                    "event_type": "error",
-                    "message": str(e),
-                    "error_type": type(e).__name__,
-                    "recoverable": False,
-                },
-                ensure_ascii=False,
+                error_event["data"], ensure_ascii=False, default=str
             ),
         }
 
@@ -98,7 +109,6 @@ async def stream_simple_chat(
             application_type=request.application_type,
             system_prompt=request.system_prompt,
         )
-        await db.commit()
 
         response_headers["X-Chat-ID"] = chat.chat_id
 

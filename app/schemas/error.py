@@ -4,16 +4,16 @@
 統一されたエラーレスポンス形式を定義
 """
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
 
 class ErrorDetail(BaseModel):
     """エラー詳細"""
-    field: Optional[str] = Field(None, description="エラーが発生したフィールド")
+    field: str | None = Field(None, description="エラーが発生したフィールド")
     message: str = Field(..., description="エラーメッセージ")
-    code: Optional[str] = Field(None, description="エラーコード")
+    code: str | None = Field(None, description="エラーコード")
 
 
 class ErrorResponse(BaseModel):
@@ -47,11 +47,11 @@ class ErrorBody(BaseModel):
     """エラー本体"""
     code: str = Field(..., description="エラーコード")
     message: str = Field(..., description="ユーザー向けエラーメッセージ")
-    details: Optional[list[ErrorDetail]] = Field(
+    details: list[ErrorDetail] | None = Field(
         None,
         description="エラー詳細のリスト",
     )
-    request_id: Optional[str] = Field(
+    request_id: str | None = Field(
         None,
         description="リクエストID（トレーシング用）",
     )
@@ -68,8 +68,8 @@ ErrorResponse.model_rebuild()
 def create_error_response(
     code: str,
     message: str,
-    details: Optional[list[dict[str, Any]]] = None,
-    request_id: Optional[str] = None,
+    details: list[dict[str, Any]] | None = None,
+    request_id: str | None = None,
 ) -> dict:
     """
     エラーレスポンスを作成

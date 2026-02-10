@@ -2,7 +2,6 @@
 使用状況リポジトリ
 """
 from datetime import datetime
-from decimal import Decimal
 
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession

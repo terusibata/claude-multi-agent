@@ -7,7 +7,6 @@
 - GET /conversations/{conversation_id}/files/download: ファイルダウンロード
 - GET /conversations/{conversation_id}/files/presented: AIが作成したファイル一覧
 """
-import logging
 import re
 from urllib.parse import quote
 
@@ -20,10 +19,13 @@ from app.schemas.workspace import (
     PresentedFileList,
     WorkspaceFileList,
 )
-from app.services.workspace_service import WorkspaceSecurityError, WorkspaceService
+from app.services.workspace_service import WorkspaceService
+from app.utils.exceptions import WorkspaceSecurityError
+
+import structlog
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 @router.get(
@@ -51,7 +53,7 @@ async def list_files(
             detail=str(e),
         )
     except Exception as e:
-        logger.error(f"ファイル一覧取得エラー: {e}", exc_info=True)
+        logger.error("ファイル一覧取得エラー", error=str(e), exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="ファイル一覧の取得に失敗しました",
@@ -93,7 +95,7 @@ async def download_file(
             detail=str(e),
         )
     except Exception as e:
-        logger.error(f"ファイルダウンロードエラー: {e}", exc_info=True)
+        logger.error("ファイルダウンロードエラー", error=str(e), exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="ファイルのダウンロードに失敗しました",
@@ -142,7 +144,7 @@ async def get_presented_files(
             detail=str(e),
         )
     except Exception as e:
-        logger.error(f"Presentedファイル一覧取得エラー: {e}", exc_info=True)
+        logger.error("Presentedファイル一覧取得エラー", error=str(e), exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Presentedファイル一覧の取得に失敗しました",

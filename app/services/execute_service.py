@@ -17,7 +17,6 @@ import asyncio
 import json
 import time
 from datetime import datetime, timezone
-from decimal import Decimal
 from typing import Any, AsyncGenerator
 
 import structlog
@@ -77,6 +76,17 @@ class ExecuteService:
         self.conversation_service = ConversationService(db)
         self.message_log_service = MessageLogService(db)
         self.usage_service = UsageService(db)
+        self._file_sync = self._create_file_sync()
+
+    def _create_file_sync(self) -> WorkspaceFileSync | None:
+        """ファイル同期インスタンスを生成（S3未設定時はNone）"""
+        if not settings.s3_bucket_name:
+            return None
+        return WorkspaceFileSync(
+            s3=S3StorageBackend(),
+            lifecycle=self.orchestrator.lifecycle,
+            db=self.db,
+        )
 
     async def execute_streaming(
         self,
@@ -301,16 +311,11 @@ class ExecuteService:
 
     async def _sync_files_to_container(self, request: ExecuteRequest, container_info) -> None:
         """S3からコンテナへファイルを同期"""
-        if not settings.s3_bucket_name:
+        if not self._file_sync:
             logger.debug("S3未設定のためファイル同期スキップ（to_container）")
             return
         try:
-            file_sync = WorkspaceFileSync(
-                s3=S3StorageBackend(),
-                lifecycle=self.orchestrator.lifecycle,
-                db=self.db,
-            )
-            await file_sync.sync_to_container(
+            await self._file_sync.sync_to_container(
                 request.tenant_id, request.conversation_id, container_info.id
             )
         except Exception as e:
@@ -318,16 +323,11 @@ class ExecuteService:
 
     async def _sync_files_from_container(self, request: ExecuteRequest, container_info) -> None:
         """コンテナからS3へファイルを同期"""
-        if not settings.s3_bucket_name:
+        if not self._file_sync:
             logger.debug("S3未設定のためファイル同期スキップ（from_container）")
             return
         try:
-            file_sync = WorkspaceFileSync(
-                s3=S3StorageBackend(),
-                lifecycle=self.orchestrator.lifecycle,
-                db=self.db,
-            )
-            await file_sync.sync_from_container(
+            await self._file_sync.sync_from_container(
                 request.tenant_id, request.conversation_id, container_info.id
             )
         except Exception as e:

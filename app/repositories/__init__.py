@@ -11,7 +11,10 @@ from app.repositories.simple_chat_repository import (
     SimpleChatRepository,
 )
 from app.repositories.tenant_repository import TenantRepository
-from app.repositories.usage_repository import UsageRepository
+from app.repositories.usage_repository import (
+    ToolExecutionLogRepository,
+    UsageRepository,
+)
 
 __all__ = [
     "BaseRepository",
@@ -21,5 +24,6 @@ __all__ = [
     "SimpleChatMessageRepository",
     "SimpleChatRepository",
     "TenantRepository",
+    "ToolExecutionLogRepository",
     "UsageRepository",
 ]

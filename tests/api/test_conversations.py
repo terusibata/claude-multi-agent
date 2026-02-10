@@ -97,10 +97,14 @@ class TestConversationsCRUD:
         assert response.status_code == 200
 
         data = response.json()
-        assert isinstance(data, list)
-        assert len(data) >= 1
+        assert "items" in data
+        assert isinstance(data["items"], list)
+        assert len(data["items"]) >= 1
+        assert "total" in data
+        assert "limit" in data
+        assert "offset" in data
 
-        conversation_ids = [c["conversation_id"] for c in data]
+        conversation_ids = [c["conversation_id"] for c in data["items"]]
         assert sample_conversation["conversation_id"] in conversation_ids
 
     @pytest.mark.integration
@@ -125,7 +129,7 @@ class TestConversationsCRUD:
         assert response.status_code == 200
 
         data = response.json()
-        assert all(c["user_id"] == "specific-user" for c in data)
+        assert all(c["user_id"] == "specific-user" for c in data["items"])
 
     @pytest.mark.integration
     async def test_get_conversations_filter_by_status(
@@ -138,7 +142,7 @@ class TestConversationsCRUD:
         assert response.status_code == 200
 
         data = response.json()
-        assert all(c["status"] == "active" for c in data)
+        assert all(c["status"] == "active" for c in data["items"])
 
     @pytest.mark.integration
     async def test_get_conversation_by_id(

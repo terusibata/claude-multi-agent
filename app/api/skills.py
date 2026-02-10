@@ -8,7 +8,9 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.dependencies import get_skill_or_404
 from app.database import get_db
+from app.models.agent_skill import AgentSkill
 from app.schemas.skill import (
     SkillCreate,
     SkillFilesResponse,
@@ -17,14 +19,8 @@ from app.schemas.skill import (
     SlashCommandListResponse,
 )
 from app.services.skill_service import SkillService
-from app.utils.exceptions import (
-    AppError,
-    FileEncodingError,
-    FileOperationError,
-    PathTraversalError,
-    ValidationError,
-)
-from app.utils.error_handler import app_error_to_http_exception
+from app.utils.exceptions import AppError
+from app.utils.error_handler import app_error_to_http_exception, raise_not_found
 
 router = APIRouter()
 logger = structlog.get_logger(__name__)
@@ -65,20 +61,11 @@ async def get_slash_commands(
 
 @router.get("/{skill_id}", response_model=SkillResponse, summary="Skill詳細取得")
 async def get_skill(
-    tenant_id: str,
-    skill_id: str,
-    db: AsyncSession = Depends(get_db),
+    skill: AgentSkill = Depends(get_skill_or_404),
 ):
     """
     指定したIDのSkillを取得します。
     """
-    service = SkillService(db)
-    skill = await service.get_by_id(skill_id, tenant_id)
-    if not skill:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Skill '{skill_id}' が見つかりません",
-        )
     return skill
 
 
@@ -191,10 +178,7 @@ async def update_skill(
     service = SkillService(db)
     skill = await service.update(skill_id, tenant_id, skill_data)
     if not skill:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Skill '{skill_id}' が見つかりません",
-        )
+        raise_not_found("Skill", skill_id)
     return skill
 
 
@@ -219,10 +203,7 @@ async def update_skill_files(
     try:
         skill = await service.update_files(skill_id, tenant_id, file_contents)
         if not skill:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Skill '{skill_id}' が見つかりません",
-            )
+            raise_not_found("Skill", skill_id)
         return skill
     except AppError as e:
         raise app_error_to_http_exception(e)
@@ -244,32 +225,22 @@ async def delete_skill(
     service = SkillService(db)
     deleted = await service.delete(skill_id, tenant_id)
     if not deleted:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Skill '{skill_id}' が見つかりません",
-        )
+        raise_not_found("Skill", skill_id)
 
 
 @router.get("/{skill_id}/files", response_model=SkillFilesResponse, summary="Skillファイル一覧")
 async def get_skill_files(
     tenant_id: str,
-    skill_id: str,
+    skill: AgentSkill = Depends(get_skill_or_404),
     db: AsyncSession = Depends(get_db),
 ):
     """
     Skillのファイル一覧を取得します。
     """
     service = SkillService(db)
-    skill = await service.get_by_id(skill_id, tenant_id)
-    if not skill:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Skill '{skill_id}' が見つかりません",
-        )
-
-    files = await service.get_files(skill_id, tenant_id)
+    files = await service.get_files(skill.skill_id, tenant_id)
     return SkillFilesResponse(
-        skill_id=skill_id,
+        skill_id=skill.skill_id,
         skill_name=skill.name,
         files=files or [],
     )
@@ -289,10 +260,7 @@ async def get_skill_file_content(
     try:
         content = await service.get_file_content(skill_id, tenant_id, file_path)
         if content is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"ファイル '{file_path}' が見つかりません",
-            )
+            raise_not_found("ファイル", file_path)
         return {"content": content}
     except AppError as e:
         raise app_error_to_http_exception(e)

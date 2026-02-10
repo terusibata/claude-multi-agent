@@ -3,7 +3,6 @@
 """
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -17,7 +16,7 @@ class ModelBase(BaseModel):
         description="AWS BedrockのモデルID（例: us.anthropic.claude-sonnet-4-5-20250929-v1:0）",
         max_length=200,
     )
-    model_region: Optional[str] = Field(
+    model_region: str | None = Field(
         None, description="モデルのデプロイリージョン", max_length=50
     )
     input_token_price: Decimal = Field(
@@ -44,7 +43,7 @@ class ModelBase(BaseModel):
     supports_extended_context: bool = Field(
         default=False, description="拡張Context Window（1M等）対応可否"
     )
-    extended_context_window: Optional[int] = Field(
+    extended_context_window: int | None = Field(
         default=None, description="拡張Context Window上限（トークン）"
     )
 
@@ -60,19 +59,19 @@ class ModelCreate(ModelBase):
 class ModelUpdate(BaseModel):
     """モデル定義更新リクエスト"""
 
-    display_name: Optional[str] = Field(None, max_length=200)
-    bedrock_model_id: Optional[str] = Field(None, max_length=200)
-    model_region: Optional[str] = Field(None, max_length=50)
-    input_token_price: Optional[Decimal] = None
-    output_token_price: Optional[Decimal] = None
-    cache_creation_5m_price: Optional[Decimal] = None
-    cache_creation_1h_price: Optional[Decimal] = None
-    cache_read_price: Optional[Decimal] = None
-    context_window: Optional[int] = None
-    max_output_tokens: Optional[int] = None
-    supports_extended_context: Optional[bool] = None
-    extended_context_window: Optional[int] = None
-    status: Optional[str] = Field(None, pattern="^(active|deprecated)$")
+    display_name: str | None = Field(None, max_length=200)
+    bedrock_model_id: str | None = Field(None, max_length=200)
+    model_region: str | None = Field(None, max_length=50)
+    input_token_price: Decimal | None = None
+    output_token_price: Decimal | None = None
+    cache_creation_5m_price: Decimal | None = None
+    cache_creation_1h_price: Decimal | None = None
+    cache_read_price: Decimal | None = None
+    context_window: int | None = None
+    max_output_tokens: int | None = None
+    supports_extended_context: bool | None = None
+    extended_context_window: int | None = None
+    status: str | None = Field(None, pattern="^(active|deprecated)$")
 
 
 class ModelResponse(ModelBase):

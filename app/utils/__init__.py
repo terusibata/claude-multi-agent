@@ -17,7 +17,6 @@ from app.utils.streaming import (
     format_ping_event,
     format_done_event,
     format_error_event,
-    format_heartbeat_event,  # 後方互換
 )
 from app.utils.tool_summary import generate_tool_result_summary, generate_tool_summary
 from app.utils.exceptions import (
@@ -39,8 +38,6 @@ from app.utils.error_handler import (
     raise_inactive_resource,
     raise_forbidden,
     raise_validation_error,
-    get_or_404,
-    get_active_or_error,
     handle_service_errors,
 )
 from app.utils.security import (
@@ -52,12 +49,12 @@ from app.utils.security import (
 )
 from app.infrastructure.distributed_lock import (
     ConversationLockError,
-    DistributedLockManager as ConversationLockManager,
+    DistributedLockManager,
     get_conversation_lock_manager,
 )
 
 __all__ = [
-    # Streaming
+    # ストリーミング
     "generate_sse_event",
     "SequenceCounter",
     "format_init_event",
@@ -72,10 +69,9 @@ __all__ = [
     "format_ping_event",
     "format_done_event",
     "format_error_event",
-    "format_heartbeat_event",
     "generate_tool_summary",
     "generate_tool_result_summary",
-    # Exceptions
+    # 例外
     "AppError",
     "NotFoundError",
     "ValidationError",
@@ -88,22 +84,20 @@ __all__ = [
     "SDKNotInstalledError",
     "FileOperationError",
     "FileEncodingError",
-    # Error handlers
+    # エラーハンドラー
     "raise_not_found",
     "raise_inactive_resource",
     "raise_forbidden",
     "raise_validation_error",
-    "get_or_404",
-    "get_active_or_error",
     "handle_service_errors",
-    # Security
+    # セキュリティ
     "validate_path_traversal",
     "sanitize_filename",
     "validate_skill_name",
     "validate_slash_command",
     "validate_tenant_id",
-    # Conversation Lock
+    # 分散ロック
     "ConversationLockError",
-    "ConversationLockManager",
+    "DistributedLockManager",
     "get_conversation_lock_manager",
 ]

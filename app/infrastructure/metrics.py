@@ -379,16 +379,6 @@ def get_workspace_proxy_request_duration() -> Histogram:
     )
 
 
-def get_workspace_s3_sync_duration() -> Histogram:
-    """S3同期処理時間"""
-    return get_metrics_registry().histogram(
-        "workspace_s3_sync_duration_seconds",
-        "S3 sync duration in seconds",
-        ["direction"],
-        [0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0],
-    )
-
-
 def get_workspace_warm_pool_acquire() -> Histogram:
     """WarmPool取得時間"""
     return get_metrics_registry().histogram(

@@ -5,7 +5,7 @@ API層での共通エラー処理
 import structlog
 from fastapi import HTTPException, status
 from functools import wraps
-from typing import Any, Callable, Optional, TypeVar
+from typing import Callable, Optional, TypeVar
 
 from app.utils.exceptions import (
     AppError,
@@ -93,69 +93,6 @@ def raise_validation_error(field: str, message: str) -> None:
         status_code=status.HTTP_400_BAD_REQUEST,
         detail=f"{field}: {message}",
     )
-
-
-async def get_or_404(
-    get_func: Callable[..., Any],
-    resource_type: str,
-    resource_id: str,
-    *args,
-    **kwargs,
-) -> Any:
-    """
-    リソースを取得し、存在しない場合は404エラーを発生
-
-    Args:
-        get_func: 取得関数（async関数）
-        resource_type: リソースタイプ（エラーメッセージ用）
-        resource_id: リソースID
-        *args: get_funcに渡す引数
-        **kwargs: get_funcに渡すキーワード引数
-
-    Returns:
-        取得したリソース
-
-    Raises:
-        HTTPException: リソースが見つからない場合
-    """
-    result = await get_func(*args, **kwargs)
-    if result is None:
-        raise_not_found(resource_type, resource_id)
-    return result
-
-
-async def get_active_or_error(
-    get_func: Callable[..., Any],
-    resource_type: str,
-    resource_id: str,
-    status_field: str = "status",
-    expected_status: str = "active",
-    *args,
-    **kwargs,
-) -> Any:
-    """
-    リソースを取得し、存在しないか非アクティブな場合はエラーを発生
-
-    Args:
-        get_func: 取得関数（async関数）
-        resource_type: リソースタイプ
-        resource_id: リソースID
-        status_field: ステータスフィールド名
-        expected_status: 期待されるステータス
-        *args: get_funcに渡す引数
-        **kwargs: get_funcに渡すキーワード引数
-
-    Returns:
-        取得したリソース
-
-    Raises:
-        HTTPException: リソースが見つからないか非アクティブな場合
-    """
-    result = await get_or_404(get_func, resource_type, resource_id, *args, **kwargs)
-    current_status = getattr(result, status_field, None)
-    if current_status != expected_status:
-        raise_inactive_resource(resource_type, resource_id, expected_status)
-    return result
 
 
 def handle_service_errors(

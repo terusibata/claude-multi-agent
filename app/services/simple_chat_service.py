@@ -3,8 +3,6 @@
 SDKを使わない直接Bedrock呼び出しによるチャット管理
 """
 import asyncio
-from datetime import datetime, timezone
-from decimal import Decimal
 from typing import AsyncGenerator
 from uuid import uuid4
 
@@ -21,6 +19,11 @@ from app.repositories.simple_chat_repository import (
 from app.services.aws_config import AWSConfig
 from app.services.bedrock_client import BedrockChatClient, SimpleChatTitleGenerator
 from app.services.usage_service import UsageService
+from app.utils.streaming import (
+    SequenceCounter,
+    create_event,
+    format_error_event,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -179,8 +182,17 @@ class SimpleChatService:
         model: Model,
         user_message: str,
     ) -> AsyncGenerator[dict, None]:
-        """メッセージを送信してストリーミング応答を取得"""
-        seq = 1
+        """
+        メッセージを送信してストリーミング応答を取得
+
+        会話ストリーミングと統一されたイベント形式を使用:
+        - text_delta: テキストチャンク
+        - done: 完了（使用量・コスト含む）
+        - error: エラー
+
+        各イベントは {"event": <type>, "data": {...}} 形式で返却
+        """
+        seq_counter = SequenceCounter()
 
         try:
             # ユーザーメッセージを保存
@@ -208,13 +220,9 @@ class SimpleChatService:
             ):
                 if chunk.type == "text_delta" and chunk.content:
                     assistant_response += chunk.content
-                    yield {
-                        "seq": seq,
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "event_type": "text_delta",
+                    yield create_event("text_delta", seq_counter.next(), {
                         "content": chunk.content,
-                    }
-                    seq += 1
+                    })
                 elif chunk.type == "metadata":
                     input_tokens = chunk.input_tokens
                     output_tokens = chunk.output_tokens
@@ -230,7 +238,7 @@ class SimpleChatService:
                 )
                 await self.update_chat_title(chat.chat_id, chat.tenant_id, title)
 
-            # コスト計算 - Model.calculate_cost を使用
+            # コスト計算
             cost_usd = model.calculate_cost(input_tokens, output_tokens)
 
             # 使用状況ログを保存
@@ -245,10 +253,8 @@ class SimpleChatService:
             )
 
             # 完了イベント
-            yield {
-                "seq": seq,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "event_type": "done",
+            yield create_event("done", seq_counter.next(), {
+                "status": "success",
                 "title": title,
                 "usage": {
                     "input_tokens": input_tokens,
@@ -256,7 +262,7 @@ class SimpleChatService:
                     "total_tokens": input_tokens + output_tokens,
                 },
                 "cost_usd": str(cost_usd),
-            }
+            })
 
         except Exception as e:
             logger.error(
@@ -264,11 +270,9 @@ class SimpleChatService:
                 chat_id=chat.chat_id,
                 error=str(e),
             )
-            yield {
-                "seq": seq,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "event_type": "error",
-                "message": str(e),
-                "error_type": type(e).__name__,
-                "recoverable": False,
-            }
+            yield format_error_event(
+                seq=seq_counter.next(),
+                error_type=type(e).__name__,
+                message=str(e),
+                recoverable=False,
+            )

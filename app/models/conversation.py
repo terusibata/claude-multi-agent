@@ -57,7 +57,7 @@ class Conversation(Base):
 
     # ステータス (active / archived)
     status: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="active"
+        String(20), nullable=False, default="active", index=True
     )
 
     # ワークスペース有効フラグ

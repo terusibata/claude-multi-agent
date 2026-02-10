@@ -3,7 +3,6 @@
 会話専用ワークスペースのファイル管理
 """
 from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -25,14 +24,14 @@ class ConversationFileInfo(BaseModel):
     file_id: str = Field(..., description="ファイルID")
     file_path: str = Field(..., description="ワークスペース内のファイルパス")
     original_name: str = Field(..., description="元のファイル名")
-    original_relative_path: Optional[str] = Field(None, description="元の相対パス（表示用）例: api/users/route.ts")
+    original_relative_path: str | None = Field(None, description="元の相対パス（表示用）例: api/users/route.ts")
     file_size: int = Field(..., description="ファイルサイズ（バイト）")
-    mime_type: Optional[str] = Field(None, description="MIMEタイプ")
+    mime_type: str | None = Field(None, description="MIMEタイプ")
     version: int = Field(..., description="バージョン番号")
     source: str = Field(..., description="ソース: user_upload / ai_created / ai_modified")
     is_presented: bool = Field(False, description="Presented fileフラグ")
-    checksum: Optional[str] = Field(None, description="SHA256チェックサム")
-    description: Optional[str] = Field(None, description="ファイル説明")
+    checksum: str | None = Field(None, description="SHA256チェックサム")
+    description: str | None = Field(None, description="ファイル説明")
     created_at: datetime = Field(..., description="作成日時")
     updated_at: datetime = Field(..., description="更新日時")
 
@@ -41,7 +40,7 @@ class ConversationFileCreate(BaseModel):
     """会話ファイル作成リクエスト"""
 
     file_path: str = Field(..., description="保存先のファイルパス（ワークスペース内）")
-    description: Optional[str] = Field(None, description="ファイル説明")
+    description: str | None = Field(None, description="ファイル説明")
 
 
 class WorkspaceInfo(BaseModel):
@@ -49,8 +48,8 @@ class WorkspaceInfo(BaseModel):
 
     conversation_id: str = Field(..., description="会話ID")
     workspace_enabled: bool = Field(..., description="ワークスペース有効フラグ")
-    workspace_path: Optional[str] = Field(None, description="ワークスペースパス")
-    workspace_created_at: Optional[datetime] = Field(None, description="作成日時")
+    workspace_path: str | None = Field(None, description="ワークスペースパス")
+    workspace_created_at: datetime | None = Field(None, description="作成日時")
     file_count: int = Field(0, description="ファイル数")
     total_size: int = Field(0, description="合計サイズ（バイト）")
 
@@ -99,7 +98,7 @@ class PresentFileRequest(BaseModel):
     """ファイルPresent設定リクエスト"""
 
     file_path: str = Field(..., description="ファイルパス")
-    description: Optional[str] = Field(None, description="ファイル説明（更新する場合）")
+    description: str | None = Field(None, description="ファイル説明（更新する場合）")
 
 
 class CleanupRequest(BaseModel):

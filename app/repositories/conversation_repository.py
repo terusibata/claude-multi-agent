@@ -3,7 +3,7 @@
 """
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.conversation import Conversation
@@ -31,27 +31,35 @@ class ConversationRepository(BaseRepository[Conversation]):
         to_date: datetime | None = None,
         limit: int = 50,
         offset: int = 0,
-    ) -> list[Conversation]:
-        """テナントの会話一覧を取得"""
+    ) -> tuple[list[Conversation], int]:
+        """テナントの会話一覧と総件数を取得"""
         from_date_utc = to_utc(from_date)
         to_date_utc = to_utc(to_date)
 
-        query = select(Conversation).where(Conversation.tenant_id == tenant_id)
+        base_query = select(Conversation).where(Conversation.tenant_id == tenant_id)
 
         if user_id:
-            query = query.where(Conversation.user_id == user_id)
+            base_query = base_query.where(Conversation.user_id == user_id)
         if status:
-            query = query.where(Conversation.status == status)
+            base_query = base_query.where(Conversation.status == status)
         if from_date_utc:
-            query = query.where(Conversation.created_at >= from_date_utc)
+            base_query = base_query.where(Conversation.created_at >= from_date_utc)
         if to_date_utc:
-            query = query.where(Conversation.created_at <= to_date_utc)
+            base_query = base_query.where(Conversation.created_at <= to_date_utc)
 
-        query = query.order_by(Conversation.updated_at.desc())
+        # 総件数取得
+        count_query = select(func.count()).select_from(base_query.subquery())
+        count_result = await self.db.execute(count_query)
+        total = count_result.scalar() or 0
+
+        # データ取得
+        query = base_query.order_by(Conversation.updated_at.desc())
         query = query.limit(limit).offset(offset)
 
         result = await self.db.execute(query)
-        return list(result.scalars().all())
+        conversations = list(result.scalars().all())
+
+        return conversations, total
 
     async def update_context_status(
         self,

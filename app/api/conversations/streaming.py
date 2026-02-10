@@ -3,13 +3,13 @@
 """
 import asyncio
 import json
-import logging
 import time
 from typing import AsyncIterator
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
+import structlog
 from sse_starlette.sse import EventSourceResponse
 
 from app.api.dependencies import get_active_model, get_active_tenant, get_orchestrator
@@ -24,7 +24,7 @@ from app.services.workspace_service import WorkspaceService
 from app.utils.streaming import format_error_event, format_ping_event
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 # タイムアウト関連の定数
 EVENT_TIMEOUT_SECONDS = 300
@@ -55,9 +55,10 @@ async def _background_execution(
                 await event_queue.put(event)
         except Exception as e:
             logger.error(
-                f"Background execution error: {e}",
+                "バックグラウンド実行エラー",
+                error=str(e),
+                conversation_id=request.conversation_id,
                 exc_info=True,
-                extra={"conversation_id": request.conversation_id},
             )
             error_event = format_error_event(
                 seq=0,
@@ -147,8 +148,9 @@ async def _event_generator(
                 time_since_last_event = current_time - last_event_time
                 if time_since_last_event >= EVENT_TIMEOUT_SECONDS:
                     logger.error(
-                        f"Event timeout reached ({time_since_last_event:.1f}s)",
-                        extra={"conversation_id": request.conversation_id},
+                        "イベントタイムアウト",
+                        elapsed_seconds=round(time_since_last_event, 1),
+                        conversation_id=request.conversation_id,
                     )
                     error_event = format_error_event(
                         seq=0,
@@ -168,15 +170,16 @@ async def _event_generator(
 
     except asyncio.CancelledError:
         logger.info(
-            f"Client disconnected for conversation {request.conversation_id}, "
-            "but background execution continues"
+            "クライアント切断（バックグラウンド実行は継続）",
+            conversation_id=request.conversation_id,
         )
         raise
     except Exception as e:
         logger.error(
-            f"Event generator error: {e}",
+            "イベントジェネレーターエラー",
+            error=str(e),
+            conversation_id=request.conversation_id,
             exc_info=True,
-            extra={"conversation_id": request.conversation_id},
         )
         background_task.cancel()
         try:
@@ -315,19 +318,14 @@ async def _handle_file_upload(
                 file=file,
                 metadata=metadata,
             )
-        await db.commit()
     except HTTPException:
-        await db.rollback()
         raise
     except Exception as e:
-        await db.rollback()
         logger.error(
             "ファイルアップロードエラー",
-            extra={
-                "error": str(e),
-                "tenant_id": tenant_id,
-                "conversation_id": conversation_id,
-            },
+            error=str(e),
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
             exc_info=True,
         )
         raise HTTPException(

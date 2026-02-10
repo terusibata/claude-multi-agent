@@ -2,7 +2,6 @@
 Agent Skills スキーマ
 """
 from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -19,15 +18,15 @@ class SkillBase(BaseModel):
         # セキュリティ上問題のある文字（/, \, .., スペース等）は禁止
         pattern=r"^[a-zA-Z0-9_\-]+$",
     )
-    display_title: Optional[str] = Field(None, description="表示タイトル", max_length=300)
-    description: Optional[str] = Field(None, description="説明")
+    display_title: str | None = Field(None, description="表示タイトル", max_length=300)
+    description: str | None = Field(None, description="説明")
     # スラッシュコマンド設定
-    slash_command: Optional[str] = Field(
+    slash_command: str | None = Field(
         None,
         description="スラッシュコマンド名（例: ServiceNowドキュメント検索）。フロントエンドで'/'を付けて表示",
         max_length=100,
     )
-    slash_command_description: Optional[str] = Field(
+    slash_command_description: str | None = Field(
         None,
         description="スラッシュコマンドの説明（オートコンプリート時に表示）",
         max_length=500,
@@ -47,13 +46,13 @@ class SkillCreate(SkillBase):
 class SkillUpdate(BaseModel):
     """Agent Skills更新リクエスト"""
 
-    display_title: Optional[str] = Field(None, max_length=300)
-    description: Optional[str] = None
-    status: Optional[str] = Field(None, pattern="^(active|inactive)$")
+    display_title: str | None = Field(None, max_length=300)
+    description: str | None = None
+    status: str | None = Field(None, pattern="^(active|inactive)$")
     # スラッシュコマンド設定
-    slash_command: Optional[str] = Field(None, max_length=100)
-    slash_command_description: Optional[str] = Field(None, max_length=500)
-    is_user_selectable: Optional[bool] = None
+    slash_command: str | None = Field(None, max_length=100)
+    slash_command_description: str | None = Field(None, max_length=500)
+    is_user_selectable: bool | None = None
 
 
 class SkillResponse(SkillBase):
@@ -93,7 +92,7 @@ class SlashCommandItem(BaseModel):
     skill_id: str = Field(..., description="SkillのID")
     name: str = Field(..., description="Skill名（preferred_skillsに渡す値）")
     slash_command: str = Field(..., description="スラッシュコマンド表示名")
-    description: Optional[str] = Field(None, description="説明")
+    description: str | None = Field(None, description="説明")
 
 
 class SlashCommandListResponse(BaseModel):
