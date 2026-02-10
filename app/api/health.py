@@ -5,7 +5,6 @@ Kubernetes/ECS対応のヘルスチェック実装
 """
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional
 
 import structlog
 from fastapi import APIRouter, Depends
@@ -19,7 +18,6 @@ from app.database import get_db
 from app.infrastructure.redis import check_redis_health
 
 logger = structlog.get_logger(__name__)
-settings = get_settings()
 
 
 class HealthStatus(str, Enum):
@@ -32,8 +30,8 @@ class HealthStatus(str, Enum):
 class ComponentHealth(BaseModel):
     """コンポーネントヘルス"""
     status: HealthStatus
-    message: Optional[str] = None
-    latency_ms: Optional[float] = None
+    message: str | None = None
+    latency_ms: float | None = None
 
 
 class HealthResponse(BaseModel):
@@ -93,7 +91,8 @@ async def check_s3_health() -> ComponentHealth:
     """S3ヘルスチェック"""
     import time
 
-    if not settings.s3_bucket_name:
+    _settings = get_settings()
+    if not _settings.s3_bucket_name:
         return ComponentHealth(
             status=HealthStatus.HEALTHY,
             message="S3未設定（スキップ）",
@@ -110,8 +109,8 @@ async def check_s3_health() -> ComponentHealth:
             read_timeout=5,
             retries={"max_attempts": 1},
         )
-        s3 = boto3.client("s3", config=config, region_name=settings.aws_region)
-        s3.head_bucket(Bucket=settings.s3_bucket_name)
+        s3 = boto3.client("s3", config=config, region_name=_settings.aws_region)
+        s3.head_bucket(Bucket=_settings.s3_bucket_name)
         latency = (time.perf_counter() - start) * 1000
 
         return ComponentHealth(
@@ -234,7 +233,7 @@ async def health_check(db: AsyncSession = Depends(get_db)) -> HealthResponse:
     return HealthResponse(
         status=overall_status,
         version=__version__,
-        environment=settings.app_env,
+        environment=get_settings().app_env,
         timestamp=datetime.now(timezone.utc).isoformat(),
         checks=checks,
     )

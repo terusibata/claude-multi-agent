@@ -2,8 +2,6 @@
 モデル定義サービス
 モデル定義のCRUD操作
 """
-from typing import Optional
-
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,7 +33,7 @@ class ModelService:
         """
         self.db = db
 
-    async def get_all(self, status: Optional[str] = None) -> list[Model]:
+    async def get_all(self, status: str | None = None) -> list[Model]:
         """
         全モデル定義を取得
 
@@ -53,7 +51,7 @@ class ModelService:
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
-    async def get_by_id(self, model_id: str) -> Optional[Model]:
+    async def get_by_id(self, model_id: str) -> Model | None:
         """
         IDでモデル定義を取得
 
@@ -85,7 +83,7 @@ class ModelService:
 
     async def update(
         self, model_id: str, model_data: ModelUpdate
-    ) -> Optional[Model]:
+    ) -> Model | None:
         """
         モデル定義を更新
 
@@ -110,7 +108,7 @@ class ModelService:
 
     async def update_status(
         self, model_id: str, status: str
-    ) -> Optional[Model]:
+    ) -> Model | None:
         """
         モデルステータスを更新
 

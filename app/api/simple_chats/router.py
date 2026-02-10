@@ -1,8 +1,6 @@
 """
 シンプルチャットCRUD APIエンドポイント
 """
-from typing import Optional
-
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,11 +27,11 @@ router = APIRouter()
 )
 async def get_simple_chats(
     tenant_id: str,
-    user_id: Optional[str] = Query(None, description="ユーザーIDフィルター"),
-    application_type: Optional[str] = Query(
+    user_id: str | None = Query(None, description="ユーザーIDフィルター"),
+    application_type: str | None = Query(
         None, description="アプリケーションタイプフィルター"
     ),
-    chat_status: Optional[str] = Query(
+    chat_status: str | None = Query(
         None, alias="status", description="ステータスフィルター"
     ),
     limit: int = Query(50, ge=1, le=100, description="取得件数"),

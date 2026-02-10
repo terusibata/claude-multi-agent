@@ -2,7 +2,6 @@
 カスタム例外クラス
 アプリケーション全体で使用する例外の定義
 """
-from typing import Optional
 
 
 class AppError(Exception):
@@ -11,8 +10,8 @@ class AppError(Exception):
     def __init__(
         self,
         message: str,
-        error_code: Optional[str] = None,
-        details: Optional[dict] = None,
+        error_code: str | None = None,
+        details: dict | None = None,
     ):
         super().__init__(message)
         self.message = message
@@ -27,7 +26,7 @@ class NotFoundError(AppError):
         self,
         resource_type: str,
         resource_id: str,
-        message: Optional[str] = None,
+        message: str | None = None,
     ):
         self.resource_type = resource_type
         self.resource_id = resource_id
@@ -48,7 +47,7 @@ class ValidationError(AppError):
         self,
         field: str,
         message: str,
-        value: Optional[str] = None,
+        value: str | None = None,
     ):
         self.field = field
         self.value = value
@@ -92,7 +91,7 @@ class SecurityError(AppError):
         self,
         message: str,
         error_code: str = "SECURITY_ERROR",
-        details: Optional[dict] = None,
+        details: dict | None = None,
     ):
         super().__init__(
             message=message,
@@ -104,7 +103,7 @@ class SecurityError(AppError):
 class WorkspaceSecurityError(SecurityError):
     """ワークスペースセキュリティエラー"""
 
-    def __init__(self, message: str, details: Optional[dict] = None):
+    def __init__(self, message: str, details: dict | None = None):
         super().__init__(
             message=message,
             error_code="WORKSPACE_SECURITY_ERROR",
@@ -147,7 +146,7 @@ class SDKError(AppError):
         self,
         message: str,
         error_code: str = "SDK_ERROR",
-        details: Optional[dict] = None,
+        details: dict | None = None,
     ):
         super().__init__(
             message=message,
@@ -177,7 +176,7 @@ class FileOperationError(AppError):
         self,
         operation: str,
         file_path: str,
-        original_error: Optional[str] = None,
+        original_error: str | None = None,
     ):
         self.operation = operation
         self.file_path = file_path

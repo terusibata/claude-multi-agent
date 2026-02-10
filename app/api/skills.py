@@ -3,7 +3,6 @@ Agent Skills管理API
 ファイルシステムベースのSkills管理
 """
 import structlog
-from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,7 +28,7 @@ logger = structlog.get_logger(__name__)
 @router.get("", response_model=list[SkillResponse], summary="Skills一覧取得")
 async def get_skills(
     tenant_id: str,
-    status: Optional[str] = Query(None, description="ステータスフィルター"),
+    status: str | None = Query(None, description="ステータスフィルター"),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -115,10 +114,10 @@ async def _read_upload_file_safely(file: UploadFile) -> tuple[str, str]:
 async def upload_skill(
     tenant_id: str,
     name: str = Form(..., description="Skill名"),
-    display_title: Optional[str] = Form(None, description="表示タイトル"),
-    description: Optional[str] = Form(None, description="説明"),
+    display_title: str | None = Form(None, description="表示タイトル"),
+    description: str | None = Form(None, description="説明"),
     skill_md: UploadFile = File(..., description="SKILL.mdファイル"),
-    additional_files: Optional[list[UploadFile]] = File(default=None, description="追加ファイル"),
+    additional_files: list[UploadFile] | None = File(default=None, description="追加ファイル"),
     db: AsyncSession = Depends(get_db),
 ):
     """

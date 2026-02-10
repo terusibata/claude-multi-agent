@@ -4,7 +4,6 @@
 """
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
 from uuid import uuid4
 
 from sqlalchemy import DECIMAL, DateTime, ForeignKey, Integer, String, func
@@ -45,17 +44,17 @@ class UsageLog(Base):
     )
 
     # SDKセッションID
-    session_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    session_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
     # 会話ID（エージェント実行時）
-    conversation_id: Mapped[Optional[str]] = mapped_column(
+    conversation_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False),
         ForeignKey("conversations.conversation_id"),
         nullable=True,
     )
 
     # シンプルチャットID（シンプルチャット実行時）
-    simple_chat_id: Mapped[Optional[str]] = mapped_column(
+    simple_chat_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False),
         ForeignKey("simple_chats.chat_id"),
         nullable=True,

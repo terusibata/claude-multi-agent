@@ -2,8 +2,6 @@
 モデル管理API
 モデル定義のCRUD操作
 """
-from typing import Optional
-
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,7 +17,7 @@ router = APIRouter()
 
 @router.get("", response_model=list[ModelResponse], summary="モデル一覧取得")
 async def get_models(
-    status: Optional[str] = Query(None, description="ステータスフィルター"),
+    status: str | None = Query(None, description="ステータスフィルター"),
     db: AsyncSession = Depends(get_db),
 ):
     """

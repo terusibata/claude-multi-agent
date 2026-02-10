@@ -8,7 +8,6 @@ import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 from uuid import uuid4
 
 import structlog
@@ -33,7 +32,6 @@ from app.services.workspace.file_processors import FileTypeClassifier
 
 from app.utils.exceptions import WorkspaceSecurityError
 
-settings = get_settings()
 logger = structlog.get_logger(__name__)
 
 
@@ -48,6 +46,7 @@ class WorkspaceService:
             db: データベースセッション
         """
         self.db = db
+        self._settings = get_settings()
         self.s3 = S3StorageBackend()
         self.context_builder = AIContextBuilder()
 
@@ -200,7 +199,7 @@ class WorkspaceService:
         conversation_id: str,
         file_path: str,
         is_presented: bool = True,
-    ) -> Optional[ConversationFileInfo]:
+    ) -> ConversationFileInfo | None:
         """
         AIが作成したファイルを登録
 
@@ -252,7 +251,7 @@ class WorkspaceService:
             raise WorkspaceSecurityError(f"無効な会話ID: {str(e)}")
 
         # 設定ファイルからベースディレクトリを取得
-        base_dir = settings.workspace_temp_dir
+        base_dir = self._settings.workspace_temp_dir
         workspace_path = Path(base_dir) / f"workspace_{conversation_id}"
 
         # ベースディレクトリが存在しない場合は作成
@@ -394,7 +393,7 @@ class WorkspaceService:
         self,
         tenant_id: str,
         conversation_id: str,
-    ) -> Optional[WorkspaceInfo]:
+    ) -> WorkspaceInfo | None:
         """
         ワークスペース情報を取得
 
@@ -471,7 +470,7 @@ class WorkspaceService:
         self,
         tenant_id: str,
         conversation_id: str,
-    ) -> Optional[WorkspaceContextForAI]:
+    ) -> WorkspaceContextForAI | None:
         """
         AIに提供するワークスペースコンテキストを生成
 
@@ -500,7 +499,7 @@ class WorkspaceService:
         content_type: str,
         source: str,
         is_presented: bool = False,
-        original_relative_path: Optional[str] = None,
+        original_relative_path: str | None = None,
     ) -> ConversationFileInfo:
         """
         ファイルレコードをDBに保存
@@ -554,7 +553,7 @@ class WorkspaceService:
     async def _get_file_records(
         self,
         conversation_id: str,
-        is_presented: Optional[bool] = None,
+        is_presented: bool | None = None,
     ) -> list[ConversationFileInfo]:
         """
         ファイルレコードを取得

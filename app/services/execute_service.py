@@ -49,7 +49,6 @@ from app.utils.streaming import (
     format_title_event,
 )
 
-settings = get_settings()
 logger = structlog.get_logger(__name__)
 
 
@@ -73,6 +72,7 @@ class ExecuteService:
     ):
         self.db = db
         self.orchestrator = orchestrator
+        self._settings = get_settings()
         self.conversation_service = ConversationService(db)
         self.message_log_service = MessageLogService(db)
         self.usage_service = UsageService(db)
@@ -80,7 +80,7 @@ class ExecuteService:
 
     def _create_file_sync(self) -> WorkspaceFileSync | None:
         """ファイル同期インスタンスを生成（S3未設定時はNone）"""
-        if not settings.s3_bucket_name:
+        if not self._settings.s3_bucket_name:
             return None
         return WorkspaceFileSync(
             s3=S3StorageBackend(),
@@ -175,7 +175,7 @@ class ExecuteService:
                 # tool_result イベント検出時に非同期ファイル同期をトリガー
                 if (
                     request.workspace_enabled
-                    and settings.s3_bucket_name
+                    and self._settings.s3_bucket_name
                     and event.get("event") == "tool_result"
                     and self._is_file_tool_result(event)
                     and (time.time() - last_sync_time) > _SYNC_DEBOUNCE_SECONDS

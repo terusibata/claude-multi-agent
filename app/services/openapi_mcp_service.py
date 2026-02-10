@@ -6,16 +6,13 @@ OpenAPI仕様を解析し、各エンドポイントをMCPツールに変換。
 """
 import json
 import re
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import quote, urljoin
 
 import httpx
 import structlog
 
-from app.config import get_settings
-
 logger = structlog.get_logger(__name__)
-settings = get_settings()
 
 
 class OpenAPIMcpService:
@@ -39,8 +36,8 @@ class OpenAPIMcpService:
     def __init__(
         self,
         openapi_spec: dict[str, Any],
-        base_url: Optional[str] = None,
-        headers: Optional[dict[str, str]] = None,
+        base_url: str | None = None,
+        headers: dict[str, str] | None = None,
         server_name: str = "openapi",
         verify_ssl: bool = True,
         timeout: float = DEFAULT_TIMEOUT,
@@ -451,7 +448,7 @@ class OpenAPIMcpService:
         self,
         tool_name: str,
         args: dict[str, Any],
-        additional_headers: Optional[dict[str, str]] = None,
+        additional_headers: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """
         ツールを実行（HTTP APIを呼び出す）
@@ -691,8 +688,8 @@ class OpenAPIMcpService:
 def create_openapi_mcp_server(
     openapi_spec: dict[str, Any],
     server_name: str,
-    base_url: Optional[str] = None,
-    headers: Optional[dict[str, str]] = None,
+    base_url: str | None = None,
+    headers: dict[str, str] | None = None,
     verify_ssl: bool = True,
     timeout: float = OpenAPIMcpService.DEFAULT_TIMEOUT,
 ):

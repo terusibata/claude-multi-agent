@@ -5,11 +5,10 @@ Agent Skillsサービス
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 from uuid import uuid4
 
 import structlog
-import yaml
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,7 +28,6 @@ from app.utils.security import (
     validate_tenant_id,
 )
 
-settings = get_settings()
 logger = structlog.get_logger(__name__)
 
 
@@ -44,7 +42,8 @@ class SkillService:
             db: データベースセッション
         """
         self.db = db
-        self.base_path = Path(settings.skills_base_path)
+        self._settings = get_settings()
+        self.base_path = Path(self._settings.skills_base_path)
 
     def _get_tenant_skills_path(self, tenant_id: str) -> Path:
         """
@@ -93,7 +92,7 @@ class SkillService:
     async def get_all_by_tenant(
         self,
         tenant_id: str,
-        status: Optional[str] = None,
+        status: str | None = None,
     ) -> list[AgentSkill]:
         """
         テナントの全Skillsを取得
@@ -117,7 +116,7 @@ class SkillService:
         self,
         skill_id: str,
         tenant_id: str,
-    ) -> Optional[AgentSkill]:
+    ) -> AgentSkill | None:
         """
         IDでSkillを取得
 
@@ -139,7 +138,7 @@ class SkillService:
         self,
         name: str,
         tenant_id: str,
-    ) -> Optional[AgentSkill]:
+    ) -> AgentSkill | None:
         """
         名前でSkillを取得
 
@@ -307,7 +306,7 @@ class SkillService:
         skill_id: str,
         tenant_id: str,
         skill_data: SkillUpdate,
-    ) -> Optional[AgentSkill]:
+    ) -> AgentSkill | None:
         """
         Skillメタデータを更新
 
@@ -336,7 +335,7 @@ class SkillService:
         skill_id: str,
         tenant_id: str,
         files: dict[str, str],
-    ) -> Optional[AgentSkill]:
+    ) -> AgentSkill | None:
         """
         Skillファイルを更新
 
@@ -418,7 +417,7 @@ class SkillService:
         self,
         skill_id: str,
         tenant_id: str,
-    ) -> Optional[list[SkillFileInfo]]:
+    ) -> list[SkillFileInfo] | None:
         """
         Skillのファイル一覧を取得
 
@@ -456,7 +455,7 @@ class SkillService:
         skill_id: str,
         tenant_id: str,
         file_path: str,
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Skillファイルの内容を取得
 

@@ -3,7 +3,6 @@
 ストリーミング中のメッセージを完全に記録（バックエンドDB保存用）
 """
 from datetime import datetime
-from typing import Optional
 from uuid import uuid4
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, func
@@ -43,10 +42,10 @@ class MessageLog(Base):
 
     # メッセージサブタイプ
     # init / finish / text / tool_use / text_delta など
-    message_subtype: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    message_subtype: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     # メッセージ内容（JSON）
-    content: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    content: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     # タイムスタンプ
     timestamp: Mapped[datetime] = mapped_column(

@@ -4,7 +4,6 @@
 バージョン管理対応
 """
 from datetime import datetime
-from typing import Optional
 from uuid import uuid4
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, Boolean, BigInteger, func
@@ -44,7 +43,7 @@ class ConversationFile(Base):
     file_size: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
 
     # MIMEタイプ
-    mime_type: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    mime_type: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
     # バージョン番号（同一パスの場合インクリメント）
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
@@ -56,13 +55,13 @@ class ConversationFile(Base):
     is_presented: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     # ファイルチェックサム（SHA256）
-    checksum: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    checksum: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     # ファイル説明（AI作成時のコンテキスト）
-    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # 元の相対パス（表示用。例: api/users/route.ts）
-    original_relative_path: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    original_relative_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
 
     # ステータス: "active" | "deleted"
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")

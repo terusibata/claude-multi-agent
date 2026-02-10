@@ -2,8 +2,6 @@
 AIコンテキストビルダー
 AIに提供するワークスペースコンテキストを生成
 """
-from typing import Optional
-
 from app.schemas.workspace import WorkspaceContextForAI, WorkspaceFileList, WorkspaceInfo
 from app.services.workspace.file_processors import FileCategory, FileTypeClassifier
 
@@ -19,7 +17,7 @@ class AIContextBuilder:
         self,
         workspace_info: WorkspaceInfo,
         file_list: WorkspaceFileList,
-    ) -> Optional[WorkspaceContextForAI]:
+    ) -> WorkspaceContextForAI | None:
         """
         AIに提供するワークスペースコンテキストを生成
 

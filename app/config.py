@@ -4,7 +4,6 @@
 """
 import re
 from functools import lru_cache
-from typing import Optional
 from urllib.parse import urlparse
 
 from pydantic import field_validator, model_validator
@@ -35,7 +34,7 @@ class Settings(BaseSettings):
     redis_socket_timeout: float = 5.0
     redis_socket_connect_timeout: float = 5.0
     # Redis認証（本番環境では設定必須）
-    redis_password: Optional[str] = None
+    redis_password: str | None = None
 
     @property
     def redis_url_with_auth(self) -> str:
@@ -56,9 +55,9 @@ class Settings(BaseSettings):
     # ============================================
     claude_code_use_bedrock: str = "1"
     aws_region: str = "us-west-2"
-    aws_access_key_id: Optional[str] = None
-    aws_secret_access_key: Optional[str] = None
-    aws_session_token: Optional[str] = None
+    aws_access_key_id: str | None = None
+    aws_secret_access_key: str | None = None
+    aws_session_token: str | None = None
 
     # Bedrockリトライ設定
     bedrock_max_retries: int = 3

@@ -4,7 +4,6 @@
 """
 import re
 from pathlib import Path
-from typing import Optional
 
 from app.utils.exceptions import PathTraversalError, ValidationError
 
@@ -28,7 +27,7 @@ PATH_TRAVERSAL_PATTERNS = [
 ]
 
 
-def validate_path_traversal(path: str, base_path: Optional[Path] = None) -> None:
+def validate_path_traversal(path: str, base_path: Path | None = None) -> None:
     """
     パストラバーサル攻撃をチェックする
 
@@ -131,7 +130,7 @@ def validate_skill_name(name: str) -> None:
     validate_path_traversal(name)
 
 
-def validate_slash_command(slash_command: Optional[str]) -> None:
+def validate_slash_command(slash_command: str | None) -> None:
     """
     スラッシュコマンドを検証する
 

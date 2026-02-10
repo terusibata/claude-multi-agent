@@ -3,7 +3,6 @@
 トークン使用量とコストの監視・レポート
 """
 from datetime import datetime
-from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,9 +21,9 @@ router = APIRouter()
 @router.get("/usage", response_model=list[UsageLogResponse], summary="使用状況取得")
 async def get_usage(
     tenant_id: str,
-    user_id: Optional[str] = Query(None, description="ユーザーIDフィルター"),
-    from_date: Optional[datetime] = Query(None, description="開始日時（タイムゾーンなしの場合JSTとして扱う）"),
-    to_date: Optional[datetime] = Query(None, description="終了日時（タイムゾーンなしの場合JSTとして扱う）"),
+    user_id: str | None = Query(None, description="ユーザーIDフィルター"),
+    from_date: datetime | None = Query(None, description="開始日時（タイムゾーンなしの場合JSTとして扱う）"),
+    to_date: datetime | None = Query(None, description="終了日時（タイムゾーンなしの場合JSTとして扱う）"),
     limit: int = Query(100, ge=1, le=1000, description="取得件数"),
     offset: int = Query(0, ge=0, description="オフセット"),
     db: AsyncSession = Depends(get_db),
@@ -47,8 +46,8 @@ async def get_usage(
 async def get_user_usage(
     tenant_id: str,
     user_id: str,
-    from_date: Optional[datetime] = Query(None, description="開始日時（タイムゾーンなしの場合JSTとして扱う）"),
-    to_date: Optional[datetime] = Query(None, description="終了日時（タイムゾーンなしの場合JSTとして扱う）"),
+    from_date: datetime | None = Query(None, description="開始日時（タイムゾーンなしの場合JSTとして扱う）"),
+    to_date: datetime | None = Query(None, description="終了日時（タイムゾーンなしの場合JSTとして扱う）"),
     limit: int = Query(100, ge=1, le=1000, description="取得件数"),
     offset: int = Query(0, ge=0, description="オフセット"),
     db: AsyncSession = Depends(get_db),
@@ -70,8 +69,8 @@ async def get_user_usage(
 @router.get("/usage/summary", summary="使用状況サマリー取得")
 async def get_usage_summary(
     tenant_id: str,
-    from_date: Optional[datetime] = Query(None, description="開始日時（タイムゾーンなしの場合JSTとして扱う）"),
-    to_date: Optional[datetime] = Query(None, description="終了日時（タイムゾーンなしの場合JSTとして扱う）"),
+    from_date: datetime | None = Query(None, description="開始日時（タイムゾーンなしの場合JSTとして扱う）"),
+    to_date: datetime | None = Query(None, description="終了日時（タイムゾーンなしの場合JSTとして扱う）"),
     group_by: str = Query("day", pattern="^(day|week|month)$", description="グループ化単位"),
     db: AsyncSession = Depends(get_db),
 ):
@@ -94,8 +93,8 @@ async def get_cost_report(
     tenant_id: str,
     from_date: datetime = Query(..., description="開始日時（タイムゾーンなしの場合JSTとして扱う）"),
     to_date: datetime = Query(..., description="終了日時（タイムゾーンなしの場合JSTとして扱う）"),
-    model_id: Optional[str] = Query(None, description="モデルIDフィルター"),
-    user_id: Optional[str] = Query(None, description="ユーザーIDフィルター"),
+    model_id: str | None = Query(None, description="モデルIDフィルター"),
+    user_id: str | None = Query(None, description="ユーザーIDフィルター"),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -116,10 +115,10 @@ async def get_cost_report(
 @router.get("/tool-logs", response_model=list[ToolLogResponse], summary="ツール実行ログ取得")
 async def get_tool_logs(
     tenant_id: str,
-    session_id: Optional[str] = Query(None, description="セッションIDフィルター"),
-    tool_name: Optional[str] = Query(None, description="ツール名フィルター"),
-    from_date: Optional[datetime] = Query(None, description="開始日時（タイムゾーンなしの場合JSTとして扱う）"),
-    to_date: Optional[datetime] = Query(None, description="終了日時（タイムゾーンなしの場合JSTとして扱う）"),
+    session_id: str | None = Query(None, description="セッションIDフィルター"),
+    tool_name: str | None = Query(None, description="ツール名フィルター"),
+    from_date: datetime | None = Query(None, description="開始日時（タイムゾーンなしの場合JSTとして扱う）"),
+    to_date: datetime | None = Query(None, description="終了日時（タイムゾーンなしの場合JSTとして扱う）"),
     limit: int = Query(100, ge=1, le=1000, description="取得件数"),
     offset: int = Query(0, ge=0, description="オフセット"),
     db: AsyncSession = Depends(get_db),

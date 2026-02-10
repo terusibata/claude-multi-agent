@@ -6,7 +6,6 @@ Prometheusメトリクス収集
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Optional
 
 import structlog
 
@@ -104,7 +103,7 @@ class MetricsRegistry:
         self,
         name: str,
         description: str,
-        labels: Optional[list[str]] = None,
+        labels: list[str] | None = None,
     ) -> Counter:
         """カウンターを登録・取得"""
         if name not in self._metrics:
@@ -115,7 +114,7 @@ class MetricsRegistry:
         self,
         name: str,
         description: str,
-        labels: Optional[list[str]] = None,
+        labels: list[str] | None = None,
     ) -> Gauge:
         """ゲージを登録・取得"""
         if name not in self._metrics:
@@ -126,8 +125,8 @@ class MetricsRegistry:
         self,
         name: str,
         description: str,
-        labels: Optional[list[str]] = None,
-        buckets: Optional[list[float]] = None,
+        labels: list[str] | None = None,
+        buckets: list[float] | None = None,
     ) -> Histogram:
         """ヒストグラムを登録・取得"""
         if name not in self._metrics:
@@ -191,7 +190,7 @@ class MetricsRegistry:
 
 
 # グローバルレジストリ
-_registry: Optional[MetricsRegistry] = None
+_registry: MetricsRegistry | None = None
 
 
 def get_metrics_registry() -> MetricsRegistry:

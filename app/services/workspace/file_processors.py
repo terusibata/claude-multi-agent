@@ -6,7 +6,6 @@
 
 from enum import Enum
 from pathlib import Path
-from typing import Optional
 
 from app.config import get_settings
 
@@ -115,7 +114,7 @@ class FileTypeClassifier:
     """ファイルタイプ分類器"""
 
     @classmethod
-    def get_category(cls, filename: str, mime_type: Optional[str] = None) -> FileCategory:
+    def get_category(cls, filename: str, mime_type: str | None = None) -> FileCategory:
         """
         ファイルのカテゴリを取得
 
@@ -146,7 +145,7 @@ class FileTypeClassifier:
 
     @classmethod
     def get_processing_method(
-        cls, filename: str, mime_type: Optional[str] = None
+        cls, filename: str, mime_type: str | None = None
     ) -> FileProcessingMethod:
         """
         ファイルの処理方法を取得
@@ -162,7 +161,7 @@ class FileTypeClassifier:
         return CATEGORY_TO_PROCESSING_METHOD[category]
 
     @classmethod
-    def get_max_file_size(cls, filename: str, mime_type: Optional[str] = None) -> int:
+    def get_max_file_size(cls, filename: str, mime_type: str | None = None) -> int:
         """
         ファイルの最大サイズを取得
 
@@ -186,7 +185,7 @@ class FileTypeClassifier:
         return size_map.get(category, settings.max_upload_file_size)
 
     @classmethod
-    def is_supported(cls, filename: str, mime_type: Optional[str] = None) -> bool:
+    def is_supported(cls, filename: str, mime_type: str | None = None) -> bool:
         """
         サポートされているファイルタイプかどうか
 

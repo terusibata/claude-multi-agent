@@ -4,7 +4,6 @@ Agent Skills定義テーブル
 ファイル自体は /skills/tenant_{tenant_id}/.claude/skills/ に保存
 """
 from datetime import datetime
-from typing import Optional
 from uuid import uuid4
 
 from sqlalchemy import Boolean, DateTime, Integer, String, Text, func
@@ -34,10 +33,10 @@ class AgentSkill(Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
 
     # 表示タイトル
-    display_title: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    display_title: Mapped[str | None] = mapped_column(String(300), nullable=True)
 
     # 説明
-    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # バージョン番号
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
@@ -48,11 +47,11 @@ class AgentSkill(Base):
 
     # スラッシュコマンド設定
     # ユーザーがフロントエンドで選択できるようにするためのメタデータ
-    slash_command: Mapped[Optional[str]] = mapped_column(
+    slash_command: Mapped[str | None] = mapped_column(
         String(100), nullable=True,
         comment="スラッシュコマンド表示名（例: /ServiceNowドキュメント検索）"
     )
-    slash_command_description: Mapped[Optional[str]] = mapped_column(
+    slash_command_description: Mapped[str | None] = mapped_column(
         String(500), nullable=True,
         comment="スラッシュコマンドの説明（オートコンプリート時に表示）"
     )

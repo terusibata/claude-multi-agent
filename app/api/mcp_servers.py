@@ -2,8 +2,6 @@
 MCPサーバー管理API
 テナントごとのMCPサーバー設定のCRUD操作
 """
-from typing import Optional
-
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,7 +22,7 @@ router = APIRouter()
 @router.get("", response_model=list[McpServerResponse], summary="MCPサーバー一覧取得")
 async def get_mcp_servers(
     tenant_id: str,
-    status: Optional[str] = Query(None, description="ステータスフィルター"),
+    status: str | None = Query(None, description="ステータスフィルター"),
     db: AsyncSession = Depends(get_db),
 ):
     """

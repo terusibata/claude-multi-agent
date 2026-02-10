@@ -14,7 +14,6 @@ from app.services.container.config import get_container_create_config
 from app.services.container.models import ContainerInfo, ContainerStatus
 
 logger = structlog.get_logger(__name__)
-settings = get_settings()
 
 
 class ContainerLifecycleManager:
@@ -22,6 +21,7 @@ class ContainerLifecycleManager:
 
     def __init__(self, docker: aiodocker.Docker) -> None:
         self.docker = docker
+        self._settings = get_settings()
 
     async def create_container(self, conversation_id: str = "") -> ContainerInfo:
         """
@@ -37,7 +37,7 @@ class ContainerLifecycleManager:
 
         # ソケットディレクトリを作成（バックエンドコンテナ内パス）
         # Bind mountはディレクトリ単位（BUG-06修正: ソケット競合状態回避）
-        socket_base = Path(settings.workspace_socket_base_path) / container_id
+        socket_base = Path(self._settings.workspace_socket_base_path) / container_id
         socket_base.mkdir(parents=True, exist_ok=True)
 
         # ソケットディレクトリの権限を設定
@@ -102,7 +102,7 @@ class ContainerLifecycleManager:
                 raise
 
         # ソケットディレクトリをクリーンアップ
-        socket_dir = Path(settings.workspace_socket_base_path) / container_id
+        socket_dir = Path(self._settings.workspace_socket_base_path) / container_id
         if socket_dir.exists():
             import shutil
             shutil.rmtree(socket_dir, ignore_errors=True)
