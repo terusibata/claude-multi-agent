@@ -15,16 +15,16 @@ from app.infrastructure.retry import RetryConfig, retry_sync
 from app.services.aws_config import AWSConfig
 
 logger = structlog.get_logger(__name__)
-settings = get_settings()
 
 
 # Bedrock用のリトライ設定
 def get_bedrock_retry_config() -> RetryConfig:
     """Bedrock用リトライ設定を取得"""
+    _settings = get_settings()
     return RetryConfig(
-        max_attempts=settings.bedrock_max_retries,
-        base_delay=settings.bedrock_retry_base_delay,
-        max_delay=settings.bedrock_retry_max_delay,
+        max_attempts=_settings.bedrock_max_retries,
+        base_delay=_settings.bedrock_retry_base_delay,
+        max_delay=_settings.bedrock_retry_max_delay,
         exponential_base=2.0,
         jitter=True,
         retryable_exceptions=(

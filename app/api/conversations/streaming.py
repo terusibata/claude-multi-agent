@@ -21,7 +21,7 @@ from app.services.container.orchestrator import ContainerOrchestrator
 from app.services.conversation_service import ConversationService
 from app.services.execute_service import ExecuteService
 from app.services.workspace_service import WorkspaceService
-from app.utils.streaming import format_error_event, format_ping_event
+from app.utils.streaming import format_error_event, format_ping_event, to_sse_payload
 
 router = APIRouter()
 logger = structlog.get_logger(__name__)
@@ -100,12 +100,7 @@ async def _event_generator(
                 if event is None:
                     break
 
-                yield {
-                    "event": event["event"],
-                    "data": json.dumps(
-                        event["data"], ensure_ascii=False, default=str
-                    ),
-                }
+                yield to_sse_payload(event)
 
                 current_time = time.time()
                 last_event_time = current_time
@@ -116,12 +111,7 @@ async def _event_generator(
                 # pingイベント送信
                 elapsed_ms = int((current_time - start_time) * 1000)
                 ping_event = format_ping_event(0, elapsed_ms)
-                yield {
-                    "event": ping_event["event"],
-                    "data": json.dumps(
-                        ping_event["data"], ensure_ascii=False, default=str
-                    ),
-                }
+                yield to_sse_payload(ping_event)
 
                 # バックグラウンドタスクの完了確認
                 if background_task.done():
@@ -136,12 +126,7 @@ async def _event_generator(
                             message=f"バックグラウンドタスクエラー: {str(task_error)}",
                             recoverable=False,
                         )
-                        yield {
-                            "event": error_event["event"],
-                            "data": json.dumps(
-                                error_event["data"], ensure_ascii=False, default=str
-                            ),
-                        }
+                        yield to_sse_payload(error_event)
                     break
 
                 # タイムアウト判定
@@ -158,12 +143,7 @@ async def _event_generator(
                         message="応答タイムアウト: サーバーからの応答がありません",
                         recoverable=True,
                     )
-                    yield {
-                        "event": error_event["event"],
-                        "data": json.dumps(
-                            error_event["data"], ensure_ascii=False, default=str
-                        ),
-                    }
+                    yield to_sse_payload(error_event)
                     break
 
                 continue

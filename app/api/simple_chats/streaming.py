@@ -4,8 +4,6 @@
 会話ストリーミングと統一されたイベント形式を使用。
 サービス層から返されるイベントは {"event": <type>, "data": {...}} 形式。
 """
-import json
-
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,7 +15,7 @@ from app.models.model import Model
 from app.models.tenant import Tenant
 from app.schemas.simple_chat import SimpleChatStreamRequest
 from app.services.simple_chat_service import SimpleChatService
-from app.utils.streaming import format_error_event
+from app.utils.streaming import format_error_event, to_sse_payload
 
 router = APIRouter()
 logger = structlog.get_logger(__name__)
@@ -32,12 +30,7 @@ async def _simple_chat_event_generator(service, chat, model: Model, user_message
     """
     try:
         async for event in service.stream_message(chat, model, user_message):
-            yield {
-                "event": event["event"],
-                "data": json.dumps(
-                    event["data"], ensure_ascii=False, default=str
-                ),
-            }
+            yield to_sse_payload(event)
     except Exception as e:
         logger.error(
             "シンプルチャットストリーミングエラー",
@@ -51,12 +44,7 @@ async def _simple_chat_event_generator(service, chat, model: Model, user_message
             message=str(e),
             recoverable=False,
         )
-        yield {
-            "event": error_event["event"],
-            "data": json.dumps(
-                error_event["data"], ensure_ascii=False, default=str
-            ),
-        }
+        yield to_sse_payload(error_event)
 
 
 @router.post(
