@@ -7,13 +7,16 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.dependencies import get_mcp_server_or_404
 from app.database import get_db
+from app.models.mcp_server import McpServer
 from app.schemas.mcp_server import (
     McpServerCreate,
     McpServerResponse,
     McpServerUpdate,
 )
 from app.services.mcp_server_service import McpServerService
+from app.utils.error_handler import raise_not_found
 
 router = APIRouter()
 
@@ -44,20 +47,11 @@ async def get_builtin_mcp_servers(
 
 @router.get("/{server_id}", response_model=McpServerResponse, summary="MCPサーバー詳細取得")
 async def get_mcp_server(
-    tenant_id: str,
-    server_id: str,
-    db: AsyncSession = Depends(get_db),
+    server: McpServer = Depends(get_mcp_server_or_404),
 ):
     """
     指定したIDのMCPサーバーを取得します。
     """
-    service = McpServerService(db)
-    server = await service.get_by_id(server_id, tenant_id)
-    if not server:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"MCPサーバー '{server_id}' が見つかりません",
-        )
     return server
 
 
@@ -129,10 +123,7 @@ async def update_mcp_server(
     service = McpServerService(db)
     server = await service.update(server_id, tenant_id, server_data)
     if not server:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"MCPサーバー '{server_id}' が見つかりません",
-        )
+        raise_not_found("MCPサーバー", server_id)
     return server
 
 
@@ -152,7 +143,4 @@ async def delete_mcp_server(
     service = McpServerService(db)
     deleted = await service.delete(server_id, tenant_id)
     if not deleted:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"MCPサーバー '{server_id}' が見つかりません",
-        )
+        raise_not_found("MCPサーバー", server_id)

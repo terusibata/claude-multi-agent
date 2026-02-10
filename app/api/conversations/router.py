@@ -8,25 +8,27 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_active_model, get_tenant_or_404
+from app.api.dependencies import get_active_model, get_conversation_or_404, get_tenant_or_404
 from app.database import get_db
+from app.models.conversation import Conversation
 from app.models.tenant import Tenant
 from app.schemas.conversation import (
-    ConversationArchiveRequest,
     ConversationCreateRequest,
+    ConversationListResponse,
     ConversationResponse,
     ConversationUpdateRequest,
     MessageLogResponse,
 )
 from app.services.conversation_service import ConversationService
 from app.services.message_log_service import MessageLogService
+from app.utils.error_handler import raise_not_found
 
 router = APIRouter()
 
 
 @router.get(
     "",
-    response_model=list[ConversationResponse],
+    response_model=ConversationListResponse,
     summary="会話一覧取得",
 )
 async def get_conversations(
@@ -48,12 +50,19 @@ async def get_conversations(
 ):
     """テナントの会話一覧を取得します。"""
     service = ConversationService(db)
-    return await service.get_conversations_by_tenant(
+    conversations, total = await service.get_conversations_by_tenant(
         tenant_id=tenant_id,
         user_id=user_id,
         status=status_filter,
         from_date=from_date,
         to_date=to_date,
+        limit=limit,
+        offset=offset,
+    )
+
+    return ConversationListResponse(
+        items=[ConversationResponse.model_validate(c) for c in conversations],
+        total=total,
         limit=limit,
         offset=offset,
     )
@@ -65,18 +74,9 @@ async def get_conversations(
     summary="会話詳細取得",
 )
 async def get_conversation(
-    tenant_id: str,
-    conversation_id: str,
-    db: AsyncSession = Depends(get_db),
+    conversation: Conversation = Depends(get_conversation_or_404),
 ):
     """指定した会話の詳細を取得します。"""
-    service = ConversationService(db)
-    conversation = await service.get_conversation_by_id(conversation_id, tenant_id)
-    if not conversation:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"会話 '{conversation_id}' が見つかりません",
-        )
     return conversation
 
 
@@ -112,15 +112,13 @@ async def create_conversation(
 
     # 会話作成
     service = ConversationService(db)
-    conversation = await service.create_conversation(
+    return await service.create_conversation(
         conversation_id=str(uuid4()),
         tenant_id=tenant_id,
         user_id=request.user_id,
         model_id=model_id,
         workspace_enabled=request.workspace_enabled,
     )
-    await db.commit()
-    return conversation
 
 
 @router.put(
@@ -143,11 +141,7 @@ async def update_conversation(
         status=request.status,
     )
     if not conversation:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"会話 '{conversation_id}' が見つかりません",
-        )
-    await db.commit()
+        raise_not_found("会話", conversation_id)
     return conversation
 
 
@@ -159,18 +153,13 @@ async def update_conversation(
 async def archive_conversation(
     tenant_id: str,
     conversation_id: str,
-    request: ConversationArchiveRequest,
     db: AsyncSession = Depends(get_db),
 ):
     """会話をアーカイブします。"""
     service = ConversationService(db)
     conversation = await service.archive_conversation(conversation_id, tenant_id)
     if not conversation:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"会話 '{conversation_id}' が見つかりません",
-        )
-    await db.commit()
+        raise_not_found("会話", conversation_id)
     return conversation
 
 
@@ -188,11 +177,7 @@ async def delete_conversation(
     service = ConversationService(db)
     deleted = await service.delete_conversation(conversation_id, tenant_id)
     if not deleted:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"会話 '{conversation_id}' が見つかりません",
-        )
-    await db.commit()
+        raise_not_found("会話", conversation_id)
 
 
 @router.get(

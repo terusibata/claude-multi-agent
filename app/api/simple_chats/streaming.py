@@ -109,7 +109,6 @@ async def stream_simple_chat(
             application_type=request.application_type,
             system_prompt=request.system_prompt,
         )
-        await db.commit()
 
         response_headers["X-Chat-ID"] = chat.chat_id
 

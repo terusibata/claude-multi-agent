@@ -7,9 +7,12 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.dependencies import get_model_or_404
 from app.database import get_db
+from app.models.model import Model
 from app.schemas.model import ModelCreate, ModelResponse, ModelUpdate
 from app.services.model_service import ModelInUseError, ModelService
+from app.utils.error_handler import raise_not_found
 
 router = APIRouter()
 
@@ -30,19 +33,11 @@ async def get_models(
 
 @router.get("/{model_id}", response_model=ModelResponse, summary="モデル詳細取得")
 async def get_model(
-    model_id: str,
-    db: AsyncSession = Depends(get_db),
+    model: Model = Depends(get_model_or_404),
 ):
     """
     指定したIDのモデル定義を取得します。
     """
-    service = ModelService(db)
-    model = await service.get_by_id(model_id)
-    if not model:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"モデル '{model_id}' が見つかりません",
-        )
     return model
 
 
@@ -74,9 +69,7 @@ async def create_model(
             detail=f"モデル '{model_data.model_id}' は既に存在します",
         )
 
-    model = await service.create(model_data)
-    await db.commit()
-    return model
+    return await service.create(model_data)
 
 
 @router.put("/{model_id}", response_model=ModelResponse, summary="モデル定義更新")
@@ -91,11 +84,7 @@ async def update_model(
     service = ModelService(db)
     model = await service.update(model_id, model_data)
     if not model:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"モデル '{model_id}' が見つかりません",
-        )
-    await db.commit()
+        raise_not_found("モデル", model_id)
     return model
 
 
@@ -114,11 +103,7 @@ async def update_model_status(
     service = ModelService(db)
     model = await service.update_status(model_id, status_value)
     if not model:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"モデル '{model_id}' が見つかりません",
-        )
-    await db.commit()
+        raise_not_found("モデル", model_id)
     return model
 
 
@@ -144,11 +129,7 @@ async def delete_model(
     try:
         deleted = await service.delete(model_id)
         if not deleted:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"モデル '{model_id}' が見つかりません",
-            )
-        await db.commit()
+            raise_not_found("モデル", model_id)
     except ModelInUseError as e:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

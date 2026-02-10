@@ -29,8 +29,8 @@ class ConversationService:
         to_date: datetime | None = None,
         limit: int = 50,
         offset: int = 0,
-    ) -> list[Conversation]:
-        """テナントの会話一覧を取得"""
+    ) -> tuple[list[Conversation], int]:
+        """テナントの会話一覧と総件数を取得"""
         return await self.repo.find_by_tenant(
             tenant_id,
             user_id=user_id,
