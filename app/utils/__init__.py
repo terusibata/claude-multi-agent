@@ -38,8 +38,6 @@ from app.utils.error_handler import (
     raise_inactive_resource,
     raise_forbidden,
     raise_validation_error,
-    get_or_404,
-    get_active_or_error,
     handle_service_errors,
 )
 from app.utils.security import (
@@ -91,8 +89,6 @@ __all__ = [
     "raise_inactive_resource",
     "raise_forbidden",
     "raise_validation_error",
-    "get_or_404",
-    "get_active_or_error",
     "handle_service_errors",
     # セキュリティ
     "validate_path_traversal",

@@ -53,10 +53,13 @@ class ConversationListQuery(BaseModel):
     offset: int = Field(default=0, ge=0)
 
 
-class ConversationArchiveRequest(BaseModel):
-    """会話アーカイブリクエスト"""
+class ConversationListResponse(BaseModel):
+    """会話一覧レスポンス"""
 
-    pass
+    items: list[ConversationResponse]
+    total: int
+    limit: int
+    offset: int
 
 
 class ConversationUpdateRequest(BaseModel):

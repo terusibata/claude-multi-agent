@@ -4,10 +4,12 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_active_model
+from app.api.dependencies import get_active_model, get_tenant_or_404
 from app.database import get_db
+from app.models.tenant import Tenant
 from app.schemas.tenant import TenantCreateRequest, TenantResponse, TenantUpdateRequest
 from app.services.tenant_service import TenantService
+from app.utils.error_handler import raise_not_found
 
 router = APIRouter(prefix="/tenants")
 
@@ -53,13 +55,11 @@ async def create_tenant(
     if request.model_id:
         await get_active_model(request.model_id, db)
 
-    tenant = await service.create(
+    return await service.create(
         tenant_id=request.tenant_id,
         system_prompt=request.system_prompt,
         model_id=request.model_id,
     )
-    await db.commit()
-    return tenant
 
 
 @router.get(
@@ -68,17 +68,9 @@ async def create_tenant(
     summary="テナント取得",
 )
 async def get_tenant(
-    tenant_id: str,
-    db: AsyncSession = Depends(get_db),
+    tenant: Tenant = Depends(get_tenant_or_404),
 ):
     """テナントを取得"""
-    service = TenantService(db)
-    tenant = await service.get_by_id(tenant_id)
-    if not tenant:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"テナント '{tenant_id}' が見つかりません",
-        )
     return tenant
 
 
@@ -97,23 +89,18 @@ async def update_tenant(
 
     existing = await service.get_by_id(tenant_id)
     if not existing:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"テナント '{tenant_id}' が見つかりません",
-        )
+        raise_not_found("テナント", tenant_id)
 
     # モデルの存在確認
     if request.model_id:
         await get_active_model(request.model_id, db)
 
-    tenant = await service.update(
+    return await service.update(
         tenant_id=tenant_id,
         system_prompt=request.system_prompt,
         model_id=request.model_id,
         status=request.status,
     )
-    await db.commit()
-    return tenant
 
 
 @router.delete(
@@ -129,8 +116,4 @@ async def delete_tenant(
     service = TenantService(db)
     success = await service.delete(tenant_id)
     if not success:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"テナント '{tenant_id}' が見つかりません",
-        )
-    await db.commit()
+        raise_not_found("テナント", tenant_id)

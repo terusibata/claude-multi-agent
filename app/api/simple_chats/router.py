@@ -3,11 +3,12 @@
 """
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_tenant_or_404
+from app.api.dependencies import get_simple_chat_or_404, get_tenant_or_404
 from app.database import get_db
+from app.models.simple_chat import SimpleChat
 from app.models.tenant import Tenant
 from app.schemas.simple_chat import (
     SimpleChatDetailResponse,
@@ -16,6 +17,7 @@ from app.schemas.simple_chat import (
     SimpleChatResponse,
 )
 from app.services.simple_chat_service import SimpleChatService
+from app.utils.error_handler import raise_not_found
 
 router = APIRouter()
 
@@ -64,20 +66,12 @@ async def get_simple_chats(
     summary="シンプルチャット詳細取得",
 )
 async def get_simple_chat(
-    tenant_id: str,
-    chat_id: str,
+    chat: SimpleChat = Depends(get_simple_chat_or_404),
     db: AsyncSession = Depends(get_db),
 ):
     """指定したシンプルチャットの詳細を取得します。"""
     service = SimpleChatService(db)
-    chat = await service.get_chat_by_id(chat_id, tenant_id)
-    if not chat:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"チャット '{chat_id}' が見つかりません",
-        )
-
-    messages = await service.get_messages(chat_id)
+    messages = await service.get_messages(chat.chat_id)
 
     return SimpleChatDetailResponse(
         chat_id=chat.chat_id,
@@ -110,17 +104,13 @@ async def archive_simple_chat(
     service = SimpleChatService(db)
     chat = await service.archive_chat(chat_id, tenant_id)
     if not chat:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"チャット '{chat_id}' が見つかりません",
-        )
-    await db.commit()
+        raise_not_found("チャット", chat_id)
     return SimpleChatResponse.model_validate(chat)
 
 
 @router.delete(
     "/{chat_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
+    status_code=204,
     summary="シンプルチャット削除",
 )
 async def delete_simple_chat(
@@ -132,8 +122,4 @@ async def delete_simple_chat(
     service = SimpleChatService(db)
     deleted = await service.delete_chat(chat_id, tenant_id)
     if not deleted:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"チャット '{chat_id}' が見つかりません",
-        )
-    await db.commit()
+        raise_not_found("チャット", chat_id)
