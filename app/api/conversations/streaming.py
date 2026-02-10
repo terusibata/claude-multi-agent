@@ -318,12 +318,9 @@ async def _handle_file_upload(
                 file=file,
                 metadata=metadata,
             )
-        await db.commit()
     except HTTPException:
-        await db.rollback()
         raise
     except Exception as e:
-        await db.rollback()
         logger.error(
             "ファイルアップロードエラー",
             error=str(e),
