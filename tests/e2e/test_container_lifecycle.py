@@ -198,16 +198,16 @@ class TestSSEEventParsing:
         assert result["event"] == "text_delta"
         assert result["data"]["text"] == "Hello world"
 
-    def test_parse_result_event(self):
-        """result SSE イベントのパースが正常に動作すること"""
+    def test_parse_done_event(self):
+        """done SSE イベントのパースが正常に動作すること"""
         from app.services.execute_service import ExecuteService
 
         service = MagicMock(spec=ExecuteService)
-        event_str = 'event: result\ndata: {"usage": {"input_tokens": 100, "output_tokens": 50}, "cost_usd": "0.001"}'
+        event_str = 'event: done\ndata: {"usage": {"input_tokens": 100, "output_tokens": 50}, "cost_usd": "0.001"}'
         result = ExecuteService._parse_sse_event(service, event_str)
 
         assert result is not None
-        assert result["event"] == "result"
+        assert result["event"] == "done"
         assert result["data"]["usage"]["input_tokens"] == 100
 
     def test_parse_error_event(self):

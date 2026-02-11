@@ -9,7 +9,7 @@ Unix Socket経由でSSEイベントを中継する。
   2. ContainerOrchestrator経由でコンテナ取得・作成
   3. S3 → コンテナへファイル同期
   4. コンテナ内workspace_agentにリクエスト送信（Unix Socket）
-  5. SSEイベントを中継しつつ、resultイベントから使用量を抽出
+  5. SSEイベントを中継しつつ、doneイベントから使用量を抽出
   6. コンテナ → S3へファイル同期
   7. DB記録（使用量、メッセージログ、タイトル生成）
 """
@@ -174,7 +174,7 @@ class ExecuteService:
 
             async for event in self._stream_from_container(request, model, seq_counter):
                 # done イベントからメタデータ（usage/cost）を抽出
-                # SDK側の "result" イベントは _translate_event() で "done" に変換済み
+                # SDK側の "done" イベントを _translate_event() でホスト形式に変換
                 if event.get("event") == "done":
                     done_data = event.get("data", {})
 
@@ -463,7 +463,7 @@ class ExecuteService:
         SDKイベントをホスト正規形式に変換
 
         SDK側（workspace_agent）が送信するイベント形式:
-          text_delta, thinking, tool_use, tool_result, result, system, error, done
+          text_delta, thinking, tool_use, tool_result, done, system, error
         を、ホスト側の正規形式:
           assistant, thinking, tool_call, tool_result, done, system, error
         に変換し、seq と timestamp を付与する。
@@ -498,7 +498,7 @@ class ExecuteService:
                 content=data.get("content", ""),
                 is_error=data.get("is_error", False),
             )
-        elif event_type == "result":
+        elif event_type == "done":
             return format_done_event(
                 seq=seq_counter.next(),
                 status="error" if data.get("subtype") == "error_during_execution" else "success",
@@ -510,10 +510,6 @@ class ExecuteService:
                 duration_ms=data.get("duration_ms", 0),
                 session_id=data.get("session_id"),
             )
-        elif event_type == "done":
-            # SDK 終端 "done" イベント: result → done 変換で既にカバー済み
-            # 重複送信と done_data 上書きを防ぐため None を返す
-            return None
         else:
             # system, error 等: seq/timestamp を付与してそのまま中継
             return create_event(event_type, seq_counter.next(), data)

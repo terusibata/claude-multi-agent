@@ -90,7 +90,7 @@ class SSEEvent(BaseModel):
 
     event: str = Field(
         ...,
-        description="イベントタイプ (session_start / text_delta / tool_use / tool_result / thinking / result)",
+        description="イベントタイプ (session_start / text_delta / tool_use / tool_result / thinking / done)",
     )
     data: dict[str, Any] = Field(..., description="イベントデータ")
 
@@ -132,8 +132,8 @@ class ThinkingData(BaseModel):
     content: str
 
 
-class ResultData(BaseModel):
-    """結果イベントデータ"""
+class DoneData(BaseModel):
+    """完了イベントデータ"""
 
     subtype: str  # success / error_during_execution
     result: str | None = None
