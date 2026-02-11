@@ -292,7 +292,9 @@ class ExecuteService:
                 event_str, buffer = buffer.split("\n\n", 1)
                 raw_event = self._parse_sse_event(event_str)
                 if raw_event:
-                    yield self._translate_event(raw_event, seq_counter)
+                    translated = self._translate_event(raw_event, seq_counter)
+                    if translated is not None:
+                        yield translated
 
     def _parse_sse_event(self, event_str: str) -> dict | None:
         """SSEイベント文字列をパース"""
@@ -508,8 +510,12 @@ class ExecuteService:
                 duration_ms=data.get("duration_ms", 0),
                 session_id=data.get("session_id"),
             )
+        elif event_type == "done":
+            # SDK 終端 "done" イベント: result → done 変換で既にカバー済み
+            # 重複送信と done_data 上書きを防ぐため None を返す
+            return None
         else:
-            # system, error, done 等: seq/timestamp を付与してそのまま中継
+            # system, error 等: seq/timestamp を付与してそのまま中継
             return create_event(event_type, seq_counter.next(), data)
 
     @staticmethod
