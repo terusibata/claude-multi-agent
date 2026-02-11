@@ -20,12 +20,14 @@ def _build_sdk_options(request: ExecuteRequest):
     """SDK実行オプションを ClaudeAgentOptions として組み立てる"""
     from claude_agent_sdk import ClaudeAgentOptions
 
-    # Proxy 経由の環境変数を明示的に渡す
+    # Bedrock + Proxy 経由の環境変数を明示的に渡す
     env = {
-        "ANTHROPIC_BASE_URL": os.environ.get("ANTHROPIC_BASE_URL", "http://127.0.0.1:8080"),
+        "CLAUDE_CODE_USE_BEDROCK": os.environ.get("CLAUDE_CODE_USE_BEDROCK", "1"),
+        "CLAUDE_CODE_SKIP_BEDROCK_AUTH": os.environ.get("CLAUDE_CODE_SKIP_BEDROCK_AUTH", "1"),
+        "AWS_REGION": os.environ.get("AWS_REGION", "us-west-2"),
+        "ANTHROPIC_BEDROCK_BASE_URL": os.environ.get("ANTHROPIC_BEDROCK_BASE_URL", "http://127.0.0.1:8080"),
         "HTTP_PROXY": os.environ.get("HTTP_PROXY", "http://127.0.0.1:8080"),
         "HTTPS_PROXY": os.environ.get("HTTPS_PROXY", "http://127.0.0.1:8080"),
-        "CLAUDE_CODE_USE_BEDROCK": os.environ.get("CLAUDE_CODE_USE_BEDROCK", "1"),
     }
 
     # MCP servers を dict 形式に変換
@@ -117,6 +119,12 @@ def _message_to_sse_events(message) -> list[str]:
     events = []
 
     if isinstance(message, AssistantMessage):
+        # tool_use_id → tool_name マッピングを構築（ToolResultBlock用）
+        tool_name_map: dict[str, str] = {}
+        for block in message.content:
+            if isinstance(block, ToolUseBlock):
+                tool_name_map[block.id] = block.name
+
         for block in message.content:
             if isinstance(block, TextBlock):
                 events.append(_format_sse("text_delta", {"text": block.text}))
@@ -129,6 +137,7 @@ def _message_to_sse_events(message) -> list[str]:
             elif isinstance(block, ToolResultBlock):
                 events.append(_format_sse("tool_result", {
                     "tool_use_id": block.tool_use_id,
+                    "tool_name": tool_name_map.get(block.tool_use_id, ""),
                     "content": str(block.content) if block.content else "",
                     "is_error": block.is_error or False,
                 }))

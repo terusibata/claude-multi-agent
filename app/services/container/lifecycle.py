@@ -131,6 +131,50 @@ class ContainerLifecycleManager:
             result.append(info)
         return result
 
+    async def wait_for_agent_ready(
+        self, agent_socket: str, timeout: float = 30.0
+    ) -> bool:
+        """
+        agent.sock がリスン状態になるまでポーリング
+
+        WarmPool枯渇時の新規作成パスで使用。
+        コンテナ起動後、entrypoint.sh 内で socat + workspace_agent が
+        起動するまでの待ち時間を吸収する。
+
+        Args:
+            agent_socket: agent.sock のパス
+            timeout: タイムアウト（秒）
+
+        Returns:
+            True: 準備完了, False: タイムアウト
+        """
+        import httpx
+
+        deadline = asyncio.get_event_loop().time() + timeout
+        while asyncio.get_event_loop().time() < deadline:
+            try:
+                transport = httpx.AsyncHTTPTransport(uds=agent_socket)
+                async with httpx.AsyncClient(
+                    transport=transport, timeout=2.0
+                ) as client:
+                    resp = await client.get("http://localhost/health")
+                    if resp.status_code == 200:
+                        logger.info(
+                            "エージェント準備完了",
+                            agent_socket=agent_socket,
+                        )
+                        return True
+            except Exception:
+                pass
+            await asyncio.sleep(0.5)
+
+        logger.error(
+            "エージェント起動タイムアウト",
+            agent_socket=agent_socket,
+            timeout=timeout,
+        )
+        return False
+
     async def exec_in_container(
         self, container_id: str, cmd: list[str]
     ) -> tuple[int, str]:

@@ -43,10 +43,15 @@ from app.infrastructure.distributed_lock import (
 )
 from app.utils.streaming import (
     SequenceCounter,
+    create_event,
+    format_assistant_event,
     format_context_status_event,
     format_done_event,
     format_error_event,
+    format_thinking_event,
     format_title_event,
+    format_tool_call_event,
+    format_tool_result_event,
 )
 
 logger = structlog.get_logger(__name__)
@@ -168,8 +173,9 @@ class ExecuteService:
             background_sync_tasks: set[asyncio.Task] = set()
 
             async for event in self._stream_from_container(request, model, seq_counter):
-                # result イベントからメタデータ（usage/cost）を抽出
-                if event.get("event") == "result":
+                # done イベントからメタデータ（usage/cost）を抽出
+                # SDK側の "result" イベントは _translate_event() で "done" に変換済み
+                if event.get("event") == "done":
                     done_data = event.get("data", {})
 
                 # tool_result イベント検出時に非同期ファイル同期をトリガー
@@ -281,12 +287,12 @@ class ExecuteService:
             decoded = chunk.decode("utf-8", errors="replace")
             buffer += decoded
 
-            # SSEイベントをパース
+            # SSEイベントをパース → 正規形式に変換して中継
             while "\n\n" in buffer:
                 event_str, buffer = buffer.split("\n\n", 1)
-                event = self._parse_sse_event(event_str)
-                if event:
-                    yield event
+                raw_event = self._parse_sse_event(event_str)
+                if raw_event:
+                    yield self._translate_event(raw_event, seq_counter)
 
     def _parse_sse_event(self, event_str: str) -> dict | None:
         """SSEイベント文字列をパース"""
@@ -449,6 +455,62 @@ class ExecuteService:
             estimated_context_tokens=estimated,
             context_limit_reached=limit_reached,
         )
+
+    def _translate_event(self, raw_event: dict, seq_counter: SequenceCounter) -> dict:
+        """
+        SDKイベントをホスト正規形式に変換
+
+        SDK側（workspace_agent）が送信するイベント形式:
+          text_delta, thinking, tool_use, tool_result, result, system, error, done
+        を、ホスト側の正規形式:
+          assistant, thinking, tool_call, tool_result, done, system, error
+        に変換し、seq と timestamp を付与する。
+        """
+        event_type = raw_event.get("event", "")
+        data = raw_event.get("data", {})
+
+        if event_type == "text_delta":
+            return format_assistant_event(
+                seq=seq_counter.next(),
+                content_blocks=[{"type": "text", "text": data.get("text", "")}],
+            )
+        elif event_type == "thinking":
+            return format_thinking_event(
+                seq=seq_counter.next(),
+                content=data.get("content", ""),
+            )
+        elif event_type == "tool_use":
+            return format_tool_call_event(
+                seq=seq_counter.next(),
+                tool_use_id=data.get("tool_use_id", ""),
+                tool_name=data.get("tool_name", ""),
+                tool_input=data.get("input", {}),
+                summary=f"ツール実行: {data.get('tool_name', '')}",
+            )
+        elif event_type == "tool_result":
+            return format_tool_result_event(
+                seq=seq_counter.next(),
+                tool_use_id=data.get("tool_use_id", ""),
+                tool_name=data.get("tool_name", ""),
+                status="error" if data.get("is_error") else "completed",
+                content=data.get("content", ""),
+                is_error=data.get("is_error", False),
+            )
+        elif event_type == "result":
+            return format_done_event(
+                seq=seq_counter.next(),
+                status="error" if data.get("subtype") == "error_during_execution" else "success",
+                result=data.get("result"),
+                errors=None,
+                usage=data.get("usage", {}),
+                cost_usd=data.get("cost_usd", "0"),
+                turn_count=data.get("num_turns", 0),
+                duration_ms=data.get("duration_ms", 0),
+                session_id=data.get("session_id"),
+            )
+        else:
+            # system, error, done 等: seq/timestamp を付与してそのまま中継
+            return create_event(event_type, seq_counter.next(), data)
 
     @staticmethod
     def _is_file_tool_result(event: dict) -> bool:

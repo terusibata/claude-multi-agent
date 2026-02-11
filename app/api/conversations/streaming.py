@@ -150,11 +150,13 @@ async def _event_generator(
                 continue
 
     except asyncio.CancelledError:
+        # クライアント切断: バックグラウンドタスクはキャンセルせず継続させる
+        # ExecuteService が DB記録・ファイル同期を最後まで完了する
         logger.info(
             "クライアント切断（バックグラウンド実行は継続）",
             conversation_id=request.conversation_id,
         )
-        raise
+        return
     except Exception as e:
         logger.error(
             "イベントジェネレーターエラー",
@@ -168,13 +170,6 @@ async def _event_generator(
         except (asyncio.CancelledError, Exception):
             pass
         raise
-    finally:
-        if not background_task.done():
-            background_task.cancel()
-            try:
-                await background_task
-            except (asyncio.CancelledError, Exception):
-                pass
 
 
 @router.post(

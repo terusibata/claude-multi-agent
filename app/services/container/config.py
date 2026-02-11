@@ -32,14 +32,18 @@ def get_container_create_config(container_id: str) -> dict:
     return {
         "Image": image,
         "Env": [
-            # socat TCP→UDS リバースプロキシ経由で外部通信
-            "ANTHROPIC_BASE_URL=http://127.0.0.1:8080",
+            # Bedrock設定: Proxy側でSigV4署名を注入するため、SDK側の認証はスキップ
+            "CLAUDE_CODE_USE_BEDROCK=1",
+            "CLAUDE_CODE_SKIP_BEDROCK_AUTH=1",
+            f"AWS_REGION={settings.aws_region}",
+            # Bedrock APIベースURL: socat TCP→UDS経由でホスト側Reverse Proxyに到達
+            "ANTHROPIC_BEDROCK_BASE_URL=http://127.0.0.1:8080",
+            # pip/npm/curl等の外部通信用Forward Proxy
             "HTTP_PROXY=http://127.0.0.1:8080",
             "HTTPS_PROXY=http://127.0.0.1:8080",
             "NO_PROXY=localhost,127.0.0.1",
-            "CLAUDE_CODE_USE_BEDROCK=1",
             "PIP_REQUIRE_VIRTUALENV=true",
-            # Node.js 20: global-agentでHTTP_PROXYをfetch()に適用（Phase 5）
+            # Node.js 20: global-agentでHTTP_PROXYをfetch()に適用
             "GLOBAL_AGENT_HTTP_PROXY=http://127.0.0.1:8080",
             "GLOBAL_AGENT_HTTPS_PROXY=http://127.0.0.1:8080",
             "GLOBAL_AGENT_NO_PROXY=localhost,127.0.0.1",
