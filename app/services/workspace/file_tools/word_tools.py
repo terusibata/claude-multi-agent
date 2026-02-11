@@ -9,14 +9,20 @@ AIエージェントがWordファイルを理解するための軽量ツール�
 3. search_document: ドキュメント全体からキーワード検索
 """
 
-from __future__ import annotations
-
 import io
-import re
-import unicodedata
 from typing import TYPE_CHECKING, Any, TypedDict
 
 import structlog
+
+from app.services.workspace.file_tools.shared_utils import (
+    build_search_pattern,
+    check_library_available,
+    check_old_format,
+    create_context_snippet,
+    format_tool_error,
+    format_tool_success,
+    normalize_text,
+)
 
 if TYPE_CHECKING:
     from app.services.workspace_service import WorkspaceService
@@ -95,28 +101,6 @@ DEFAULT_MAX_PARAGRAPHS = 50  # デフォルトの最大取得段落数
 # Internal Utilities
 # =============================================================================
 
-def _normalize_text(text: str) -> str:
-    """テキストの正規化（Unicode NFC、制御文字除去）"""
-    if not text:
-        return ""
-
-    text = unicodedata.normalize("NFC", text)
-
-    result = []
-    for ch in text:
-        code = ord(ch)
-        if ch in ('\n', '\r', '\t'):
-            result.append(ch)
-        elif code < 0x20 or code == 0x7F or (0x80 <= code <= 0x9F):
-            continue
-        elif code in (0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF):
-            continue
-        else:
-            result.append(ch)
-
-    return "".join(result)
-
-
 def _get_heading_level(para) -> int | None:
     """段落が見出しなら、そのレベルを返す"""
     style_name = para.style.name if para.style else ""
@@ -134,40 +118,11 @@ def _load_document_from_bytes(content: bytes):
     return Document(io.BytesIO(content))
 
 
-def _check_old_format(file_path: str) -> dict[str, Any] | None:
-    """古いOffice形式（.doc）のチェック"""
-    if file_path.lower().endswith(".doc"):
-        return {
-            "content": [{
-                "type": "text",
-                "text": (
-                    f"エラー: '{file_path}' は古いWord形式（.doc）です。\n\n"
-                    "このツールは .docx（Office Open XML）形式のみ対応しています。\n"
-                    ".doc（バイナリ形式）ファイルは python-docx では読み取れません。\n\n"
-                    "対処方法:\n"
-                    "1. Microsoft Word で .docx 形式に変換して再アップロード\n"
-                    "2. LibreOffice で .docx 形式に変換して再アップロード\n"
-                    "3. オンライン変換ツールを使用"
-                ),
-            }],
-            "is_error": True,
-        }
-    return None
-
-
-def _create_context_snippet(text: str, match_start: int, match_end: int, context_chars: int = 40) -> str:
-    """検索マッチの前後コンテキストを生成"""
-    start = max(0, match_start - context_chars)
-    end = min(len(text), match_end + context_chars)
-
-    prefix = "..." if start > 0 else ""
-    suffix = "..." if end < len(text) else ""
-
-    before = text[start:match_start]
-    match = text[match_start:match_end]
-    after = text[match_end:end]
-
-    return f"{prefix}{before}[{match}]{after}{suffix}"
+def _check_old_format_word(file_path: str) -> dict[str, Any] | None:
+    """古いWord形式（.doc）のチェック"""
+    return check_old_format(
+        file_path, ".doc", "Word", ".docx", "python-docx", "Microsoft Word"
+    )
 
 
 # =============================================================================
@@ -193,11 +148,10 @@ def get_document_info(content: bytes, filename: str) -> DocumentInfo:
 
     # 見出し情報を収集
     headings: list[HeadingInfo] = []
-    current_heading_start = 0
     current_heading_chars = 0
 
     for i, para in enumerate(paragraphs):
-        para_text = _normalize_text(para.text)
+        para_text = normalize_text(para.text)
         char_count = len(para_text)
         total_characters += char_count
 
@@ -319,7 +273,7 @@ def get_document_content(
 
     for i in range(actual_start - 1, min(actual_end, total_paragraphs)):
         para = paragraphs[i]
-        para_text = _normalize_text(para.text).strip()
+        para_text = normalize_text(para.text).strip()
         if para_text:
             content_lines.append(para_text)
             content_lines.append("")
@@ -370,20 +324,14 @@ def search_document(
     doc = _load_document_from_bytes(content)
 
     hits: list[SearchHit] = []
-
-    # 検索パターンを準備
-    flags = 0 if case_sensitive else re.IGNORECASE
-    try:
-        pattern = re.compile(re.escape(query), flags)
-    except re.error:
-        raise ValueError(f"無効な検索クエリ: {query}")
+    pattern = build_search_pattern(query, case_sensitive)
 
     # 段落を検索
     for i, para in enumerate(doc.paragraphs):
         if len(hits) >= max_hits:
             break
 
-        para_text = _normalize_text(para.text)
+        para_text = normalize_text(para.text)
         if not para_text:
             continue
 
@@ -397,7 +345,7 @@ def search_document(
                 table_index=None,
                 heading_level=level,
                 text=para_text[:200] if len(para_text) > 200 else para_text,
-                context=_create_context_snippet(para_text, match.start(), match.end()),
+                context=create_context_snippet(para_text, match.start(), match.end()),
             ))
 
     # 表を検索
@@ -412,7 +360,7 @@ def search_document(
 
                 row_texts = []
                 for cell in row.cells:
-                    cell_text = _normalize_text(cell.text).strip()
+                    cell_text = normalize_text(cell.text).strip()
                     row_texts.append(cell_text)
 
                     match = pattern.search(cell_text)
@@ -456,17 +404,13 @@ async def get_document_info_handler(
     """
     file_path = args.get("file_path", "")
 
-    old_format_error = _check_old_format(file_path)
+    old_format_error = _check_old_format_word(file_path)
     if old_format_error:
         return old_format_error
 
-    try:
-        from docx import Document  # noqa: F401
-    except ImportError:
-        return {
-            "content": [{"type": "text", "text": "エラー: python-docxライブラリがインストールされていません。"}],
-            "is_error": True,
-        }
+    lib_error = check_library_available("docx", "python-docx")
+    if lib_error:
+        return lib_error
 
     try:
         content, filename, _ = await workspace_service.download_file(
@@ -510,20 +454,12 @@ async def get_document_info_handler(
         result_lines.append("データ取得: `get_document_content` を使用")
         result_lines.append("検索: `search_document` を使用")
 
-        return {
-            "content": [{"type": "text", "text": "\n".join(result_lines)}],
-        }
+        return format_tool_success("\n".join(result_lines))
     except FileNotFoundError:
-        return {
-            "content": [{"type": "text", "text": f"ファイルが見つかりません: {file_path}"}],
-            "is_error": True,
-        }
+        return format_tool_error(f"ファイルが見つかりません: {file_path}")
     except Exception as e:
         logger.error("Word情報取得エラー", error=str(e), file_path=file_path)
-        return {
-            "content": [{"type": "text", "text": f"読み込みエラー: {str(e)}"}],
-            "is_error": True,
-        }
+        return format_tool_error(f"読み込みエラー: {str(e)}")
 
 
 async def get_document_content_handler(
@@ -551,17 +487,13 @@ async def get_document_content_handler(
     max_paragraphs = args.get("max_paragraphs", DEFAULT_MAX_PARAGRAPHS)
     include_tables = args.get("include_tables", True)
 
-    old_format_error = _check_old_format(file_path)
+    old_format_error = _check_old_format_word(file_path)
     if old_format_error:
         return old_format_error
 
-    try:
-        from docx import Document  # noqa: F401
-    except ImportError:
-        return {
-            "content": [{"type": "text", "text": "エラー: python-docxライブラリがインストールされていません。"}],
-            "is_error": True,
-        }
+    lib_error = check_library_available("docx", "python-docx")
+    if lib_error:
+        return lib_error
 
     try:
         content, filename, _ = await workspace_service.download_file(
@@ -595,25 +527,14 @@ async def get_document_content_handler(
             result_lines.append("まだ続きがあります。次を取得するには:")
             result_lines.append(f"`start_paragraph={result['end_paragraph'] + 1}` を指定してください。")
 
-        return {
-            "content": [{"type": "text", "text": "\n".join(result_lines)}],
-        }
+        return format_tool_success("\n".join(result_lines))
     except FileNotFoundError:
-        return {
-            "content": [{"type": "text", "text": f"ファイルが見つかりません: {file_path}"}],
-            "is_error": True,
-        }
+        return format_tool_error(f"ファイルが見つかりません: {file_path}")
     except ValueError as e:
-        return {
-            "content": [{"type": "text", "text": str(e)}],
-            "is_error": True,
-        }
+        return format_tool_error(str(e))
     except Exception as e:
         logger.error("Wordコンテンツ取得エラー", error=str(e), file_path=file_path)
-        return {
-            "content": [{"type": "text", "text": f"読み込みエラー: {str(e)}"}],
-            "is_error": True,
-        }
+        return format_tool_error(f"読み込みエラー: {str(e)}")
 
 
 async def search_document_handler(
@@ -639,23 +560,16 @@ async def search_document_handler(
     max_hits = args.get("max_hits", 50)
     include_tables = args.get("include_tables", True)
 
-    old_format_error = _check_old_format(file_path)
+    old_format_error = _check_old_format_word(file_path)
     if old_format_error:
         return old_format_error
 
     if not query:
-        return {
-            "content": [{"type": "text", "text": "エラー: query（検索キーワード）を指定してください。"}],
-            "is_error": True,
-        }
+        return format_tool_error("エラー: query（検索キーワード）を指定してください。")
 
-    try:
-        from docx import Document  # noqa: F401
-    except ImportError:
-        return {
-            "content": [{"type": "text", "text": "エラー: python-docxライブラリがインストールされていません。"}],
-            "is_error": True,
-        }
+    lib_error = check_library_available("docx", "python-docx")
+    if lib_error:
+        return lib_error
 
     try:
         content, filename, _ = await workspace_service.download_file(
@@ -690,22 +604,11 @@ async def search_document_handler(
         else:
             result_lines.append("検索結果はありませんでした。")
 
-        return {
-            "content": [{"type": "text", "text": "\n".join(result_lines)}],
-        }
+        return format_tool_success("\n".join(result_lines))
     except FileNotFoundError:
-        return {
-            "content": [{"type": "text", "text": f"ファイルが見つかりません: {file_path}"}],
-            "is_error": True,
-        }
+        return format_tool_error(f"ファイルが見つかりません: {file_path}")
     except ValueError as e:
-        return {
-            "content": [{"type": "text", "text": str(e)}],
-            "is_error": True,
-        }
+        return format_tool_error(str(e))
     except Exception as e:
         logger.error("Word検索エラー", error=str(e), file_path=file_path, query=query)
-        return {
-            "content": [{"type": "text", "text": f"検索エラー: {str(e)}"}],
-            "is_error": True,
-        }
+        return format_tool_error(f"検索エラー: {str(e)}")

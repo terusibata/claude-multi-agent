@@ -126,7 +126,7 @@ async def _shutdown_container_stack(
     try:
         await redis.aclose()
     except Exception:
-        pass
+        logger.debug("シャットダウンクリーンアップ失敗", exc_info=True)
 
 
 async def _shutdown_resources() -> None:

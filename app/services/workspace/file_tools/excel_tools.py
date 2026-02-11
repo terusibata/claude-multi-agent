@@ -9,16 +9,21 @@ AIエージェントがExcelファイルを理解するための軽量ツール�
 3. search_workbook: ワークブック全体からキーワード検索
 """
 
-from __future__ import annotations
-
 import csv
 import io
-import re
-import unicodedata
 from io import StringIO
 from typing import TYPE_CHECKING, Any, TypedDict
 
 import structlog
+
+from app.services.workspace.file_tools.shared_utils import (
+    build_search_pattern,
+    check_library_available,
+    check_old_format,
+    format_tool_error,
+    format_tool_success,
+    normalize_text,
+)
 
 if TYPE_CHECKING:
     from app.services.workspace_service import WorkspaceService
@@ -87,30 +92,6 @@ DEFAULT_MAX_ROWS = 100  # デフォルトの最大取得行数
 # Internal Utilities
 # =============================================================================
 
-def _normalize_text(text: str) -> str:
-    """テキストの正規化（Unicode NFC、制御文字除去）"""
-    if not text:
-        return ""
-
-    # Unicode NFC正規化
-    text = unicodedata.normalize("NFC", text)
-
-    # 制御文字を除去（改行・タブは保持）
-    result = []
-    for ch in text:
-        code = ord(ch)
-        if ch in ('\n', '\r', '\t'):
-            result.append(ch)
-        elif code < 0x20 or code == 0x7F or (0x80 <= code <= 0x9F):
-            continue
-        elif code in (0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF):
-            continue
-        else:
-            result.append(ch)
-
-    return "".join(result)
-
-
 def _get_cell_value(cell) -> str:
     """セルの表示値を取得"""
     value = cell.value
@@ -124,10 +105,10 @@ def _get_cell_value(cell) -> str:
             if isinstance(value, (datetime.datetime, datetime.date)):
                 return value.strftime("%Y-%m-%d")
         except Exception:
-            pass
+            logger.debug("日付フォーマット失敗", exc_info=True)
 
     text = str(value)
-    text = _normalize_text(text)
+    text = normalize_text(text)
 
     return text.strip()
 
@@ -147,7 +128,7 @@ def _get_print_area(ws) -> tuple[int, int, int, int] | None:
                 min_col, min_row, max_col, max_row = range_boundaries(pa_str)
                 return (min_row, min_col, max_row, max_col)
     except Exception:
-        pass
+        logger.debug("印刷領域パース失敗", exc_info=True)
 
     return None
 
@@ -184,6 +165,7 @@ def _build_merged_lookup(ws, area: tuple[int, int, int, int]) -> dict[tuple[int,
                     if area_min_row <= r <= area_max_row and area_min_col <= c <= area_max_col:
                         lookup[(r, c)] = (r0, c0)
         except Exception:
+            logger.debug("セル値読み取り失敗", exc_info=True)
             continue
 
     return lookup
@@ -209,25 +191,11 @@ def _load_workbook_from_bytes(content: bytes):
     )
 
 
-def _check_old_format(file_path: str) -> dict[str, Any] | None:
-    """古いOffice形式（.xls）のチェック"""
-    if file_path.lower().endswith(".xls"):
-        return {
-            "content": [{
-                "type": "text",
-                "text": (
-                    f"エラー: '{file_path}' は古いExcel形式（.xls）です。\n\n"
-                    "このツールは .xlsx/.xlsm（Office Open XML）形式のみ対応しています。\n"
-                    ".xls（BIFF形式）ファイルは openpyxl では読み取れません。\n\n"
-                    "対処方法:\n"
-                    "1. Microsoft Excel で .xlsx 形式に変換して再アップロード\n"
-                    "2. LibreOffice Calc で .xlsx 形式に変換して再アップロード\n"
-                    "3. オンライン変換ツールを使用"
-                ),
-            }],
-            "is_error": True,
-        }
-    return None
+def _check_old_format_excel(file_path: str) -> dict[str, Any] | None:
+    """古いExcel形式（.xls）のチェック"""
+    return check_old_format(
+        file_path, ".xls", "Excel", ".xlsx", "openpyxl", "Microsoft Excel"
+    )
 
 
 # =============================================================================
@@ -414,12 +382,11 @@ def search_workbook(
     hits: list[SearchHit] = []
 
     # 検索パターンを準備
-    flags = 0 if case_sensitive else re.IGNORECASE
     try:
-        pattern = re.compile(re.escape(query), flags)
-    except re.error:
+        pattern = build_search_pattern(query, case_sensitive)
+    except ValueError:
         wb.close()
-        raise ValueError(f"無効な検索クエリ: {query}")
+        raise
 
     for sheet_name in wb.sheetnames:
         if len(hits) >= max_hits:
@@ -497,18 +464,13 @@ async def get_sheet_info_handler(
     """
     file_path = args.get("file_path", "")
 
-    # 古い形式チェック
-    old_format_error = _check_old_format(file_path)
+    old_format_error = _check_old_format_excel(file_path)
     if old_format_error:
         return old_format_error
 
-    try:
-        import openpyxl  # noqa: F401
-    except ImportError:
-        return {
-            "content": [{"type": "text", "text": "エラー: openpyxlライブラリがインストールされていません。"}],
-            "is_error": True,
-        }
+    lib_error = check_library_available("openpyxl", "openpyxl")
+    if lib_error:
+        return lib_error
 
     try:
         content, filename, _ = await workspace_service.download_file(
@@ -537,20 +499,12 @@ async def get_sheet_info_handler(
         result_lines.append("データを取得するには `get_sheet_csv` を使用してください。")
         result_lines.append("キーワード検索には `search_workbook` を使用してください。")
 
-        return {
-            "content": [{"type": "text", "text": "\n".join(result_lines)}],
-        }
+        return format_tool_success("\n".join(result_lines))
     except FileNotFoundError:
-        return {
-            "content": [{"type": "text", "text": f"ファイルが見つかりません: {file_path}"}],
-            "is_error": True,
-        }
+        return format_tool_error(f"ファイルが見つかりません: {file_path}")
     except Exception as e:
         logger.error("Excel情報取得エラー", error=str(e), file_path=file_path)
-        return {
-            "content": [{"type": "text", "text": f"読み込みエラー: {str(e)}"}],
-            "is_error": True,
-        }
+        return format_tool_error(f"読み込みエラー: {str(e)}")
 
 
 async def get_sheet_csv_handler(
@@ -578,24 +532,19 @@ async def get_sheet_csv_handler(
     max_rows = args.get("max_rows", DEFAULT_MAX_ROWS)
     use_print_area = args.get("use_print_area", True)
 
-    # 古い形式チェック
-    old_format_error = _check_old_format(file_path)
+    old_format_error = _check_old_format_excel(file_path)
     if old_format_error:
         return old_format_error
 
     if not sheet_name:
-        return {
-            "content": [{"type": "text", "text": "エラー: sheet_name（シート名）を指定してください。\nget_sheet_info でシート一覧を確認できます。"}],
-            "is_error": True,
-        }
+        return format_tool_error(
+            "エラー: sheet_name（シート名）を指定してください。\n"
+            "get_sheet_info でシート一覧を確認できます。"
+        )
 
-    try:
-        import openpyxl  # noqa: F401
-    except ImportError:
-        return {
-            "content": [{"type": "text", "text": "エラー: openpyxlライブラリがインストールされていません。"}],
-            "is_error": True,
-        }
+    lib_error = check_library_available("openpyxl", "openpyxl")
+    if lib_error:
+        return lib_error
 
     try:
         content, _, _ = await workspace_service.download_file(
@@ -626,25 +575,14 @@ async def get_sheet_csv_handler(
             result_lines.append(f"まだ続きがあります。次を取得するには:")
             result_lines.append(f"`start_row={result['end_row'] + 1}` を指定してください。")
 
-        return {
-            "content": [{"type": "text", "text": "\n".join(result_lines)}],
-        }
+        return format_tool_success("\n".join(result_lines))
     except FileNotFoundError:
-        return {
-            "content": [{"type": "text", "text": f"ファイルが見つかりません: {file_path}"}],
-            "is_error": True,
-        }
+        return format_tool_error(f"ファイルが見つかりません: {file_path}")
     except ValueError as e:
-        return {
-            "content": [{"type": "text", "text": str(e)}],
-            "is_error": True,
-        }
+        return format_tool_error(str(e))
     except Exception as e:
         logger.error("ExcelCSV取得エラー", error=str(e), file_path=file_path)
-        return {
-            "content": [{"type": "text", "text": f"読み込みエラー: {str(e)}"}],
-            "is_error": True,
-        }
+        return format_tool_error(f"読み込みエラー: {str(e)}")
 
 
 async def search_workbook_handler(
@@ -668,24 +606,16 @@ async def search_workbook_handler(
     case_sensitive = args.get("case_sensitive", False)
     max_hits = args.get("max_hits", 50)
 
-    # 古い形式チェック
-    old_format_error = _check_old_format(file_path)
+    old_format_error = _check_old_format_excel(file_path)
     if old_format_error:
         return old_format_error
 
     if not query:
-        return {
-            "content": [{"type": "text", "text": "エラー: query（検索キーワード）を指定してください。"}],
-            "is_error": True,
-        }
+        return format_tool_error("エラー: query（検索キーワード）を指定してください。")
 
-    try:
-        import openpyxl  # noqa: F401
-    except ImportError:
-        return {
-            "content": [{"type": "text", "text": "エラー: openpyxlライブラリがインストールされていません。"}],
-            "is_error": True,
-        }
+    lib_error = check_library_available("openpyxl", "openpyxl")
+    if lib_error:
+        return lib_error
 
     try:
         content, _, _ = await workspace_service.download_file(
@@ -715,22 +645,11 @@ async def search_workbook_handler(
         else:
             result_lines.append("検索結果はありませんでした。")
 
-        return {
-            "content": [{"type": "text", "text": "\n".join(result_lines)}],
-        }
+        return format_tool_success("\n".join(result_lines))
     except FileNotFoundError:
-        return {
-            "content": [{"type": "text", "text": f"ファイルが見つかりません: {file_path}"}],
-            "is_error": True,
-        }
+        return format_tool_error(f"ファイルが見つかりません: {file_path}")
     except ValueError as e:
-        return {
-            "content": [{"type": "text", "text": str(e)}],
-            "is_error": True,
-        }
+        return format_tool_error(str(e))
     except Exception as e:
         logger.error("Excel検索エラー", error=str(e), file_path=file_path, query=query)
-        return {
-            "content": [{"type": "text", "text": f"検索エラー: {str(e)}"}],
-            "is_error": True,
-        }
+        return format_tool_error(f"検索エラー: {str(e)}")

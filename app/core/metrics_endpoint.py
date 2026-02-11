@@ -4,7 +4,10 @@ Prometheus形式でメトリクスを公開
 """
 import os
 
+import structlog
 from fastapi.responses import PlainTextResponse
+
+logger = structlog.get_logger(__name__)
 
 from app.database import get_pool_status
 from app.infrastructure.metrics import (
@@ -32,7 +35,7 @@ async def metrics_handler(app_state) -> PlainTextResponse:
         db_gauge.set(pool_status.get("checked_out", 0), state="active")
         db_gauge.set(pool_status.get("overflow", 0), state="overflow")
     except Exception:
-        pass
+        logger.debug("メトリクス収集失敗", target="db_pool", exc_info=True)
 
     # Redisプール状態を更新
     try:
@@ -43,7 +46,7 @@ async def metrics_handler(app_state) -> PlainTextResponse:
                 redis_info.get("max_connections", 0), type="redis_max"
             )
     except Exception:
-        pass
+        logger.debug("メトリクス収集失敗", target="redis_pool", exc_info=True)
 
     # ワークスペースコンテナメトリクス更新
     try:
@@ -55,7 +58,7 @@ async def metrics_handler(app_state) -> PlainTextResponse:
         cpu_count = os.cpu_count() or 1
         get_workspace_host_cpu_percent().set(round(load[0] / cpu_count * 100, 1))
     except Exception:
-        pass
+        logger.debug("メトリクス収集失敗", target="workspace_container", exc_info=True)
 
     registry = get_metrics_registry()
     return PlainTextResponse(

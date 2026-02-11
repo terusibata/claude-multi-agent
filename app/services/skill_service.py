@@ -279,7 +279,7 @@ class SkillService:
                 try:
                     created_file.unlink(missing_ok=True)
                 except OSError:
-                    pass
+                    logger.debug("クリーンアップファイル削除失敗", exc_info=True)
             raise
 
         # DBにメタデータを保存
