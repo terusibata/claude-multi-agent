@@ -10,22 +10,18 @@ AIエージェントがPowerPointファイルを理解するための軽量ツ�
 """
 
 import io
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import Any, TypedDict
 
 import structlog
 
-from app.services.workspace.file_tools.shared_utils import (
+from app.services.workspace.file_tools.utils import (
     build_search_pattern,
-    check_library_available,
-    check_old_format,
     create_context_snippet,
+    file_tool_handler,
     format_tool_error,
     format_tool_success,
     normalize_text,
 )
-
-if TYPE_CHECKING:
-    from app.services.workspace_service import WorkspaceService
 
 logger = structlog.get_logger(__name__)
 
@@ -107,14 +103,6 @@ def _load_presentation_from_bytes(content: bytes):
     """バイトデータからプレゼンテーションを読み込む"""
     from pptx import Presentation
     return Presentation(io.BytesIO(content))
-
-
-def _check_old_format_pptx(file_path: str) -> dict[str, Any] | None:
-    """古いPowerPoint形式（.ppt）のチェック"""
-    return check_old_format(
-        file_path, ".ppt", "PowerPoint", ".pptx",
-        "python-pptx", "Microsoft PowerPoint"
-    )
 
 
 def _get_slide_title(slide) -> str:
@@ -449,12 +437,12 @@ def search_presentation(
 # Tool Handlers
 # =============================================================================
 
-async def get_presentation_info_handler(
-    workspace_service: "WorkspaceService",
-    tenant_id: str,
-    conversation_id: str,
-    args: dict[str, Any],
-) -> dict[str, Any]:
+@file_tool_handler(
+    old_format=(".ppt", "PowerPoint", ".pptx", "python-pptx", "Microsoft PowerPoint"),
+    required_library=("pptx", "python-pptx"),
+    log_prefix="PowerPoint情報取得",
+)
+async def get_presentation_info_handler(*, content, filename, args, **_):
     """
     PowerPointプレゼンテーションの構造情報を取得するハンドラー
 
@@ -462,70 +450,50 @@ async def get_presentation_info_handler(
         args:
             file_path: ファイルパス
     """
-    file_path = args.get("file_path", "")
+    info = get_presentation_info(content, filename)
 
-    old_format_error = _check_old_format_pptx(file_path)
-    if old_format_error:
-        return old_format_error
+    result_lines = [
+        f"# PowerPoint情報: {info['filename']}",
+        f"スライド数: {info['total_slides']}",
+        f"総文字数: {info['total_characters']:,}",
+        "",
+        "## スライド一覧",
+    ]
 
-    lib_error = check_library_available("pptx", "python-pptx")
-    if lib_error:
-        return lib_error
+    for slide in info['slides']:
+        elements = []
+        if slide['text_count'] > 0:
+            elements.append(f"テキスト{slide['text_count']}")
+        if slide['image_count'] > 0:
+            elements.append(f"画像{slide['image_count']}")
+        if slide['table_count'] > 0:
+            elements.append(f"表{slide['table_count']}")
+        if slide['chart_count'] > 0:
+            elements.append(f"グラフ{slide['chart_count']}")
 
-    try:
-        content, filename, _ = await workspace_service.download_file(
-            tenant_id, conversation_id, file_path
-        )
+        element_str = ", ".join(elements) if elements else "空"
 
-        info = get_presentation_info(content, filename)
+        result_lines.append(f"")
+        result_lines.append(f"### スライド {slide['number']} - \"{slide['title']}\"")
+        result_lines.append(f"- 要素: {element_str}")
+        result_lines.append(f"- 文字数: 約{slide['char_count']}文字")
+        if slide['has_notes']:
+            result_lines.append(f"- ノート: あり ({slide['notes_length']}文字)")
 
-        result_lines = [
-            f"# PowerPoint情報: {info['filename']}",
-            f"スライド数: {info['total_slides']}",
-            f"総文字数: {info['total_characters']:,}",
-            "",
-            "## スライド一覧",
-        ]
+    result_lines.append("")
+    result_lines.append("---")
+    result_lines.append("スライド取得: `get_slides_content` を使用")
+    result_lines.append("検索: `search_presentation` を使用")
 
-        for slide in info['slides']:
-            elements = []
-            if slide['text_count'] > 0:
-                elements.append(f"テキスト{slide['text_count']}")
-            if slide['image_count'] > 0:
-                elements.append(f"画像{slide['image_count']}")
-            if slide['table_count'] > 0:
-                elements.append(f"表{slide['table_count']}")
-            if slide['chart_count'] > 0:
-                elements.append(f"グラフ{slide['chart_count']}")
-
-            element_str = ", ".join(elements) if elements else "空"
-
-            result_lines.append(f"")
-            result_lines.append(f"### スライド {slide['number']} - \"{slide['title']}\"")
-            result_lines.append(f"- 要素: {element_str}")
-            result_lines.append(f"- 文字数: 約{slide['char_count']}文字")
-            if slide['has_notes']:
-                result_lines.append(f"- ノート: あり ({slide['notes_length']}文字)")
-
-        result_lines.append("")
-        result_lines.append("---")
-        result_lines.append("スライド取得: `get_slides_content` を使用")
-        result_lines.append("検索: `search_presentation` を使用")
-
-        return format_tool_success("\n".join(result_lines))
-    except FileNotFoundError:
-        return format_tool_error(f"ファイルが見つかりません: {file_path}")
-    except Exception as e:
-        logger.error("PowerPoint情報取得エラー", error=str(e), file_path=file_path)
-        return format_tool_error(f"読み込みエラー: {str(e)}")
+    return format_tool_success("\n".join(result_lines))
 
 
-async def get_slides_content_handler(
-    workspace_service: "WorkspaceService",
-    tenant_id: str,
-    conversation_id: str,
-    args: dict[str, Any],
-) -> dict[str, Any]:
+@file_tool_handler(
+    old_format=(".ppt", "PowerPoint", ".pptx", "python-pptx", "Microsoft PowerPoint"),
+    required_library=("pptx", "python-pptx"),
+    log_prefix="PowerPointスライド取得",
+)
+async def get_slides_content_handler(*, content, filename, args, **_):
     """
     PowerPointスライドの内容を取得するハンドラー
 
@@ -537,85 +505,66 @@ async def get_slides_content_handler(
             include_notes: ノートを含めるか（デフォルト: true）
             include_tables: 表を含めるか（デフォルト: true）
     """
-    file_path = args.get("file_path", "")
     slides_spec = args.get("slides", "1-10")
     max_slides = args.get("max_slides", DEFAULT_MAX_SLIDES)
     include_notes = args.get("include_notes", True)
     include_tables = args.get("include_tables", True)
 
-    old_format_error = _check_old_format_pptx(file_path)
-    if old_format_error:
-        return old_format_error
+    result = get_slides_content(
+        content,
+        slides_spec=slides_spec,
+        max_slides=max_slides,
+        include_notes=include_notes,
+        include_tables=include_tables,
+    )
 
-    lib_error = check_library_available("pptx", "python-pptx")
-    if lib_error:
-        return lib_error
+    result_lines = [
+        f"# {filename}",
+        f"取得スライド: {result['requested_slides']} (全{result['total_slides']}スライド)",
+        f"返却: {result['returned_slides']}スライド",
+        "",
+    ]
 
-    try:
-        content, filename, _ = await workspace_service.download_file(
-            tenant_id, conversation_id, file_path
-        )
+    for slide in result['slides']:
+        result_lines.append(f"## スライド {slide['number']} - \"{slide['title']}\"")
+        result_lines.append("")
 
-        result = get_slides_content(
-            content,
-            slides_spec=slides_spec,
-            max_slides=max_slides,
-            include_notes=include_notes,
-            include_tables=include_tables,
-        )
-
-        result_lines = [
-            f"# {filename}",
-            f"取得スライド: {result['requested_slides']} (全{result['total_slides']}スライド)",
-            f"返却: {result['returned_slides']}スライド",
-            "",
-        ]
-
-        for slide in result['slides']:
-            result_lines.append(f"## スライド {slide['number']} - \"{slide['title']}\"")
+        if slide['text_content']:
+            for text in slide['text_content']:
+                result_lines.append(text)
             result_lines.append("")
 
-            if slide['text_content']:
-                for text in slide['text_content']:
-                    result_lines.append(text)
-                result_lines.append("")
-
-            if slide['table_content']:
-                result_lines.append("### 表")
-                for row in slide['table_content']:
-                    result_lines.append(row)
-                result_lines.append("")
-
-            if slide['notes']:
-                result_lines.append("### ノート")
-                result_lines.append(slide['notes'])
-                result_lines.append("")
-
-            if not slide['text_content'] and not slide['table_content']:
-                result_lines.append("[このスライドにテキストは含まれていません]")
-                result_lines.append("")
-
-            result_lines.append("---")
+        if slide['table_content']:
+            result_lines.append("### 表")
+            for row in slide['table_content']:
+                result_lines.append(row)
             result_lines.append("")
 
-        if result['has_more']:
-            result_lines.append("まだ続きがあります。次を取得するには:")
-            result_lines.append(f"`slides=\"{result['end_slide'] + 1}-{result['end_slide'] + max_slides}\"` を指定してください。")
+        if slide['notes']:
+            result_lines.append("### ノート")
+            result_lines.append(slide['notes'])
+            result_lines.append("")
 
-        return format_tool_success("\n".join(result_lines))
-    except FileNotFoundError:
-        return format_tool_error(f"ファイルが見つかりません: {file_path}")
-    except Exception as e:
-        logger.error("PowerPointスライド取得エラー", error=str(e), file_path=file_path)
-        return format_tool_error(f"読み込みエラー: {str(e)}")
+        if not slide['text_content'] and not slide['table_content']:
+            result_lines.append("[このスライドにテキストは含まれていません]")
+            result_lines.append("")
+
+        result_lines.append("---")
+        result_lines.append("")
+
+    if result['has_more']:
+        result_lines.append("まだ続きがあります。次を取得するには:")
+        result_lines.append(f"`slides=\"{result['end_slide'] + 1}-{result['end_slide'] + max_slides}\"` を指定してください。")
+
+    return format_tool_success("\n".join(result_lines))
 
 
-async def search_presentation_handler(
-    workspace_service: "WorkspaceService",
-    tenant_id: str,
-    conversation_id: str,
-    args: dict[str, Any],
-) -> dict[str, Any]:
+@file_tool_handler(
+    old_format=(".ppt", "PowerPoint", ".pptx", "python-pptx", "Microsoft PowerPoint"),
+    required_library=("pptx", "python-pptx"),
+    log_prefix="PowerPoint検索",
+)
+async def search_presentation_handler(*, content, args, **_):
     """
     PowerPointプレゼンテーション全体からキーワード検索を行うハンドラー
 
@@ -627,63 +576,42 @@ async def search_presentation_handler(
             max_hits: 最大ヒット数（デフォルト: 50）
             include_notes: ノートも検索対象に含めるか（デフォルト: true）
     """
-    file_path = args.get("file_path", "")
     query = args.get("query", "")
     case_sensitive = args.get("case_sensitive", False)
     max_hits = args.get("max_hits", 50)
     include_notes = args.get("include_notes", True)
 
-    old_format_error = _check_old_format_pptx(file_path)
-    if old_format_error:
-        return old_format_error
-
     if not query:
         return format_tool_error("エラー: query（検索キーワード）を指定してください。")
 
-    lib_error = check_library_available("pptx", "python-pptx")
-    if lib_error:
-        return lib_error
+    result = search_presentation(
+        content,
+        query,
+        case_sensitive=case_sensitive,
+        max_hits=max_hits,
+        include_notes=include_notes,
+    )
 
-    try:
-        content, filename, _ = await workspace_service.download_file(
-            tenant_id, conversation_id, file_path
-        )
+    result_lines = [
+        f"# 検索結果: \"{result['query']}\"",
+        f"ヒット数: {result['total_hits']}",
+        "",
+    ]
 
-        result = search_presentation(
-            content,
-            query,
-            case_sensitive=case_sensitive,
-            max_hits=max_hits,
-            include_notes=include_notes,
-        )
+    if result['hits']:
+        for hit in result['hits']:
+            location_label = {
+                "title": "タイトル",
+                "text": "テキスト",
+                "table": "表",
+                "notes": "ノート",
+            }.get(hit['location_type'], hit['location_type'])
 
-        result_lines = [
-            f"# 検索結果: \"{result['query']}\"",
-            f"ヒット数: {result['total_hits']}",
-            "",
-        ]
+            result_lines.append(f"## スライド {hit['slide_number']} - \"{hit['slide_title']}\"")
+            result_lines.append(f"場所: {location_label}")
+            result_lines.append(f"コンテキスト: {hit['context']}")
+            result_lines.append("")
+    else:
+        result_lines.append("検索結果はありませんでした。")
 
-        if result['hits']:
-            for hit in result['hits']:
-                location_label = {
-                    "title": "タイトル",
-                    "text": "テキスト",
-                    "table": "表",
-                    "notes": "ノート",
-                }.get(hit['location_type'], hit['location_type'])
-
-                result_lines.append(f"## スライド {hit['slide_number']} - \"{hit['slide_title']}\"")
-                result_lines.append(f"場所: {location_label}")
-                result_lines.append(f"コンテキスト: {hit['context']}")
-                result_lines.append("")
-        else:
-            result_lines.append("検索結果はありませんでした。")
-
-        return format_tool_success("\n".join(result_lines))
-    except FileNotFoundError:
-        return format_tool_error(f"ファイルが見つかりません: {file_path}")
-    except ValueError as e:
-        return format_tool_error(str(e))
-    except Exception as e:
-        logger.error("PowerPoint検索エラー", error=str(e), file_path=file_path, query=query)
-        return format_tool_error(f"検索エラー: {str(e)}")
+    return format_tool_success("\n".join(result_lines))

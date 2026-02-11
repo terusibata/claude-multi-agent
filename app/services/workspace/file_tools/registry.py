@@ -1,8 +1,8 @@
 """
-共通ファイルツール
+ファイルツールレジストリ
 
-list_workspace_files: ファイル一覧取得
-read_image_file: 画像の視覚的読み込み
+ツールハンドラーの登録と共通ハンドラー（ファイル一覧・画像読み込み）を提供。
+各形式固有のツールは個別モジュール（excel_tools, word_tools 等）で実装。
 """
 
 import base64
@@ -235,7 +235,7 @@ def create_file_tools_handlers(
     Returns:
         ハンドラー辞書
     """
-    # 各ツールモジュールからハンドラーをインポート
+    # 使用時のみロードするため遅延インポート
     from app.services.workspace.file_tools.excel_tools import (
         get_sheet_info_handler,
         get_sheet_csv_handler,

@@ -161,3 +161,45 @@ class BaseRepository(Generic[ModelType]):
             query = query.where(and_(*conditions))
         result = await self.db.execute(query)
         return result.scalar() or 0
+
+    async def find_with_count(
+        self,
+        *,
+        filters: list | None = None,
+        order_by: str = "updated_at",
+        order_desc: bool = True,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[ModelType], int]:
+        """
+        フィルタ付きでエンティティ一覧と総件数を取得
+
+        Args:
+            filters: SQLAlchemy条件式のリスト
+            order_by: ソート対象カラム名
+            order_desc: 降順でソートするか
+            limit: 取得件数上限
+            offset: 取得開始位置
+
+        Returns:
+            (エンティティリスト, 総件数) のタプル
+        """
+        base_query = select(self.model)
+        if filters:
+            base_query = base_query.where(and_(*filters))
+
+        # 総件数取得
+        count_query = select(func.count()).select_from(base_query.subquery())
+        count_result = await self.db.execute(count_query)
+        total = count_result.scalar() or 0
+
+        # データ取得
+        order_column = getattr(self.model, order_by)
+        data_query = base_query.order_by(
+            order_column.desc() if order_desc else order_column
+        ).limit(limit).offset(offset)
+
+        result = await self.db.execute(data_query)
+        items = list(result.scalars().all())
+
+        return items, total
