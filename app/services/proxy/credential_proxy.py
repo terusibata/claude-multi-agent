@@ -40,12 +40,13 @@ class ProxyConfig:
 
 class CredentialInjectionProxy:
     """
-    Unix Socket上で動作するHTTP Forward Proxy
+    Unix Socket上で動作するHTTP Proxy（Forward + Reverse 兼用）
 
-    コンテナ内のHTTP_PROXY/HTTPS_PROXYがこのソケットを指す。
-    - 許可ドメインのみ通信許可
-    - bedrock-runtime ドメインにはSigV4認証を自動注入
-    - 全リクエストを監査ログに記録
+    2つのモードで動作:
+    1. Reverse Proxy: ANTHROPIC_BEDROCK_BASE_URL からの直接リクエスト（相対パス）
+       → Bedrock API URLを構築し、SigV4署名を注入して転送（ストリーミング対応）
+    2. Forward Proxy: HTTP_PROXY/HTTPS_PROXY からのプロキシリクエスト（絶対URL/CONNECT）
+       → 許可ドメインのみ通信許可、bedrock-runtime にはSigV4認証を自動注入
     """
 
     def __init__(self, config: ProxyConfig, socket_path: str) -> None:
@@ -134,6 +135,14 @@ class CredentialInjectionProxy:
                 await self._handle_connect(url, reader, writer)
                 return
 
+            # Reverse Proxy モード: 相対パス（ANTHROPIC_BEDROCK_BASE_URL経由）
+            # SDK が ANTHROPIC_BEDROCK_BASE_URL=http://127.0.0.1:8080 で送信するリクエストは
+            # 相対パス（例: /model/{modelId}/invoke）で届く
+            if url.startswith("/"):
+                await self._handle_bedrock_reverse_proxy(method, url, headers, body, writer)
+                return
+
+            # Forward Proxy モード: 絶対URL（HTTP_PROXY/HTTPS_PROXY経由）
             status, resp_headers, resp_body = await self.handle_request(
                 method, url, headers, body
             )
@@ -206,6 +215,119 @@ class CredentialInjectionProxy:
             logger.info("Proxy: 完了", method=method, url=url, duration_ms=round(duration * 1000, 1), status=result[0])
 
         return result
+
+    async def _handle_bedrock_reverse_proxy(
+        self,
+        method: str,
+        path: str,
+        headers: dict[str, str],
+        body: bytes,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        """
+        Bedrock Reverse Proxy: 相対パスリクエストをBedrock APIに転送
+
+        ANTHROPIC_BEDROCK_BASE_URL=http://127.0.0.1:8080 経由で届いたリクエストを
+        実際のBedrock APIエンドポイントに転送する。
+        SigV4署名を注入し、レスポンスはストリーミングで返す。
+        """
+        request_start = time.perf_counter()
+        region = self.config.aws_credentials.region
+        bedrock_url = f"https://bedrock-runtime.{region}.amazonaws.com{path}"
+
+        if self.config.log_all_requests:
+            logger.info("Proxy: Bedrock Reverse Proxy", method=method, path=path, bedrock_url=bedrock_url)
+
+        # Hop-by-hop ヘッダーを除去し、Host を設定
+        forward_headers = {
+            k: v for k, v in headers.items()
+            if k.lower() not in ("host", "connection", "proxy-connection", "keep-alive", "transfer-encoding")
+        }
+        forward_headers["Host"] = f"bedrock-runtime.{region}.amazonaws.com"
+
+        # SigV4署名を注入
+        signed_headers = sign_request(
+            credentials=self.config.aws_credentials,
+            method=method,
+            url=bedrock_url,
+            headers=forward_headers,
+            body=body,
+            service="bedrock",
+        )
+
+        if not self._http_client:
+            writer.write(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 22\r\n\r\nProxy not initialized\r\n")
+            await writer.drain()
+            return
+
+        try:
+            # ストリーミングレスポンスでBedrock APIに転送
+            async with self._http_client.stream(
+                method=method,
+                url=bedrock_url,
+                headers=signed_headers,
+                content=body,
+            ) as resp:
+                # レスポンスステータス行
+                status_text = "OK" if resp.status_code < 400 else "Error"
+                writer.write(f"HTTP/1.1 {resp.status_code} {status_text}\r\n".encode())
+
+                # レスポンスヘッダー（Content-Lengthがあればそのまま、なければchunked）
+                has_content_length = False
+                for key, value in resp.headers.multi_items():
+                    lower_key = key.lower()
+                    if lower_key in ("transfer-encoding", "connection"):
+                        continue
+                    if lower_key == "content-length":
+                        has_content_length = True
+                    writer.write(f"{key}: {value}\r\n".encode())
+
+                if not has_content_length:
+                    writer.write(b"Transfer-Encoding: chunked\r\n")
+
+                writer.write(b"\r\n")
+                await writer.drain()
+
+                # レスポンスボディをストリーミング
+                if has_content_length:
+                    # Content-Length がある場合はそのまま転送
+                    async for chunk in resp.aiter_bytes():
+                        writer.write(chunk)
+                        await writer.drain()
+                else:
+                    # chunked transfer encoding
+                    async for chunk in resp.aiter_bytes():
+                        if chunk:
+                            writer.write(f"{len(chunk):x}\r\n".encode())
+                            writer.write(chunk)
+                            writer.write(b"\r\n")
+                            await writer.drain()
+                    writer.write(b"0\r\n\r\n")
+                    await writer.drain()
+
+            # メトリクス・監査ログ
+            duration = time.perf_counter() - request_start
+            get_workspace_proxy_request_duration().observe(duration, method=method)
+            audit_proxy_request_allowed(
+                method=method, url=bedrock_url,
+                status=resp.status_code, duration_ms=int(duration * 1000),
+            )
+            if self.config.log_all_requests:
+                logger.info(
+                    "Proxy: Bedrock完了",
+                    method=method, path=path,
+                    status=resp.status_code,
+                    duration_ms=round(duration * 1000, 1),
+                )
+
+        except httpx.TimeoutException:
+            logger.error("Proxy: Bedrockタイムアウト", method=method, path=path)
+            writer.write(b"HTTP/1.1 504 Gateway Timeout\r\nContent-Length: 15\r\n\r\nGateway Timeout")
+            await writer.drain()
+        except Exception as e:
+            logger.error("Proxy: Bedrock転送エラー", method=method, path=path, error=str(e))
+            writer.write(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 11\r\n\r\nBad Gateway")
+            await writer.drain()
 
     async def _handle_connect(
         self,

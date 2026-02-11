@@ -256,4 +256,6 @@ class WorkspaceFileSync:
             )
             self.db.add(new_file)
 
-        await self.db.commit()
+        # flush のみ実行（SQL文をDBに送信するがトランザクションは確定しない）
+        # 最終的なコミットは ExecuteService.execute_streaming() の finally で一括実行
+        await self.db.flush()

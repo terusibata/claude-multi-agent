@@ -119,6 +119,13 @@ class WarmPoolManager:
         self._schedule_task(self.replenish())
 
         info = await self.lifecycle.create_container()
+
+        # 新規作成時はエージェントの起動完了を待つ
+        # WarmPoolからの取得時はプリヒート中に起動済みのため不要
+        ready = await self.lifecycle.wait_for_agent_ready(info.agent_socket)
+        if not ready:
+            logger.error("WarmPool: フォールバック作成のエージェント起動タイムアウト", container_id=info.id)
+
         self._update_pool_size_metric()
         duration = time.perf_counter() - start_time
         acquire_histogram.observe(duration)
