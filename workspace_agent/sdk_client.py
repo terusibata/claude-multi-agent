@@ -92,12 +92,25 @@ async def execute_streaming(request: ExecuteRequest) -> AsyncIterator[str]:
     logger.info("SDK実行開始: model=%s, cwd=%s", request.model, request.cwd)
 
     try:
+        done_emitted = False
         async for message in query(prompt=request.user_input, options=options):
             sse_events = _message_to_sse_events(message)
             for event in sse_events:
+                if "event: done\n" in event:
+                    done_emitted = True
                 yield event
 
-        yield _format_sse("done", {"status": "completed"})
+        # ResultMessage が来なかった場合のフォールバック
+        if not done_emitted:
+            yield _format_sse("done", {
+                "subtype": "success",
+                "result": None,
+                "session_id": None,
+                "num_turns": 0,
+                "duration_ms": 0,
+                "cost_usd": 0,
+                "usage": {},
+            })
     except Exception as e:
         logger.error("SDK実行エラー: %s", str(e), exc_info=True)
         yield _format_sse("error", {"message": str(e)})
@@ -145,7 +158,7 @@ def _message_to_sse_events(message) -> list[str]:
                 events.append(_format_sse("thinking", {"content": block.thinking}))
 
     elif isinstance(message, ResultMessage):
-        events.append(_format_sse("result", {
+        events.append(_format_sse("done", {
             "subtype": "error_during_execution" if message.is_error else "success",
             "result": message.result,
             "session_id": message.session_id,
