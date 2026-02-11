@@ -6,7 +6,7 @@
 import asyncio
 import signal
 from contextlib import asynccontextmanager
-from typing import Callable, Optional
+from typing import Callable
 
 import structlog
 
@@ -59,7 +59,7 @@ class ShutdownManager:
         self._active_tasks.add(task)
         task.add_done_callback(self._active_tasks.discard)
 
-    def setup_signal_handlers(self, loop: Optional[asyncio.AbstractEventLoop] = None) -> None:
+    def setup_signal_handlers(self, loop: asyncio.AbstractEventLoop | None = None) -> None:
         """
         シグナルハンドラーを設定
 
@@ -162,10 +162,10 @@ class ShutdownManager:
 
 
 # グローバルインスタンス
-_shutdown_manager: Optional[ShutdownManager] = None
+_shutdown_manager: ShutdownManager | None = None
 
 
-def get_shutdown_manager(shutdown_timeout: Optional[float] = None) -> ShutdownManager:
+def get_shutdown_manager(shutdown_timeout: float | None = None) -> ShutdownManager:
     """
     シャットダウンマネージャーのシングルトンインスタンスを取得
 

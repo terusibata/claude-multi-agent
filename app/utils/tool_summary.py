@@ -2,7 +2,7 @@
 ツールサマリー生成ユーティリティ
 エージェントが使用したツールの簡潔なサマリーを生成
 """
-from typing import Any, Optional
+from typing import Any
 
 
 def generate_tool_summary(tool_name: str, tool_input: dict[str, Any]) -> str:
@@ -87,7 +87,7 @@ def generate_tool_summary(tool_name: str, tool_input: dict[str, Any]) -> str:
 def generate_tool_result_summary(
     tool_name: str,
     status: str,
-    output: Optional[Any] = None,
+    output: Any | None = None,
 ) -> str:
     """
     ツール実行結果の簡潔なサマリーを生成
@@ -154,7 +154,7 @@ def format_tool_for_display(
     tool_name: str,
     tool_input: dict[str, Any],
     status: str,
-    output: Optional[Any] = None,
+    output: Any | None = None,
 ) -> dict[str, str]:
     """
     表示用にツール情報をフォーマット

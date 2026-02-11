@@ -7,7 +7,7 @@ import asyncio
 import random
 from dataclasses import dataclass
 from functools import wraps
-from typing import Callable, Optional, Type, TypeVar, Union
+from typing import Callable, Type, TypeVar
 
 import structlog
 
@@ -58,7 +58,7 @@ def calculate_delay(
 async def retry_async(
     func: Callable[..., T],
     *args,
-    config: Optional[RetryConfig] = None,
+    config: RetryConfig | None = None,
     operation_name: str = "operation",
     **kwargs,
 ) -> T:
@@ -79,7 +79,7 @@ async def retry_async(
         Exception: 全リトライ失敗時は最後の例外を再送出
     """
     config = config or RetryConfig()
-    last_exception: Optional[Exception] = None
+    last_exception: Exception | None = None
 
     for attempt in range(config.max_attempts):
         try:
@@ -119,7 +119,7 @@ async def retry_async(
 def retry_sync(
     func: Callable[..., T],
     *args,
-    config: Optional[RetryConfig] = None,
+    config: RetryConfig | None = None,
     operation_name: str = "operation",
     **kwargs,
 ) -> T:
@@ -142,7 +142,7 @@ def retry_sync(
     import time
 
     config = config or RetryConfig()
-    last_exception: Optional[Exception] = None
+    last_exception: Exception | None = None
 
     for attempt in range(config.max_attempts):
         try:
@@ -179,8 +179,8 @@ def retry_sync(
 
 
 def with_retry(
-    config: Optional[RetryConfig] = None,
-    operation_name: Optional[str] = None,
+    config: RetryConfig | None = None,
+    operation_name: str | None = None,
 ):
     """
     リトライ付き実行のデコレーター

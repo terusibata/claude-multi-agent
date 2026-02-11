@@ -3,7 +3,7 @@
 ユーザーとエージェント間の会話を管理
 """
 from datetime import datetime
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, func
@@ -32,7 +32,7 @@ class Conversation(Base):
     )
 
     # SDKセッションID（resume用）
-    session_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    session_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
     # テナントID
     tenant_id: Mapped[str] = mapped_column(
@@ -53,7 +53,7 @@ class Conversation(Base):
     )
 
     # 会話タイトル
-    title: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    title: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     # ステータス (active / archived)
     status: Mapped[str] = mapped_column(
@@ -66,10 +66,10 @@ class Conversation(Base):
     )
 
     # ワークスペースパス（会話専用ディレクトリ）
-    workspace_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    workspace_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     # ワークスペース作成日時
-    workspace_created_at: Mapped[Optional[datetime]] = mapped_column(
+    workspace_created_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 

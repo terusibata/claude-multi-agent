@@ -3,7 +3,7 @@
 SDKを使わない直接Bedrock呼び出しによるチャットセッション管理
 """
 from datetime import datetime
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from sqlalchemy import DateTime, ForeignKey, String, Text, func
@@ -58,7 +58,7 @@ class SimpleChat(Base):
     system_prompt: Mapped[str] = mapped_column(Text, nullable=False)
 
     # チャットタイトル（自動生成）
-    title: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    title: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     # ステータス (active / archived)
     status: Mapped[str] = mapped_column(

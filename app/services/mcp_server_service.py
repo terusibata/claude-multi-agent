@@ -3,7 +3,7 @@ MCPサーバー定義サービス
 テナントごとのMCPサーバー設定のCRUD操作と設定構築
 """
 import re
-from typing import Any, Optional
+from typing import Any
 from uuid import uuid4
 
 import structlog
@@ -50,7 +50,7 @@ class McpServerService:
     async def get_all_by_tenant(
         self,
         tenant_id: str,
-        status: Optional[str] = None,
+        status: str | None = None,
     ) -> list[McpServer]:
         """
         テナントの全MCPサーバーを取得
@@ -74,7 +74,7 @@ class McpServerService:
         self,
         mcp_server_id: str,
         tenant_id: str,
-    ) -> Optional[McpServer]:
+    ) -> McpServer | None:
         """
         IDでMCPサーバーを取得
 
@@ -153,9 +153,9 @@ class McpServerService:
     def _validate_server_config(
         self,
         server_type: str,
-        url: Optional[str],
-        command: Optional[str],
-        openapi_spec: Optional[dict] = None,
+        url: str | None,
+        command: str | None,
+        openapi_spec: dict | None = None,
     ) -> None:
         """
         MCPサーバー設定を検証
@@ -210,7 +210,7 @@ class McpServerService:
         mcp_server_id: str,
         tenant_id: str,
         server_data: McpServerUpdate,
-    ) -> Optional[McpServer]:
+    ) -> McpServer | None:
         """
         MCPサーバーを更新
 

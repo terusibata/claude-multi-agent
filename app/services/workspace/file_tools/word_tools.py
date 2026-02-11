@@ -14,7 +14,7 @@ from __future__ import annotations
 import io
 import re
 import unicodedata
-from typing import TYPE_CHECKING, Any, Optional, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict
 
 import structlog
 

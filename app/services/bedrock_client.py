@@ -4,7 +4,7 @@ AWS Bedrock Converse API を直接呼び出すクライアント（リトライ�
 """
 import time
 from dataclasses import dataclass
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator
 
 import structlog
 from botocore.exceptions import ClientError, EndpointConnectionError
@@ -41,10 +41,10 @@ class StreamChunk:
     """ストリーミングチャンク"""
 
     type: str  # "text_delta" | "message_stop" | "metadata"
-    content: Optional[str] = None
+    content: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
-    stop_reason: Optional[str] = None
+    stop_reason: str | None = None
 
 
 class BedrockChatClient:
