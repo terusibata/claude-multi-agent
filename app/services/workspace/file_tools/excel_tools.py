@@ -16,7 +16,7 @@ import io
 import re
 import unicodedata
 from io import StringIO
-from typing import TYPE_CHECKING, Any, Optional, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict
 
 import structlog
 
@@ -132,7 +132,7 @@ def _get_cell_value(cell) -> str:
     return text.strip()
 
 
-def _get_print_area(ws) -> Optional[tuple[int, int, int, int]]:
+def _get_print_area(ws) -> tuple[int, int, int, int] | None:
     """印刷領域を取得（min_row, min_col, max_row, max_col）"""
     try:
         from openpyxl.utils import range_boundaries

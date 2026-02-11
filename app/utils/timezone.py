@@ -4,13 +4,12 @@
 日本時間（JST）をデフォルトとした日時変換機能を提供
 """
 from datetime import datetime, timezone, timedelta
-from typing import Optional
 
 # 日本標準時（JST: UTC+9）
 JST = timezone(timedelta(hours=9))
 
 
-def to_utc(dt: Optional[datetime], assume_jst: bool = True) -> Optional[datetime]:
+def to_utc(dt: datetime | None, assume_jst: bool = True) -> datetime | None:
     """
     日時をUTCに変換
 
@@ -36,7 +35,7 @@ def to_utc(dt: Optional[datetime], assume_jst: bool = True) -> Optional[datetime
     return dt.astimezone(timezone.utc)
 
 
-def to_jst(dt: Optional[datetime]) -> Optional[datetime]:
+def to_jst(dt: datetime | None) -> datetime | None:
     """
     日時をJSTに変換
 

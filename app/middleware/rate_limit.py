@@ -9,7 +9,6 @@ Pure ASGIミドルウェアとして実装（SSEストリーミング対応）
 import json
 import re
 import time
-from typing import Optional
 
 import structlog
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -18,7 +17,6 @@ from app.config import get_settings
 from app.infrastructure.redis import redis_client
 
 logger = structlog.get_logger(__name__)
-settings = get_settings()
 
 
 class RateLimitMiddleware:
@@ -108,12 +106,12 @@ class RateLimitMiddleware:
         self.requests_per_window = requests_per_window
         self.window_seconds = window_seconds
         self.key_prefix = key_prefix
-        self.enabled = settings.rate_limit_enabled
+        self.enabled = get_settings().rate_limit_enabled
 
         if not self.enabled:
             logger.info("レート制限が無効化されています")
 
-    def _get_header(self, scope: Scope, name: bytes) -> Optional[str]:
+    def _get_header(self, scope: Scope, name: bytes) -> str | None:
         """スコープからヘッダー値を取得"""
         for header_name, header_value in scope.get("headers", []):
             if header_name.lower() == name:

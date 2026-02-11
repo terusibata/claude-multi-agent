@@ -5,7 +5,7 @@ Redis接続管理
 import asyncio
 import time
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator
 
 import structlog
 from redis.asyncio import ConnectionPool, Redis
@@ -18,7 +18,7 @@ logger = structlog.get_logger(__name__)
 settings = get_settings()
 
 # グローバルRedisプール
-_redis_pool: Optional[ConnectionPool] = None
+_redis_pool: ConnectionPool | None = None
 _redis_pool_lock = asyncio.Lock()
 
 
@@ -91,12 +91,12 @@ async def close_redis_pool() -> None:
         logger.info("Redis接続プールクローズ完了")
 
 
-async def check_redis_health() -> tuple[bool, Optional[str], float]:
+async def check_redis_health() -> tuple[bool, str | None, float]:
     """
     Redisの接続状態をチェック
 
     Returns:
-        (healthy: bool, error_message: Optional[str], latency_ms: float)
+        (healthy: bool, error_message: str | None, latency_ms: float)
     """
     start = time.perf_counter()
     try:

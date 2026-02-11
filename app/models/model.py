@@ -4,7 +4,6 @@
 """
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
 
 from sqlalchemy import DECIMAL, Boolean, DateTime, Enum, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
@@ -37,7 +36,7 @@ class Model(Base):
     bedrock_model_id: Mapped[str] = mapped_column(String(200), nullable=False)
 
     # モデルのデプロイリージョン（オプション）
-    model_region: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    model_region: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     # Context Window上限（トークン）
     # Claude 4.5系は200,000トークンがデフォルト
@@ -60,7 +59,7 @@ class Model(Base):
     )
 
     # 拡張Context Window時の上限（対応している場合のみ）
-    extended_context_window: Mapped[Optional[int]] = mapped_column(
+    extended_context_window: Mapped[int | None] = mapped_column(
         Integer, nullable=True, default=None,
         comment="拡張Context Window上限（トークン）"
     )

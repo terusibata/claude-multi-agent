@@ -7,7 +7,7 @@ import asyncio
 import random
 from dataclasses import dataclass
 from functools import wraps
-from typing import Callable, Optional, Type, TypeVar, Union
+from typing import Callable, Type, TypeVar
 
 import structlog
 
@@ -25,6 +25,7 @@ class RetryConfig:
     max_delay: float = 30.0
     exponential_base: float = 2.0
     jitter: bool = True
+    # 呼び出し元が具体的な例外を指定すること（Exceptionの使用は非推奨）
     retryable_exceptions: tuple[Type[Exception], ...] = (Exception,)
 
 
@@ -57,7 +58,7 @@ def calculate_delay(
 async def retry_async(
     func: Callable[..., T],
     *args,
-    config: Optional[RetryConfig] = None,
+    config: RetryConfig | None = None,
     operation_name: str = "operation",
     **kwargs,
 ) -> T:
@@ -78,7 +79,7 @@ async def retry_async(
         Exception: 全リトライ失敗時は最後の例外を再送出
     """
     config = config or RetryConfig()
-    last_exception: Optional[Exception] = None
+    last_exception: Exception | None = None
 
     for attempt in range(config.max_attempts):
         try:
@@ -118,7 +119,7 @@ async def retry_async(
 def retry_sync(
     func: Callable[..., T],
     *args,
-    config: Optional[RetryConfig] = None,
+    config: RetryConfig | None = None,
     operation_name: str = "operation",
     **kwargs,
 ) -> T:
@@ -141,7 +142,7 @@ def retry_sync(
     import time
 
     config = config or RetryConfig()
-    last_exception: Optional[Exception] = None
+    last_exception: Exception | None = None
 
     for attempt in range(config.max_attempts):
         try:
@@ -178,8 +179,8 @@ def retry_sync(
 
 
 def with_retry(
-    config: Optional[RetryConfig] = None,
-    operation_name: Optional[str] = None,
+    config: RetryConfig | None = None,
+    operation_name: str | None = None,
 ):
     """
     リトライ付き実行のデコレーター
@@ -218,52 +219,3 @@ def with_retry(
             return sync_wrapper
 
     return decorator
-
-
-# Bedrock用のリトライ設定
-BEDROCK_RETRY_CONFIG = RetryConfig(
-    max_attempts=3,
-    base_delay=1.0,
-    max_delay=10.0,
-    exponential_base=2.0,
-    jitter=True,
-    retryable_exceptions=(
-        Exception,  # botocore の例外は汎用的にキャッチ
-    ),
-)
-
-# S3用のリトライ設定
-S3_RETRY_CONFIG = RetryConfig(
-    max_attempts=3,
-    base_delay=0.5,
-    max_delay=5.0,
-    exponential_base=2.0,
-    jitter=True,
-    retryable_exceptions=(
-        Exception,
-    ),
-)
-
-# Redis用のリトライ設定
-REDIS_RETRY_CONFIG = RetryConfig(
-    max_attempts=3,
-    base_delay=0.1,
-    max_delay=2.0,
-    exponential_base=2.0,
-    jitter=True,
-    retryable_exceptions=(
-        Exception,
-    ),
-)
-
-# DB用のリトライ設定
-DB_RETRY_CONFIG = RetryConfig(
-    max_attempts=3,
-    base_delay=0.5,
-    max_delay=5.0,
-    exponential_base=2.0,
-    jitter=True,
-    retryable_exceptions=(
-        Exception,
-    ),
-)

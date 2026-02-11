@@ -523,3 +523,19 @@ def format_error_event(
         "message": message,
         "recoverable": recoverable,
     })
+
+
+def to_sse_payload(event: dict) -> dict:
+    """
+    内部イベント辞書をSSE送信用ペイロードに変換
+
+    Args:
+        event: {"event": <type>, "data": {...}} 形式のイベント
+
+    Returns:
+        EventSourceResponse用のSSEペイロード辞書
+    """
+    return {
+        "event": event["event"],
+        "data": json.dumps(event["data"], ensure_ascii=False, default=str),
+    }

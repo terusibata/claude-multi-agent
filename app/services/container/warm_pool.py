@@ -29,7 +29,6 @@ from app.services.container.lifecycle import ContainerLifecycleManager
 from app.services.container.models import ContainerInfo
 
 logger = structlog.get_logger(__name__)
-settings = get_settings()
 
 # Redis keys for hot-reload config
 REDIS_KEY_WARM_POOL_CONFIG = "workspace:warm_pool:config"
@@ -49,8 +48,9 @@ class WarmPoolManager:
     ) -> None:
         self.lifecycle = lifecycle
         self.redis = redis
-        self.min_size = min_size or settings.warm_pool_min_size
-        self.max_size = max_size or settings.warm_pool_max_size
+        _settings = get_settings()
+        self.min_size = min_size or _settings.warm_pool_min_size
+        self.max_size = max_size or _settings.warm_pool_max_size
         self._background_tasks: set[asyncio.Task] = set()
 
     async def preheat(self) -> int:

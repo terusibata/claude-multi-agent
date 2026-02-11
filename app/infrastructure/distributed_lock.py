@@ -8,7 +8,6 @@ import asyncio
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Optional
 
 import structlog
 from redis.asyncio import Redis
@@ -309,7 +308,7 @@ class DistributedLockManager:
 
 
 # 会話ロック専用マネージャー（シングルトン）
-_conversation_lock_manager: Optional[DistributedLockManager] = None
+_conversation_lock_manager: DistributedLockManager | None = None
 
 
 def get_conversation_lock_manager() -> DistributedLockManager:

@@ -4,7 +4,6 @@
 """
 import re
 from pathlib import Path
-from typing import Optional
 
 from app.utils.exceptions import PathTraversalError, ValidationError
 
@@ -28,7 +27,7 @@ PATH_TRAVERSAL_PATTERNS = [
 ]
 
 
-def validate_path_traversal(path: str, base_path: Optional[Path] = None) -> None:
+def validate_path_traversal(path: str, base_path: Path | None = None) -> None:
     """
     パストラバーサル攻撃をチェックする
 
@@ -54,20 +53,8 @@ def validate_path_traversal(path: str, base_path: Optional[Path] = None) -> None
             full_path = (base_path / path).resolve()
             base_resolved = base_path.resolve()
 
-            # パスがベースディレクトリ配下にあることを確認
-            # is_relative_to() を使用（Python 3.9+）
-            try:
-                if not full_path.is_relative_to(base_resolved):
-                    raise PathTraversalError(path)
-            except AttributeError:
-                # Python 3.8以下のフォールバック
-                # パスのパーツを比較して、ベースパスの全パーツが含まれることを確認
-                base_parts = base_resolved.parts
-                full_parts = full_path.parts
-                if len(full_parts) < len(base_parts):
-                    raise PathTraversalError(path)
-                if full_parts[:len(base_parts)] != base_parts:
-                    raise PathTraversalError(path)
+            if not full_path.is_relative_to(base_resolved):
+                raise PathTraversalError(path)
         except (OSError, ValueError):
             raise PathTraversalError(path)
 
@@ -143,7 +130,7 @@ def validate_skill_name(name: str) -> None:
     validate_path_traversal(name)
 
 
-def validate_slash_command(slash_command: Optional[str]) -> None:
+def validate_slash_command(slash_command: str | None) -> None:
     """
     スラッシュコマンドを検証する
 

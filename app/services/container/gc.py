@@ -16,7 +16,6 @@ from app.services.container.lifecycle import ContainerLifecycleManager
 from app.services.container.models import ContainerInfo, ContainerStatus
 
 logger = structlog.get_logger(__name__)
-settings = get_settings()
 
 # 孤立コンテナの最小経過時間（作成直後の正常コンテナを誤回収しない）
 _ORPHAN_MIN_AGE_SECONDS = 300
@@ -33,6 +32,7 @@ class ContainerGarbageCollector:
     ) -> None:
         self.lifecycle = lifecycle
         self.redis = redis
+        self._settings = get_settings()
         # Orchestrator由来のProxy停止コールバック（BUG-12修正）
         self._proxy_stop_callback = proxy_stop_callback
         self._running = False
@@ -134,12 +134,12 @@ class ContainerGarbageCollector:
         now = datetime.now(timezone.utc)
 
         # 非アクティブTTL
-        inactive_ttl = timedelta(seconds=settings.container_inactive_ttl)
+        inactive_ttl = timedelta(seconds=self._settings.container_inactive_ttl)
         if (now - info.last_active_at) > inactive_ttl:
             return True
 
         # 絶対TTL
-        absolute_ttl = timedelta(seconds=settings.container_absolute_ttl)
+        absolute_ttl = timedelta(seconds=self._settings.container_absolute_ttl)
         if (now - info.created_at) > absolute_ttl:
             return True
 
@@ -168,7 +168,7 @@ class ContainerGarbageCollector:
 
             # コンテナ破棄
             await self.lifecycle.destroy_container(
-                info.id, grace_period=settings.container_grace_period
+                info.id, grace_period=self._settings.container_grace_period
             )
 
             # Redis メタデータ削除

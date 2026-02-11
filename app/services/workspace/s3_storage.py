@@ -9,7 +9,7 @@ import asyncio
 import io
 import mimetypes
 import os
-from typing import AsyncIterator, Optional
+from collections.abc import AsyncIterator
 
 import boto3
 from botocore.config import Config
@@ -20,7 +20,6 @@ from app.config import get_settings
 from app.infrastructure.metrics import get_s3_operations
 
 logger = structlog.get_logger(__name__)
-settings = get_settings()
 
 
 class S3StorageBackend:
@@ -32,6 +31,8 @@ class S3StorageBackend:
     """
 
     def __init__(self):
+        _settings = get_settings()
+
         # boto3 の設定（リトライ設定を含む）
         config = Config(
             retries={
@@ -44,14 +45,14 @@ class S3StorageBackend:
 
         self.client = boto3.client(
             's3',
-            region_name=settings.aws_region,
-            aws_access_key_id=settings.aws_access_key_id,
-            aws_secret_access_key=settings.aws_secret_access_key,
+            region_name=_settings.aws_region,
+            aws_access_key_id=_settings.aws_access_key_id,
+            aws_secret_access_key=_settings.aws_secret_access_key,
             config=config,
         )
-        self.bucket = settings.s3_bucket_name
-        self.prefix = settings.s3_workspace_prefix.rstrip('/')
-        self.chunk_size = settings.s3_chunk_size
+        self.bucket = _settings.s3_bucket_name
+        self.prefix = _settings.s3_workspace_prefix.rstrip('/')
+        self.chunk_size = _settings.s3_chunk_size
         self._metrics = get_s3_operations()
 
     def get_key(self, tenant_id: str, session_id: str, file_path: str) -> str:
@@ -98,7 +99,7 @@ class S3StorageBackend:
         file_path: str,
         stream: io.IOBase,
         content_type: str = "application/octet-stream",
-        content_length: Optional[int] = None,
+        content_length: int | None = None,
     ) -> str:
         """ストリームからS3にアップロード（大きなファイル用）"""
         key = self.get_key(tenant_id, session_id, file_path)

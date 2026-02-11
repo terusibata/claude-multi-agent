@@ -3,7 +3,6 @@
 エージェントが使用したツールの実行記録
 """
 from datetime import datetime
-from typing import Optional
 from uuid import uuid4
 
 from sqlalchemy import DateTime, Integer, String, func
@@ -29,7 +28,7 @@ class ToolExecutionLog(Base):
     session_id: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
 
     # 会話ID
-    conversation_id: Mapped[Optional[str]] = mapped_column(
+    conversation_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False), nullable=True, index=True
     )
 
@@ -38,19 +37,19 @@ class ToolExecutionLog(Base):
     tool_name: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
 
     # ツール使用ID（SDK内の識別子）
-    tool_use_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    tool_use_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
     # ツール入力（JSON）
-    tool_input: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    tool_input: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     # ツール出力（JSON）
-    tool_output: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    tool_output: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     # ステータス (success / error)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="success")
 
     # 実行時間（ミリ秒）
-    execution_time_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    execution_time_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # 実行日時
     executed_at: Mapped[datetime] = mapped_column(

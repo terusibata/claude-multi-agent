@@ -12,7 +12,6 @@ from app.models.mcp_server import McpServer
 from app.models.model import Model
 from app.models.simple_chat import SimpleChat
 from app.models.tenant import Tenant
-from app.repositories.model_repository import ModelRepository
 from app.services.container.orchestrator import ContainerOrchestrator
 from app.services.conversation_service import ConversationService
 from app.services.mcp_server_service import McpServerService
@@ -77,13 +76,7 @@ async def get_active_model(
     db: AsyncSession = Depends(get_db),
 ) -> Model:
     """アクティブなモデルを取得（存在しないか非アクティブなら例外）"""
-    repo = ModelRepository(db)
-    model = await repo.get_by_id(model_id)
-    if not model:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"モデル '{model_id}' が見つかりません",
-        )
+    model = await get_model_or_404(model_id, db)
     if model.status != "active":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

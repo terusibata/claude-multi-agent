@@ -9,15 +9,11 @@ Pure ASGIミドルウェアとして実装（SSEストリーミング対応）
 import hashlib
 import hmac
 import json
-from typing import Optional
 
 import structlog
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from app.config import get_settings
-
 logger = structlog.get_logger(__name__)
-settings = get_settings()
 
 
 class AuthMiddleware:
@@ -91,14 +87,14 @@ class AuthMiddleware:
             return True
         return False
 
-    def _get_header(self, scope: Scope, name: bytes) -> Optional[str]:
+    def _get_header(self, scope: Scope, name: bytes) -> str | None:
         """スコープからヘッダー値を取得"""
         for header_name, header_value in scope.get("headers", []):
             if header_name.lower() == name:
                 return header_value.decode("latin-1")
         return None
 
-    def _extract_api_key(self, scope: Scope) -> Optional[str]:
+    def _extract_api_key(self, scope: Scope) -> str | None:
         """
         リクエストスコープからAPIキーを抽出
 

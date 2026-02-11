@@ -2,7 +2,6 @@
 会話CRUD APIエンドポイント
 """
 from datetime import datetime
-from typing import Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -33,14 +32,14 @@ router = APIRouter()
 )
 async def get_conversations(
     tenant_id: str,
-    user_id: Optional[str] = Query(None, description="ユーザーIDフィルター"),
-    status_filter: Optional[str] = Query(
+    user_id: str | None = Query(None, description="ユーザーIDフィルター"),
+    status_filter: str | None = Query(
         None, alias="status", description="ステータスフィルター"
     ),
-    from_date: Optional[datetime] = Query(
+    from_date: datetime | None = Query(
         None, description="開始日時（タイムゾーンなしの場合JSTとして扱う）"
     ),
-    to_date: Optional[datetime] = Query(
+    to_date: datetime | None = Query(
         None, description="終了日時（タイムゾーンなしの場合JSTとして扱う）"
     ),
     limit: int = Query(50, ge=1, le=100, description="取得件数"),

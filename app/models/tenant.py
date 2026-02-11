@@ -3,7 +3,6 @@
 テナントごとの設定を管理
 """
 from datetime import datetime
-from typing import Optional
 
 from sqlalchemy import DateTime, ForeignKey, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -22,10 +21,10 @@ class Tenant(Base):
     tenant_id: Mapped[str] = mapped_column(String(100), primary_key=True)
 
     # システムプロンプト
-    system_prompt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # デフォルトモデルID
-    model_id: Mapped[Optional[str]] = mapped_column(
+    model_id: Mapped[str | None] = mapped_column(
         String(100),
         ForeignKey("models.model_id"),
         nullable=True,

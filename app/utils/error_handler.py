@@ -5,7 +5,7 @@ API層での共通エラー処理
 import structlog
 from fastapi import HTTPException, status
 from functools import wraps
-from typing import Callable, Optional, TypeVar
+from typing import Callable, TypeVar
 
 from app.utils.exceptions import (
     AppError,
@@ -58,7 +58,7 @@ def app_error_to_http_exception(error: AppError) -> HTTPException:
 def raise_not_found(
     resource_type: str,
     resource_id: str,
-    message: Optional[str] = None,
+    message: str | None = None,
 ) -> None:
     """404エラーを発生"""
     raise HTTPException(

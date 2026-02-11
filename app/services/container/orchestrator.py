@@ -48,7 +48,6 @@ from app.services.proxy.credential_proxy import CredentialInjectionProxy, ProxyC
 from app.services.proxy.sigv4 import AWSCredentials
 
 logger = structlog.get_logger(__name__)
-settings = get_settings()
 
 
 class ContainerOrchestrator:
@@ -64,6 +63,7 @@ class ContainerOrchestrator:
         self.warm_pool = warm_pool
         self.redis = redis
         self._proxies: dict[str, CredentialInjectionProxy] = {}
+        self._settings = get_settings()
 
     async def get_or_create(self, conversation_id: str) -> ContainerInfo:
         """
@@ -156,7 +156,7 @@ class ContainerOrchestrator:
 
         try:
             transport = httpx.AsyncHTTPTransport(uds=agent_socket)
-            async with httpx.AsyncClient(transport=transport, timeout=httpx.Timeout(settings.container_execution_timeout, connect=30.0)) as client:
+            async with httpx.AsyncClient(transport=transport, timeout=httpx.Timeout(self._settings.container_execution_timeout, connect=30.0)) as client:
                 async with client.stream(
                     "POST",
                     "http://localhost/execute",
@@ -286,15 +286,15 @@ class ContainerOrchestrator:
     async def _start_proxy(self, info: ContainerInfo) -> None:
         """コンテナ用Proxyを起動"""
         aws_creds = AWSCredentials(
-            access_key_id=settings.aws_access_key_id or "",
-            secret_access_key=settings.aws_secret_access_key or "",
-            session_token=settings.aws_session_token,
-            region=settings.aws_region,
+            access_key_id=self._settings.aws_access_key_id or "",
+            secret_access_key=self._settings.aws_secret_access_key or "",
+            session_token=self._settings.aws_session_token,
+            region=self._settings.aws_region,
         )
         proxy_config = ProxyConfig(
-            whitelist_domains=settings.proxy_domain_whitelist_list,
+            whitelist_domains=self._settings.proxy_domain_whitelist_list,
             aws_credentials=aws_creds,
-            log_all_requests=settings.proxy_log_all_requests,
+            log_all_requests=self._settings.proxy_log_all_requests,
         )
         proxy = CredentialInjectionProxy(proxy_config, info.proxy_socket)
         await proxy.start()
@@ -339,7 +339,7 @@ class ContainerOrchestrator:
         await self._stop_proxy(info.id)
         try:
             await self.lifecycle.destroy_container(
-                info.id, grace_period=settings.container_grace_period
+                info.id, grace_period=self._settings.container_grace_period
             )
         except Exception as e:
             logger.error("コンテナ破棄エラー", container_id=info.id, error=str(e))
