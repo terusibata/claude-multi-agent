@@ -1,4 +1,49 @@
 # AIエージェントバックエンド Docker Compose設定
+#
+# バックエンド共通設定をYAMLアンカーで定義し、
+# 開発環境(backend)と本番環境(backend-prod)で共有する。
+
+# =============================================================================
+# 共通設定（YAMLアンカー）
+# =============================================================================
+
+x-backend-base: &backend-base
+  env_file:
+    - .env
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  restart: unless-stopped
+  # Docker Socketアクセスに必要
+  group_add:
+    - ${DOCKER_GID:-999}
+
+x-backend-env: &backend-env
+  # Redis設定
+  REDIS_URL: redis://redis:6379/0
+  # スキル・ワークスペース設定
+  SKILLS_BASE_PATH: /skills
+  WORKSPACE_TEMP_DIR: /var/lib/aiagent/workspaces
+  # コンテナ隔離設定
+  DOCKER_SOCKET_PATH: unix:///var/run/docker.sock
+  WORKSPACE_SOCKET_BASE_PATH: /var/run/workspace-sockets
+  WORKSPACE_SOCKET_HOST_PATH: ${WORKSPACE_SOCKET_HOST_PATH:-/var/run/workspace-sockets}
+  CONTAINER_IMAGE: ${CONTAINER_IMAGE:-workspace-base:latest}
+
+x-backend-volumes: &backend-volumes
+  - skills_data:/skills
+  - workspaces_data:/var/lib/aiagent/workspaces
+  # Docker Socket（コンテナ管理用）
+  - /var/run/docker.sock:/var/run/docker.sock
+  # ワークスペースSocket（ホストバインドマウント: DinD環境でパス整合性を保証）
+  - ${WORKSPACE_SOCKET_HOST_PATH:-/var/run/workspace-sockets}:/var/run/workspace-sockets
+
+# =============================================================================
+# サービス定義
+# =============================================================================
+
 services:
   # PostgreSQLデータベース
   db:
@@ -43,52 +88,30 @@ services:
 
   # AIエージェントバックエンド（開発環境）
   backend:
+    <<: *backend-base
     build:
       context: .
       dockerfile: Dockerfile
       target: development
     container_name: claude-multi-agent
-    env_file:
-      - .env
     environment:
-      # データベース設定
+      <<: *backend-env
       DATABASE_URL: postgresql+asyncpg://${DB_USER:-aiagent}:${DB_PASSWORD:-aiagent_password}@db:5432/${DB_NAME:-aiagent}
-      # Redis設定
-      REDIS_URL: redis://redis:6379/0
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
-      # アプリケーション設定
       APP_ENV: ${APP_ENV:-development}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      SKILLS_BASE_PATH: /skills
-      WORKSPACE_TEMP_DIR: /var/lib/aiagent/workspaces
-      # コンテナ隔離設定
-      DOCKER_SOCKET_PATH: unix:///var/run/docker.sock
-      WORKSPACE_SOCKET_BASE_PATH: /var/run/workspace-sockets
-      # Docker-in-Docker: コンテナBind mountにはホスト上の実パスを使用
-      WORKSPACE_SOCKET_HOST_PATH: ${WORKSPACE_SOCKET_HOST_PATH:-/var/run/workspace-sockets}
-      CONTAINER_IMAGE: ${CONTAINER_IMAGE:-workspace-base:latest}
     volumes:
-      - ./app:/app/app
+      - ./app:/app/app  # 開発用ホットリロード
       - skills_data:/skills
       - workspaces_data:/var/lib/aiagent/workspaces
-      # Docker Socket（コンテナ管理用）
       - /var/run/docker.sock:/var/run/docker.sock
-      # ワークスペースSocket（ホストバインドマウント: DinD環境でパス整合性を保証）
       - ${WORKSPACE_SOCKET_HOST_PATH:-/var/run/workspace-sockets}:/var/run/workspace-sockets
     ports:
       - "${APP_PORT:-8000}:8000"
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    restart: unless-stopped
-    # Docker Socketアクセスに必要
-    group_add:
-      - ${DOCKER_GID:-999}
 
   # 本番環境用バックエンド
   backend-prod:
+    <<: *backend-base
     build:
       context: .
       dockerfile: Dockerfile
@@ -96,46 +119,18 @@ services:
     container_name: claude-multi-agent-prod
     profiles:
       - production
-    env_file:
-      - .env
     environment:
-      # データベース設定
+      <<: *backend-env
       DATABASE_URL: postgresql+asyncpg://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}
-      # Redis設定（本番では認証必須）
-      REDIS_URL: redis://redis:6379/0
       REDIS_PASSWORD: ${REDIS_PASSWORD}
-      # アプリケーション設定
       APP_ENV: production
       LOG_LEVEL: ${LOG_LEVEL:-WARNING}
-      SKILLS_BASE_PATH: /skills
-      WORKSPACE_TEMP_DIR: /var/lib/aiagent/workspaces
-      # 本番設定
       API_KEYS: ${API_KEYS}
       METRICS_ENABLED: "true"
       SHUTDOWN_TIMEOUT: "30.0"
-      # コンテナ隔離設定
-      DOCKER_SOCKET_PATH: unix:///var/run/docker.sock
-      WORKSPACE_SOCKET_BASE_PATH: /var/run/workspace-sockets
-      WORKSPACE_SOCKET_HOST_PATH: ${WORKSPACE_SOCKET_HOST_PATH:-/var/run/workspace-sockets}
-      CONTAINER_IMAGE: ${CONTAINER_IMAGE:-workspace-base:latest}
-    volumes:
-      - skills_data:/skills
-      - workspaces_data:/var/lib/aiagent/workspaces
-      # Docker Socket（コンテナ管理用）
-      - /var/run/docker.sock:/var/run/docker.sock
-      # ワークスペースSocket（ホストバインドマウント: DinD環境でパス整合性を保証）
-      - ${WORKSPACE_SOCKET_HOST_PATH:-/var/run/workspace-sockets}:/var/run/workspace-sockets
+    volumes: *backend-volumes
     ports:
       - "${APP_PORT:-8000}:8000"
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    restart: unless-stopped
-    # Docker Socketアクセスに必要
-    group_add:
-      - ${DOCKER_GID:-999}
     deploy:
       resources:
         limits:
@@ -148,7 +143,7 @@ services:
     stop_grace_period: 30s
 
   # ============================================
-  # 監視スタック (Phase 2)
+  # 監視スタック
   # ============================================
 
   # Prometheus

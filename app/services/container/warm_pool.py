@@ -240,7 +240,7 @@ class WarmPoolManager:
             if "max_size" in config:
                 self.max_size = int(config["max_size"])
         except Exception:
-            pass
+            logger.warning("WarmPool設定パース失敗", exc_info=True)
 
     def _schedule_task(self, coro) -> None:
         """バックグラウンドタスクをスケジュールし参照を保持する"""
@@ -264,4 +264,4 @@ class WarmPoolManager:
             size = await self.redis.llen(REDIS_KEY_WARM_POOL)
             get_workspace_warm_pool_size().set(size)
         except Exception:
-            pass
+            logger.debug("メトリクス更新失敗", exc_info=True)

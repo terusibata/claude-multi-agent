@@ -247,7 +247,7 @@ class ExecuteService:
                 try:
                     await self.db.rollback()
                 except Exception:
-                    pass
+                    logger.warning("ロールバック失敗", exc_info=True)
 
     async def _stream_from_container(
         self,

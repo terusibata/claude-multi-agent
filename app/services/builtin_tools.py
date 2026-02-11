@@ -84,7 +84,7 @@ def _normalize_file_paths(file_paths_input: Any) -> list[str]:
             if isinstance(parsed, list):
                 return parsed
         except json.JSONDecodeError:
-            pass
+            logger.debug("JSONパースフォールバック", exc_info=True)
 
     return [file_paths_input]
 

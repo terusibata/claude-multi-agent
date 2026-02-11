@@ -121,7 +121,7 @@ class ContainerGarbageCollector:
                         try:
                             await self._proxy_stop_callback(container_id)
                         except Exception:
-                            pass
+                            logger.warning("GCプロキシ停止失敗", exc_info=True)
                     await self.lifecycle.destroy_container(container_id, grace_period=5)
                     get_workspace_active_containers().dec()
                     destroyed_count += 1

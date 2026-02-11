@@ -154,7 +154,7 @@ class CredentialInjectionProxy:
             try:
                 writer.close()
             except Exception:
-                pass
+                logger.debug("Writer close失敗", exc_info=True)
 
     async def handle_request(
         self,
@@ -264,7 +264,7 @@ class CredentialInjectionProxy:
                     dst.write(data)
                     await dst.drain()
             except Exception:
-                pass
+                logger.debug("ストリームパイプ失敗", exc_info=True)
 
         try:
             await asyncio.gather(
@@ -278,7 +278,7 @@ class CredentialInjectionProxy:
                     if not remote_writer.is_closing():
                         remote_writer.close()
                 except Exception:
-                    pass
+                    logger.debug("リモートWriter close失敗", exc_info=True)
 
     async def _forward_request(
         self,

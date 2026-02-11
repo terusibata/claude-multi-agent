@@ -4,6 +4,10 @@
 """
 from urllib.parse import urlparse
 
+import structlog
+
+logger = structlog.get_logger(__name__)
+
 
 class DomainWhitelist:
     """ドメインベースのアクセス制御"""
@@ -17,6 +21,7 @@ class DomainWhitelist:
             parsed = urlparse(url)
             host = (parsed.hostname or "").lower()
         except Exception:
+            logger.warning("ドメイン解析失敗", url=url, exc_info=True)
             return False
 
         if not host:

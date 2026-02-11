@@ -9,14 +9,20 @@ AIエージェントがPowerPointファイルを理解するための軽量ツ�
 3. search_presentation: プレゼンテーション全体からキーワード検索
 """
 
-from __future__ import annotations
-
 import io
-import re
-import unicodedata
 from typing import TYPE_CHECKING, Any, TypedDict
 
 import structlog
+
+from app.services.workspace.file_tools.shared_utils import (
+    build_search_pattern,
+    check_library_available,
+    check_old_format,
+    create_context_snippet,
+    format_tool_error,
+    format_tool_success,
+    normalize_text,
+)
 
 if TYPE_CHECKING:
     from app.services.workspace_service import WorkspaceService
@@ -97,53 +103,18 @@ DEFAULT_MAX_SLIDES = 10  # デフォルトの最大取得スライド数
 # Internal Utilities
 # =============================================================================
 
-def _normalize_text(text: str) -> str:
-    """テキストの正規化（Unicode NFC、制御文字除去）"""
-    if not text:
-        return ""
-
-    text = unicodedata.normalize("NFC", text)
-
-    result = []
-    for ch in text:
-        code = ord(ch)
-        if ch in ('\n', '\r', '\t'):
-            result.append(ch)
-        elif code < 0x20 or code == 0x7F or (0x80 <= code <= 0x9F):
-            continue
-        elif code in (0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF):
-            continue
-        else:
-            result.append(ch)
-
-    return "".join(result)
-
-
 def _load_presentation_from_bytes(content: bytes):
     """バイトデータからプレゼンテーションを読み込む"""
     from pptx import Presentation
     return Presentation(io.BytesIO(content))
 
 
-def _check_old_format(file_path: str) -> dict[str, Any] | None:
-    """古いOffice形式（.ppt）のチェック"""
-    if file_path.lower().endswith(".ppt"):
-        return {
-            "content": [{
-                "type": "text",
-                "text": (
-                    f"エラー: '{file_path}' は古いPowerPoint形式（.ppt）です。\n\n"
-                    "このツールは .pptx（Office Open XML）形式のみ対応しています。\n"
-                    ".ppt（バイナリ形式）ファイルは python-pptx では読み取れません。\n\n"
-                    "対処方法:\n"
-                    "1. Microsoft PowerPoint で .pptx 形式に変換して再アップロード\n"
-                    "2. LibreOffice Impress で .pptx 形式に変換して再アップロード\n"
-                    "3. オンライン変換ツールを使用"
-                ),
-            }],
-            "is_error": True,
-        }
-    return None
+def _check_old_format_pptx(file_path: str) -> dict[str, Any] | None:
+    """古いPowerPoint形式（.ppt）のチェック"""
+    return check_old_format(
+        file_path, ".ppt", "PowerPoint", ".pptx",
+        "python-pptx", "Microsoft PowerPoint"
+    )
 
 
 def _get_slide_title(slide) -> str:
@@ -152,26 +123,11 @@ def _get_slide_title(slide) -> str:
         if shape.has_text_frame:
             if hasattr(shape, "is_placeholder") and shape.placeholder_format:
                 if shape.placeholder_format.type == 1:  # TITLE
-                    return _normalize_text(shape.text_frame.text).strip()[:100]
+                    return normalize_text(shape.text_frame.text).strip()[:100]
             elif shape.text_frame.text.strip():
                 # 最初のテキストをタイトル候補として
-                return _normalize_text(shape.text_frame.text).strip()[:50]
+                return normalize_text(shape.text_frame.text).strip()[:50]
     return "(タイトルなし)"
-
-
-def _create_context_snippet(text: str, match_start: int, match_end: int, context_chars: int = 40) -> str:
-    """検索マッチの前後コンテキストを生成"""
-    start = max(0, match_start - context_chars)
-    end = min(len(text), match_end + context_chars)
-
-    prefix = "..." if start > 0 else ""
-    suffix = "..." if end < len(text) else ""
-
-    before = text[start:match_start]
-    match = text[match_start:match_end]
-    after = text[match_end:end]
-
-    return f"{prefix}{before}[{match}]{after}{suffix}"
 
 
 def _parse_slides(slides_spec: str, total_slides: int, max_slides: int) -> list[int]:
@@ -243,14 +199,14 @@ def get_presentation_info(content: bytes, filename: str) -> PresentationInfo:
             if shape.has_text_frame:
                 text_count += 1
                 for paragraph in shape.text_frame.paragraphs:
-                    char_count += len(_normalize_text(paragraph.text))
+                    char_count += len(normalize_text(paragraph.text))
             if shape.shape_type == 13:  # MSO_SHAPE_TYPE.PICTURE
                 image_count += 1
             if shape.has_table:
                 table_count += 1
                 for row in shape.table.rows:
                     for cell in row.cells:
-                        char_count += len(_normalize_text(cell.text))
+                        char_count += len(normalize_text(cell.text))
             if shape.has_chart:
                 chart_count += 1
 
@@ -258,7 +214,7 @@ def get_presentation_info(content: bytes, filename: str) -> PresentationInfo:
         has_notes = False
         notes_length = 0
         if slide.has_notes_slide and slide.notes_slide.notes_text_frame:
-            notes_text = _normalize_text(slide.notes_slide.notes_text_frame.text).strip()
+            notes_text = normalize_text(slide.notes_slide.notes_text_frame.text).strip()
             if notes_text:
                 has_notes = True
                 notes_length = len(notes_text)
@@ -328,7 +284,7 @@ def get_slides_content(
         for shape in slide.shapes:
             if shape.has_text_frame:
                 for paragraph in shape.text_frame.paragraphs:
-                    text = _normalize_text(paragraph.text).strip()
+                    text = normalize_text(paragraph.text).strip()
                     if text:
                         text_content.append(text)
 
@@ -337,14 +293,14 @@ def get_slides_content(
                 for row in table.rows:
                     row_texts = []
                     for cell in row.cells:
-                        row_texts.append(_normalize_text(cell.text).strip())
+                        row_texts.append(normalize_text(cell.text).strip())
                     if any(row_texts):
                         table_content.append("| " + " | ".join(row_texts) + " |")
 
         # ノート
         notes = None
         if include_notes and slide.has_notes_slide:
-            notes_text = _normalize_text(slide.notes_slide.notes_text_frame.text).strip()
+            notes_text = normalize_text(slide.notes_slide.notes_text_frame.text).strip()
             if notes_text:
                 notes = notes_text
 
@@ -402,13 +358,7 @@ def search_presentation(
     prs = _load_presentation_from_bytes(content)
 
     hits: list[SearchHit] = []
-
-    # 検索パターンを準備
-    flags = 0 if case_sensitive else re.IGNORECASE
-    try:
-        pattern = re.compile(re.escape(query), flags)
-    except re.error:
-        raise ValueError(f"無効な検索クエリ: {query}")
+    pattern = build_search_pattern(query, case_sensitive)
 
     for slide_num, slide in enumerate(prs.slides, 1):
         if len(hits) >= max_hits:
@@ -424,7 +374,7 @@ def search_presentation(
                 slide_title=title,
                 location_type="title",
                 text=title,
-                context=_create_context_snippet(title, match.start(), match.end()),
+                context=create_context_snippet(title, match.start(), match.end()),
             ))
 
         # テキストを検索
@@ -437,7 +387,7 @@ def search_presentation(
                     if len(hits) >= max_hits:
                         break
 
-                    text = _normalize_text(paragraph.text)
+                    text = normalize_text(paragraph.text)
                     if not text:
                         continue
 
@@ -448,7 +398,7 @@ def search_presentation(
                             slide_title=title,
                             location_type="text",
                             text=text[:200] if len(text) > 200 else text,
-                            context=_create_context_snippet(text, match.start(), match.end()),
+                            context=create_context_snippet(text, match.start(), match.end()),
                         ))
 
             # 表を検索
@@ -459,7 +409,7 @@ def search_presentation(
 
                     row_texts = []
                     for cell in row.cells:
-                        cell_text = _normalize_text(cell.text).strip()
+                        cell_text = normalize_text(cell.text).strip()
                         row_texts.append(cell_text)
 
                         match = pattern.search(cell_text)
@@ -476,7 +426,7 @@ def search_presentation(
 
         # ノートを検索
         if include_notes and slide.has_notes_slide and len(hits) < max_hits:
-            notes_text = _normalize_text(slide.notes_slide.notes_text_frame.text).strip()
+            notes_text = normalize_text(slide.notes_slide.notes_text_frame.text).strip()
             if notes_text:
                 match = pattern.search(notes_text)
                 if match:
@@ -485,7 +435,7 @@ def search_presentation(
                         slide_title=title,
                         location_type="notes",
                         text=notes_text[:200] if len(notes_text) > 200 else notes_text,
-                        context=_create_context_snippet(notes_text, match.start(), match.end()),
+                        context=create_context_snippet(notes_text, match.start(), match.end()),
                     ))
 
     return SearchResult(
@@ -514,17 +464,13 @@ async def get_presentation_info_handler(
     """
     file_path = args.get("file_path", "")
 
-    old_format_error = _check_old_format(file_path)
+    old_format_error = _check_old_format_pptx(file_path)
     if old_format_error:
         return old_format_error
 
-    try:
-        from pptx import Presentation  # noqa: F401
-    except ImportError:
-        return {
-            "content": [{"type": "text", "text": "エラー: python-pptxライブラリがインストールされていません。"}],
-            "is_error": True,
-        }
+    lib_error = check_library_available("pptx", "python-pptx")
+    if lib_error:
+        return lib_error
 
     try:
         content, filename, _ = await workspace_service.download_file(
@@ -566,20 +512,12 @@ async def get_presentation_info_handler(
         result_lines.append("スライド取得: `get_slides_content` を使用")
         result_lines.append("検索: `search_presentation` を使用")
 
-        return {
-            "content": [{"type": "text", "text": "\n".join(result_lines)}],
-        }
+        return format_tool_success("\n".join(result_lines))
     except FileNotFoundError:
-        return {
-            "content": [{"type": "text", "text": f"ファイルが見つかりません: {file_path}"}],
-            "is_error": True,
-        }
+        return format_tool_error(f"ファイルが見つかりません: {file_path}")
     except Exception as e:
         logger.error("PowerPoint情報取得エラー", error=str(e), file_path=file_path)
-        return {
-            "content": [{"type": "text", "text": f"読み込みエラー: {str(e)}"}],
-            "is_error": True,
-        }
+        return format_tool_error(f"読み込みエラー: {str(e)}")
 
 
 async def get_slides_content_handler(
@@ -605,17 +543,13 @@ async def get_slides_content_handler(
     include_notes = args.get("include_notes", True)
     include_tables = args.get("include_tables", True)
 
-    old_format_error = _check_old_format(file_path)
+    old_format_error = _check_old_format_pptx(file_path)
     if old_format_error:
         return old_format_error
 
-    try:
-        from pptx import Presentation  # noqa: F401
-    except ImportError:
-        return {
-            "content": [{"type": "text", "text": "エラー: python-pptxライブラリがインストールされていません。"}],
-            "is_error": True,
-        }
+    lib_error = check_library_available("pptx", "python-pptx")
+    if lib_error:
+        return lib_error
 
     try:
         content, filename, _ = await workspace_service.download_file(
@@ -668,20 +602,12 @@ async def get_slides_content_handler(
             result_lines.append("まだ続きがあります。次を取得するには:")
             result_lines.append(f"`slides=\"{result['end_slide'] + 1}-{result['end_slide'] + max_slides}\"` を指定してください。")
 
-        return {
-            "content": [{"type": "text", "text": "\n".join(result_lines)}],
-        }
+        return format_tool_success("\n".join(result_lines))
     except FileNotFoundError:
-        return {
-            "content": [{"type": "text", "text": f"ファイルが見つかりません: {file_path}"}],
-            "is_error": True,
-        }
+        return format_tool_error(f"ファイルが見つかりません: {file_path}")
     except Exception as e:
         logger.error("PowerPointスライド取得エラー", error=str(e), file_path=file_path)
-        return {
-            "content": [{"type": "text", "text": f"読み込みエラー: {str(e)}"}],
-            "is_error": True,
-        }
+        return format_tool_error(f"読み込みエラー: {str(e)}")
 
 
 async def search_presentation_handler(
@@ -707,23 +633,16 @@ async def search_presentation_handler(
     max_hits = args.get("max_hits", 50)
     include_notes = args.get("include_notes", True)
 
-    old_format_error = _check_old_format(file_path)
+    old_format_error = _check_old_format_pptx(file_path)
     if old_format_error:
         return old_format_error
 
     if not query:
-        return {
-            "content": [{"type": "text", "text": "エラー: query（検索キーワード）を指定してください。"}],
-            "is_error": True,
-        }
+        return format_tool_error("エラー: query（検索キーワード）を指定してください。")
 
-    try:
-        from pptx import Presentation  # noqa: F401
-    except ImportError:
-        return {
-            "content": [{"type": "text", "text": "エラー: python-pptxライブラリがインストールされていません。"}],
-            "is_error": True,
-        }
+    lib_error = check_library_available("pptx", "python-pptx")
+    if lib_error:
+        return lib_error
 
     try:
         content, filename, _ = await workspace_service.download_file(
@@ -760,22 +679,11 @@ async def search_presentation_handler(
         else:
             result_lines.append("検索結果はありませんでした。")
 
-        return {
-            "content": [{"type": "text", "text": "\n".join(result_lines)}],
-        }
+        return format_tool_success("\n".join(result_lines))
     except FileNotFoundError:
-        return {
-            "content": [{"type": "text", "text": f"ファイルが見つかりません: {file_path}"}],
-            "is_error": True,
-        }
+        return format_tool_error(f"ファイルが見つかりません: {file_path}")
     except ValueError as e:
-        return {
-            "content": [{"type": "text", "text": str(e)}],
-            "is_error": True,
-        }
+        return format_tool_error(str(e))
     except Exception as e:
         logger.error("PowerPoint検索エラー", error=str(e), file_path=file_path, query=query)
-        return {
-            "content": [{"type": "text", "text": f"検索エラー: {str(e)}"}],
-            "is_error": True,
-        }
+        return format_tool_error(f"検索エラー: {str(e)}")
