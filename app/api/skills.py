@@ -18,8 +18,7 @@ from app.schemas.skill import (
     SlashCommandListResponse,
 )
 from app.services.skill_service import SkillService
-from app.utils.exceptions import AppError
-from app.utils.error_handler import app_error_to_http_exception, raise_not_found
+from app.utils.error_handler import raise_not_found
 
 router = APIRouter()
 logger = structlog.get_logger(__name__)
@@ -152,16 +151,13 @@ async def upload_skill(
                 filename, content = await _read_upload_file_safely(file)
                 files[filename] = content
 
-    try:
-        skill_data = SkillCreate(
-            name=name,
-            display_title=display_title,
-            description=description,
-        )
+    skill_data = SkillCreate(
+        name=name,
+        display_title=display_title,
+        description=description,
+    )
 
-        return await service.create(tenant_id, skill_data, files)
-    except AppError as e:
-        raise app_error_to_http_exception(e)
+    return await service.create(tenant_id, skill_data, files)
 
 
 @router.put("/{skill_id}", response_model=SkillResponse, summary="Skillメタデータ更新")
@@ -199,13 +195,10 @@ async def update_skill_files(
         filename, content = await _read_upload_file_safely(file)
         file_contents[filename] = content
 
-    try:
-        skill = await service.update_files(skill_id, tenant_id, file_contents)
-        if not skill:
-            raise_not_found("Skill", skill_id)
-        return skill
-    except AppError as e:
-        raise app_error_to_http_exception(e)
+    skill = await service.update_files(skill_id, tenant_id, file_contents)
+    if not skill:
+        raise_not_found("Skill", skill_id)
+    return skill
 
 
 @router.delete(
@@ -256,10 +249,7 @@ async def get_skill_file_content(
     Skillの特定ファイルの内容を取得します。
     """
     service = SkillService(db)
-    try:
-        content = await service.get_file_content(skill_id, tenant_id, file_path)
-        if content is None:
-            raise_not_found("ファイル", file_path)
-        return {"content": content}
-    except AppError as e:
-        raise app_error_to_http_exception(e)
+    content = await service.get_file_content(skill_id, tenant_id, file_path)
+    if content is None:
+        raise_not_found("ファイル", file_path)
+    return {"content": content}

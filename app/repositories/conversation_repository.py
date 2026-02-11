@@ -3,7 +3,6 @@
 """
 from datetime import datetime
 
-from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.conversation import Conversation
@@ -36,30 +35,19 @@ class ConversationRepository(BaseRepository[Conversation]):
         from_date_utc = to_utc(from_date)
         to_date_utc = to_utc(to_date)
 
-        base_query = select(Conversation).where(Conversation.tenant_id == tenant_id)
-
+        filters = [Conversation.tenant_id == tenant_id]
         if user_id:
-            base_query = base_query.where(Conversation.user_id == user_id)
+            filters.append(Conversation.user_id == user_id)
         if status:
-            base_query = base_query.where(Conversation.status == status)
+            filters.append(Conversation.status == status)
         if from_date_utc:
-            base_query = base_query.where(Conversation.created_at >= from_date_utc)
+            filters.append(Conversation.created_at >= from_date_utc)
         if to_date_utc:
-            base_query = base_query.where(Conversation.created_at <= to_date_utc)
+            filters.append(Conversation.created_at <= to_date_utc)
 
-        # 総件数取得
-        count_query = select(func.count()).select_from(base_query.subquery())
-        count_result = await self.db.execute(count_query)
-        total = count_result.scalar() or 0
-
-        # データ取得
-        query = base_query.order_by(Conversation.updated_at.desc())
-        query = query.limit(limit).offset(offset)
-
-        result = await self.db.execute(query)
-        conversations = list(result.scalars().all())
-
-        return conversations, total
+        return await self.find_with_count(
+            filters=filters, limit=limit, offset=offset,
+        )
 
     async def update_context_status(
         self,

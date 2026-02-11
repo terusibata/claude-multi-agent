@@ -9,6 +9,7 @@
 
 import re
 import unicodedata
+from functools import wraps
 from typing import Any
 
 import structlog
@@ -155,3 +156,82 @@ def check_library_available(
         return format_tool_error(
             f"エラー: {display_name}ライブラリがインストールされていません。"
         )
+
+
+# =============================================================================
+# ハンドラーデコレータ
+# =============================================================================
+
+
+def file_tool_handler(
+    *,
+    old_format: tuple[str, str, str, str, str] | None = None,
+    required_library: tuple[str, str] | None = None,
+    log_prefix: str = "ファイルツール",
+):
+    """
+    ファイルツールハンドラーの共通処理をデコレータ化。
+
+    ファイルダウンロード、旧形式チェック、ライブラリ確認、
+    エラーハンドリングを統一的に処理する。
+
+    デコレート対象の関数シグネチャ:
+        async def handler(*, content, filename, content_type, args, **ctx)
+
+    ctx にはワークスペース操作用のパラメータが含まれる:
+        workspace_service, tenant_id, conversation_id
+
+    Args:
+        old_format: 旧形式チェック用タプル
+            (旧拡張子, 形式名, 新拡張子, ライブラリ名, アプリ名)
+        required_library: ライブラリ確認用タプル (モジュール名, 表示名)
+        log_prefix: エラーログのプレフィックス
+    """
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(workspace_service, tenant_id, conversation_id, args):
+            file_path = args.get("file_path", "")
+
+            # 旧形式チェック
+            if old_format:
+                err = check_old_format(file_path, *old_format)
+                if err:
+                    return err
+
+            # ライブラリ確認
+            if required_library:
+                err = check_library_available(*required_library)
+                if err:
+                    return err
+
+            try:
+                content, filename, content_type = (
+                    await workspace_service.download_file(
+                        tenant_id, conversation_id, file_path
+                    )
+                )
+                return await func(
+                    content=content,
+                    filename=filename,
+                    content_type=content_type,
+                    args=args,
+                    workspace_service=workspace_service,
+                    tenant_id=tenant_id,
+                    conversation_id=conversation_id,
+                )
+            except FileNotFoundError:
+                return format_tool_error(
+                    f"ファイルが見つかりません: {file_path}"
+                )
+            except ValueError as e:
+                return format_tool_error(str(e))
+            except Exception as e:
+                logger.error(
+                    f"{log_prefix}エラー",
+                    error=str(e),
+                    file_path=file_path,
+                )
+                return format_tool_error(f"読み込みエラー: {str(e)}")
+
+        return wrapper
+    return decorator

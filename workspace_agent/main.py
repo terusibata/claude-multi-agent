@@ -2,9 +2,7 @@
 ワークスペースエージェント メインアプリケーション
 コンテナ内でUnix Domain Socket上のFastAPIとして動作する
 """
-import logging
-import sys
-
+import structlog
 import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
@@ -12,12 +10,14 @@ from fastapi.responses import StreamingResponse
 from workspace_agent.models import ExecuteRequest, HealthResponse
 from workspace_agent.sdk_client import execute_streaming
 
-logging.basicConfig(
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    stream=sys.stdout,
-    level=logging.INFO,
+structlog.configure(
+    processors=[
+        structlog.stdlib.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.dev.ConsoleRenderer(),
+    ],
 )
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 AGENT_SOCKET = "/var/run/ws/agent.sock"
 
@@ -45,5 +45,5 @@ async def health() -> HealthResponse:
 
 
 if __name__ == "__main__":
-    logger.info("ワークスペースエージェント起動: socket=%s", AGENT_SOCKET)
+    logger.info("ワークスペースエージェント起動", socket=AGENT_SOCKET)
     uvicorn.run(app, uds=AGENT_SOCKET, log_level="info")

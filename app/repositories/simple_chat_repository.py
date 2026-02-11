@@ -28,30 +28,17 @@ class SimpleChatRepository(BaseRepository[SimpleChat]):
         offset: int = 0,
     ) -> tuple[list[SimpleChat], int]:
         """テナントのチャット一覧と総件数を取得"""
-        base_query = select(SimpleChat).where(SimpleChat.tenant_id == tenant_id)
-
+        filters = [SimpleChat.tenant_id == tenant_id]
         if user_id:
-            base_query = base_query.where(SimpleChat.user_id == user_id)
+            filters.append(SimpleChat.user_id == user_id)
         if application_type:
-            base_query = base_query.where(
-                SimpleChat.application_type == application_type
-            )
+            filters.append(SimpleChat.application_type == application_type)
         if status:
-            base_query = base_query.where(SimpleChat.status == status)
+            filters.append(SimpleChat.status == status)
 
-        # 総件数取得
-        count_query = select(func.count()).select_from(base_query.subquery())
-        count_result = await self.db.execute(count_query)
-        total = count_result.scalar() or 0
-
-        # データ取得
-        query = base_query.order_by(SimpleChat.updated_at.desc())
-        query = query.limit(limit).offset(offset)
-
-        result = await self.db.execute(query)
-        chats = list(result.scalars().all())
-
-        return chats, total
+        return await self.find_with_count(
+            filters=filters, limit=limit, offset=offset,
+        )
 
 
 class SimpleChatMessageRepository(BaseRepository[SimpleChatMessage]):

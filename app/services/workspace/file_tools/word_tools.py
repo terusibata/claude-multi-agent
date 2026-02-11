@@ -10,22 +10,18 @@ AIエージェントがWordファイルを理解するための軽量ツール�
 """
 
 import io
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import Any, TypedDict
 
 import structlog
 
-from app.services.workspace.file_tools.shared_utils import (
+from app.services.workspace.file_tools.utils import (
     build_search_pattern,
-    check_library_available,
-    check_old_format,
     create_context_snippet,
+    file_tool_handler,
     format_tool_error,
     format_tool_success,
     normalize_text,
 )
-
-if TYPE_CHECKING:
-    from app.services.workspace_service import WorkspaceService
 
 logger = structlog.get_logger(__name__)
 
@@ -116,13 +112,6 @@ def _load_document_from_bytes(content: bytes):
     """バイトデータからドキュメントを読み込む"""
     from docx import Document
     return Document(io.BytesIO(content))
-
-
-def _check_old_format_word(file_path: str) -> dict[str, Any] | None:
-    """古いWord形式（.doc）のチェック"""
-    return check_old_format(
-        file_path, ".doc", "Word", ".docx", "python-docx", "Microsoft Word"
-    )
 
 
 # =============================================================================
@@ -389,12 +378,12 @@ def search_document(
 # Tool Handlers
 # =============================================================================
 
-async def get_document_info_handler(
-    workspace_service: "WorkspaceService",
-    tenant_id: str,
-    conversation_id: str,
-    args: dict[str, Any],
-) -> dict[str, Any]:
+@file_tool_handler(
+    old_format=(".doc", "Word", ".docx", "python-docx", "Microsoft Word"),
+    required_library=("docx", "python-docx"),
+    log_prefix="Word情報取得",
+)
+async def get_document_info_handler(*, content, filename, args, **_):
     """
     Wordドキュメントの構造情報を取得するハンドラー
 
@@ -402,72 +391,52 @@ async def get_document_info_handler(
         args:
             file_path: ファイルパス
     """
-    file_path = args.get("file_path", "")
+    info = get_document_info(content, filename)
 
-    old_format_error = _check_old_format_word(file_path)
-    if old_format_error:
-        return old_format_error
+    result_lines = [
+        f"# Word文書情報: {info['filename']}",
+        f"総段落数: {info['total_paragraphs']}",
+        f"総文字数: {info['total_characters']:,}",
+        f"表の数: {info['tables_count']}",
+        "",
+    ]
 
-    lib_error = check_library_available("docx", "python-docx")
-    if lib_error:
-        return lib_error
+    # 見出し構造
+    if info['headings']:
+        result_lines.append("## 見出し構造")
+        for h in info['headings'][:50]:
+            indent = "  " * (h['level'] - 1)
+            result_lines.append(f"{indent}- {h['text']} (段落{h['para_index']}, 約{h['char_count']}文字)")
+        if len(info['headings']) > 50:
+            result_lines.append(f"... 他 {len(info['headings']) - 50} 見出し")
+        result_lines.append("")
+    else:
+        result_lines.append("## 見出し構造")
+        result_lines.append("見出しは定義されていません。")
+        result_lines.append("")
 
-    try:
-        content, filename, _ = await workspace_service.download_file(
-            tenant_id, conversation_id, file_path
-        )
+    # 表の概要
+    if info['tables']:
+        result_lines.append("## 表の概要")
+        for t in info['tables'][:10]:
+            result_lines.append(f"- 表{t['index']}: {t['rows']}行 x {t['cols']}列")
+        if len(info['tables']) > 10:
+            result_lines.append(f"... 他 {len(info['tables']) - 10} 表")
+        result_lines.append("")
 
-        info = get_document_info(content, filename)
+    result_lines.append("---")
+    result_lines.append("データ取得: `get_document_content` を使用")
+    result_lines.append("検索: `search_document` を使用")
 
-        result_lines = [
-            f"# Word文書情報: {info['filename']}",
-            f"総段落数: {info['total_paragraphs']}",
-            f"総文字数: {info['total_characters']:,}",
-            f"表の数: {info['tables_count']}",
-            "",
-        ]
-
-        # 見出し構造
-        if info['headings']:
-            result_lines.append("## 見出し構造")
-            for h in info['headings'][:50]:
-                indent = "  " * (h['level'] - 1)
-                result_lines.append(f"{indent}- {h['text']} (段落{h['para_index']}, 約{h['char_count']}文字)")
-            if len(info['headings']) > 50:
-                result_lines.append(f"... 他 {len(info['headings']) - 50} 見出し")
-            result_lines.append("")
-        else:
-            result_lines.append("## 見出し構造")
-            result_lines.append("見出しは定義されていません。")
-            result_lines.append("")
-
-        # 表の概要
-        if info['tables']:
-            result_lines.append("## 表の概要")
-            for t in info['tables'][:10]:
-                result_lines.append(f"- 表{t['index']}: {t['rows']}行 x {t['cols']}列")
-            if len(info['tables']) > 10:
-                result_lines.append(f"... 他 {len(info['tables']) - 10} 表")
-            result_lines.append("")
-
-        result_lines.append("---")
-        result_lines.append("データ取得: `get_document_content` を使用")
-        result_lines.append("検索: `search_document` を使用")
-
-        return format_tool_success("\n".join(result_lines))
-    except FileNotFoundError:
-        return format_tool_error(f"ファイルが見つかりません: {file_path}")
-    except Exception as e:
-        logger.error("Word情報取得エラー", error=str(e), file_path=file_path)
-        return format_tool_error(f"読み込みエラー: {str(e)}")
+    return format_tool_success("\n".join(result_lines))
 
 
-async def get_document_content_handler(
-    workspace_service: "WorkspaceService",
-    tenant_id: str,
-    conversation_id: str,
-    args: dict[str, Any],
-) -> dict[str, Any]:
+@file_tool_handler(
+    old_format=(".doc", "Word", ".docx", "python-docx", "Microsoft Word"),
+    required_library=("docx", "python-docx"),
+    log_prefix="Wordコンテンツ取得",
+)
+async def get_document_content_handler(*, content, filename, args, **_):
     """
     Wordドキュメントの内容を取得するハンドラー
 
@@ -480,69 +449,48 @@ async def get_document_content_handler(
             max_paragraphs: 最大取得段落数（デフォルト: 50）
             include_tables: 表を含めるか（デフォルト: true）
     """
-    file_path = args.get("file_path", "")
     heading = args.get("heading")
     start_paragraph = args.get("start_paragraph")
     end_paragraph = args.get("end_paragraph")
     max_paragraphs = args.get("max_paragraphs", DEFAULT_MAX_PARAGRAPHS)
     include_tables = args.get("include_tables", True)
 
-    old_format_error = _check_old_format_word(file_path)
-    if old_format_error:
-        return old_format_error
+    result = get_document_content(
+        content,
+        heading=heading,
+        start_paragraph=start_paragraph,
+        end_paragraph=end_paragraph,
+        max_paragraphs=max_paragraphs,
+        include_tables=include_tables,
+    )
 
-    lib_error = check_library_available("docx", "python-docx")
-    if lib_error:
-        return lib_error
+    result_lines = [
+        f"# {filename}",
+    ]
 
-    try:
-        content, filename, _ = await workspace_service.download_file(
-            tenant_id, conversation_id, file_path
-        )
+    if result['section_title']:
+        result_lines.append(f"セクション: {result['section_title']}")
 
-        result = get_document_content(
-            content,
-            heading=heading,
-            start_paragraph=start_paragraph,
-            end_paragraph=end_paragraph,
-            max_paragraphs=max_paragraphs,
-            include_tables=include_tables,
-        )
+    result_lines.append(f"段落範囲: {result['start_paragraph']}-{result['end_paragraph']} (全{result['total_paragraphs']}段落)")
+    result_lines.append(f"取得: {result['returned_paragraphs']}段落")
+    result_lines.append("")
+    result_lines.append(result['content'])
 
-        result_lines = [
-            f"# {filename}",
-        ]
-
-        if result['section_title']:
-            result_lines.append(f"セクション: {result['section_title']}")
-
-        result_lines.append(f"段落範囲: {result['start_paragraph']}-{result['end_paragraph']} (全{result['total_paragraphs']}段落)")
-        result_lines.append(f"取得: {result['returned_paragraphs']}段落")
+    if result['has_more']:
         result_lines.append("")
-        result_lines.append(result['content'])
+        result_lines.append("---")
+        result_lines.append("まだ続きがあります。次を取得するには:")
+        result_lines.append(f"`start_paragraph={result['end_paragraph'] + 1}` を指定してください。")
 
-        if result['has_more']:
-            result_lines.append("")
-            result_lines.append("---")
-            result_lines.append("まだ続きがあります。次を取得するには:")
-            result_lines.append(f"`start_paragraph={result['end_paragraph'] + 1}` を指定してください。")
-
-        return format_tool_success("\n".join(result_lines))
-    except FileNotFoundError:
-        return format_tool_error(f"ファイルが見つかりません: {file_path}")
-    except ValueError as e:
-        return format_tool_error(str(e))
-    except Exception as e:
-        logger.error("Wordコンテンツ取得エラー", error=str(e), file_path=file_path)
-        return format_tool_error(f"読み込みエラー: {str(e)}")
+    return format_tool_success("\n".join(result_lines))
 
 
-async def search_document_handler(
-    workspace_service: "WorkspaceService",
-    tenant_id: str,
-    conversation_id: str,
-    args: dict[str, Any],
-) -> dict[str, Any]:
+@file_tool_handler(
+    old_format=(".doc", "Word", ".docx", "python-docx", "Microsoft Word"),
+    required_library=("docx", "python-docx"),
+    log_prefix="Word検索",
+)
+async def search_document_handler(*, content, args, **_):
     """
     Wordドキュメント全体からキーワード検索を行うハンドラー
 
@@ -554,61 +502,40 @@ async def search_document_handler(
             max_hits: 最大ヒット数（デフォルト: 50）
             include_tables: 表も検索対象に含めるか（デフォルト: true）
     """
-    file_path = args.get("file_path", "")
     query = args.get("query", "")
     case_sensitive = args.get("case_sensitive", False)
     max_hits = args.get("max_hits", 50)
     include_tables = args.get("include_tables", True)
 
-    old_format_error = _check_old_format_word(file_path)
-    if old_format_error:
-        return old_format_error
-
     if not query:
         return format_tool_error("エラー: query（検索キーワード）を指定してください。")
 
-    lib_error = check_library_available("docx", "python-docx")
-    if lib_error:
-        return lib_error
+    result = search_document(
+        content,
+        query,
+        case_sensitive=case_sensitive,
+        max_hits=max_hits,
+        include_tables=include_tables,
+    )
 
-    try:
-        content, filename, _ = await workspace_service.download_file(
-            tenant_id, conversation_id, file_path
-        )
+    result_lines = [
+        f"# 検索結果: \"{result['query']}\"",
+        f"ヒット数: {result['total_hits']}",
+        "",
+    ]
 
-        result = search_document(
-            content,
-            query,
-            case_sensitive=case_sensitive,
-            max_hits=max_hits,
-            include_tables=include_tables,
-        )
+    if result['hits']:
+        for hit in result['hits']:
+            if hit['location_type'] == 'heading':
+                result_lines.append(f"## 見出し (段落{hit['para_index']}, レベル{hit['heading_level']})")
+            elif hit['location_type'] == 'paragraph':
+                result_lines.append(f"## 段落 {hit['para_index']}")
+            else:
+                result_lines.append(f"## 表{hit['table_index']}")
 
-        result_lines = [
-            f"# 検索結果: \"{result['query']}\"",
-            f"ヒット数: {result['total_hits']}",
-            "",
-        ]
+            result_lines.append(f"コンテキスト: {hit['context']}")
+            result_lines.append("")
+    else:
+        result_lines.append("検索結果はありませんでした。")
 
-        if result['hits']:
-            for hit in result['hits']:
-                if hit['location_type'] == 'heading':
-                    result_lines.append(f"## 見出し (段落{hit['para_index']}, レベル{hit['heading_level']})")
-                elif hit['location_type'] == 'paragraph':
-                    result_lines.append(f"## 段落 {hit['para_index']}")
-                else:
-                    result_lines.append(f"## 表{hit['table_index']}")
-
-                result_lines.append(f"コンテキスト: {hit['context']}")
-                result_lines.append("")
-        else:
-            result_lines.append("検索結果はありませんでした。")
-
-        return format_tool_success("\n".join(result_lines))
-    except FileNotFoundError:
-        return format_tool_error(f"ファイルが見つかりません: {file_path}")
-    except ValueError as e:
-        return format_tool_error(str(e))
-    except Exception as e:
-        logger.error("Word検索エラー", error=str(e), file_path=file_path, query=query)
-        return format_tool_error(f"検索エラー: {str(e)}")
+    return format_tool_success("\n".join(result_lines))

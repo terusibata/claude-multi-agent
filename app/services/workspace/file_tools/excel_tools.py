@@ -12,21 +12,17 @@ AIエージェントがExcelファイルを理解するための軽量ツール�
 import csv
 import io
 from io import StringIO
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import Any, TypedDict
 
 import structlog
 
-from app.services.workspace.file_tools.shared_utils import (
+from app.services.workspace.file_tools.utils import (
     build_search_pattern,
-    check_library_available,
-    check_old_format,
+    file_tool_handler,
     format_tool_error,
     format_tool_success,
     normalize_text,
 )
-
-if TYPE_CHECKING:
-    from app.services.workspace_service import WorkspaceService
 
 logger = structlog.get_logger(__name__)
 
@@ -188,13 +184,6 @@ def _load_workbook_from_bytes(content: bytes):
         filename=io.BytesIO(content),
         read_only=False,
         data_only=True
-    )
-
-
-def _check_old_format_excel(file_path: str) -> dict[str, Any] | None:
-    """古いExcel形式（.xls）のチェック"""
-    return check_old_format(
-        file_path, ".xls", "Excel", ".xlsx", "openpyxl", "Microsoft Excel"
     )
 
 
@@ -449,12 +438,12 @@ def search_workbook(
 # Tool Handlers
 # =============================================================================
 
-async def get_sheet_info_handler(
-    workspace_service: "WorkspaceService",
-    tenant_id: str,
-    conversation_id: str,
-    args: dict[str, Any],
-) -> dict[str, Any]:
+@file_tool_handler(
+    old_format=(".xls", "Excel", ".xlsx", "openpyxl", "Microsoft Excel"),
+    required_library=("openpyxl", "openpyxl"),
+    log_prefix="Excel情報取得",
+)
+async def get_sheet_info_handler(*, content, filename, args, **_):
     """
     Excelファイルのシート情報を取得するハンドラー
 
@@ -462,57 +451,36 @@ async def get_sheet_info_handler(
         args:
             file_path: ファイルパス
     """
-    file_path = args.get("file_path", "")
+    info = get_sheet_info(content, filename)
 
-    old_format_error = _check_old_format_excel(file_path)
-    if old_format_error:
-        return old_format_error
+    result_lines = [
+        f"# Excel情報: {info['filename']}",
+        f"シート数: {info['sheet_count']}",
+        "",
+        "## シート一覧",
+    ]
 
-    lib_error = check_library_available("openpyxl", "openpyxl")
-    if lib_error:
-        return lib_error
+    for sheet in info['sheets']:
+        result_lines.append(f"")
+        result_lines.append(f"### {sheet['name']}")
+        result_lines.append(f"- 範囲: {sheet['range']} ({sheet['rows']}行 x {sheet['cols']}列)")
+        if sheet['has_print_area']:
+            result_lines.append(f"- 印刷領域: 設定済み")
 
-    try:
-        content, filename, _ = await workspace_service.download_file(
-            tenant_id, conversation_id, file_path
-        )
+    result_lines.append("")
+    result_lines.append("---")
+    result_lines.append("データを取得するには `get_sheet_csv` を使用してください。")
+    result_lines.append("キーワード検索には `search_workbook` を使用してください。")
 
-        info = get_sheet_info(content, filename)
-
-        # 結果をテキスト形式でフォーマット
-        result_lines = [
-            f"# Excel情報: {info['filename']}",
-            f"シート数: {info['sheet_count']}",
-            "",
-            "## シート一覧",
-        ]
-
-        for sheet in info['sheets']:
-            result_lines.append(f"")
-            result_lines.append(f"### {sheet['name']}")
-            result_lines.append(f"- 範囲: {sheet['range']} ({sheet['rows']}行 x {sheet['cols']}列)")
-            if sheet['has_print_area']:
-                result_lines.append(f"- 印刷領域: 設定済み")
-
-        result_lines.append("")
-        result_lines.append("---")
-        result_lines.append("データを取得するには `get_sheet_csv` を使用してください。")
-        result_lines.append("キーワード検索には `search_workbook` を使用してください。")
-
-        return format_tool_success("\n".join(result_lines))
-    except FileNotFoundError:
-        return format_tool_error(f"ファイルが見つかりません: {file_path}")
-    except Exception as e:
-        logger.error("Excel情報取得エラー", error=str(e), file_path=file_path)
-        return format_tool_error(f"読み込みエラー: {str(e)}")
+    return format_tool_success("\n".join(result_lines))
 
 
-async def get_sheet_csv_handler(
-    workspace_service: "WorkspaceService",
-    tenant_id: str,
-    conversation_id: str,
-    args: dict[str, Any],
-) -> dict[str, Any]:
+@file_tool_handler(
+    old_format=(".xls", "Excel", ".xlsx", "openpyxl", "Microsoft Excel"),
+    required_library=("openpyxl", "openpyxl"),
+    log_prefix="ExcelCSV取得",
+)
+async def get_sheet_csv_handler(*, content, args, **_):
     """
     指定シートの内容をCSV Markdown形式で取得するハンドラー
 
@@ -525,16 +493,11 @@ async def get_sheet_csv_handler(
             max_rows: 最大取得行数（デフォルト: 100）
             use_print_area: 印刷領域を使用するか（デフォルト: true）
     """
-    file_path = args.get("file_path", "")
     sheet_name = args.get("sheet_name", "")
     start_row = args.get("start_row")
     end_row = args.get("end_row")
     max_rows = args.get("max_rows", DEFAULT_MAX_ROWS)
     use_print_area = args.get("use_print_area", True)
-
-    old_format_error = _check_old_format_excel(file_path)
-    if old_format_error:
-        return old_format_error
 
     if not sheet_name:
         return format_tool_error(
@@ -542,55 +505,38 @@ async def get_sheet_csv_handler(
             "get_sheet_info でシート一覧を確認できます。"
         )
 
-    lib_error = check_library_available("openpyxl", "openpyxl")
-    if lib_error:
-        return lib_error
+    result = get_sheet_csv(
+        content,
+        sheet_name,
+        start_row=start_row,
+        end_row=end_row,
+        max_rows=max_rows,
+        use_print_area=use_print_area,
+    )
 
-    try:
-        content, _, _ = await workspace_service.download_file(
-            tenant_id, conversation_id, file_path
-        )
+    result_lines = [
+        f"# {result['sheet_name']}",
+        f"範囲: {result['range']}",
+        f"サイズ: {result['returned_rows']}/{result['total_rows']}行 x {result['total_cols']}列",
+        "",
+        result['csv_markdown'],
+    ]
 
-        result = get_sheet_csv(
-            content,
-            sheet_name,
-            start_row=start_row,
-            end_row=end_row,
-            max_rows=max_rows,
-            use_print_area=use_print_area,
-        )
+    if result['has_more']:
+        result_lines.append("")
+        result_lines.append(f"---")
+        result_lines.append(f"まだ続きがあります。次を取得するには:")
+        result_lines.append(f"`start_row={result['end_row'] + 1}` を指定してください。")
 
-        # 結果をテキスト形式でフォーマット
-        result_lines = [
-            f"# {result['sheet_name']}",
-            f"範囲: {result['range']}",
-            f"サイズ: {result['returned_rows']}/{result['total_rows']}行 x {result['total_cols']}列",
-            "",
-            result['csv_markdown'],
-        ]
-
-        if result['has_more']:
-            result_lines.append("")
-            result_lines.append(f"---")
-            result_lines.append(f"まだ続きがあります。次を取得するには:")
-            result_lines.append(f"`start_row={result['end_row'] + 1}` を指定してください。")
-
-        return format_tool_success("\n".join(result_lines))
-    except FileNotFoundError:
-        return format_tool_error(f"ファイルが見つかりません: {file_path}")
-    except ValueError as e:
-        return format_tool_error(str(e))
-    except Exception as e:
-        logger.error("ExcelCSV取得エラー", error=str(e), file_path=file_path)
-        return format_tool_error(f"読み込みエラー: {str(e)}")
+    return format_tool_success("\n".join(result_lines))
 
 
-async def search_workbook_handler(
-    workspace_service: "WorkspaceService",
-    tenant_id: str,
-    conversation_id: str,
-    args: dict[str, Any],
-) -> dict[str, Any]:
+@file_tool_handler(
+    old_format=(".xls", "Excel", ".xlsx", "openpyxl", "Microsoft Excel"),
+    required_library=("openpyxl", "openpyxl"),
+    log_prefix="Excel検索",
+)
+async def search_workbook_handler(*, content, args, **_):
     """
     ワークブック全体からキーワード検索を行うハンドラー
 
@@ -601,55 +547,33 @@ async def search_workbook_handler(
             case_sensitive: 大文字小文字を区別するか（デフォルト: false）
             max_hits: 最大ヒット数（デフォルト: 50）
     """
-    file_path = args.get("file_path", "")
     query = args.get("query", "")
     case_sensitive = args.get("case_sensitive", False)
     max_hits = args.get("max_hits", 50)
 
-    old_format_error = _check_old_format_excel(file_path)
-    if old_format_error:
-        return old_format_error
-
     if not query:
         return format_tool_error("エラー: query（検索キーワード）を指定してください。")
 
-    lib_error = check_library_available("openpyxl", "openpyxl")
-    if lib_error:
-        return lib_error
+    result = search_workbook(
+        content,
+        query,
+        case_sensitive=case_sensitive,
+        max_hits=max_hits,
+    )
 
-    try:
-        content, _, _ = await workspace_service.download_file(
-            tenant_id, conversation_id, file_path
-        )
+    result_lines = [
+        f"# 検索結果: \"{result['query']}\"",
+        f"ヒット数: {result['total_hits']}",
+        "",
+    ]
 
-        result = search_workbook(
-            content,
-            query,
-            case_sensitive=case_sensitive,
-            max_hits=max_hits,
-        )
+    if result['hits']:
+        for hit in result['hits']:
+            result_lines.append(f"## {hit['sheet']}!{hit['cell']}")
+            result_lines.append(f"値: {hit['value']}")
+            result_lines.append(f"コンテキスト: {hit['context']}")
+            result_lines.append("")
+    else:
+        result_lines.append("検索結果はありませんでした。")
 
-        # 結果をテキスト形式でフォーマット
-        result_lines = [
-            f"# 検索結果: \"{result['query']}\"",
-            f"ヒット数: {result['total_hits']}",
-            "",
-        ]
-
-        if result['hits']:
-            for hit in result['hits']:
-                result_lines.append(f"## {hit['sheet']}!{hit['cell']}")
-                result_lines.append(f"値: {hit['value']}")
-                result_lines.append(f"コンテキスト: {hit['context']}")
-                result_lines.append("")
-        else:
-            result_lines.append("検索結果はありませんでした。")
-
-        return format_tool_success("\n".join(result_lines))
-    except FileNotFoundError:
-        return format_tool_error(f"ファイルが見つかりません: {file_path}")
-    except ValueError as e:
-        return format_tool_error(str(e))
-    except Exception as e:
-        logger.error("Excel検索エラー", error=str(e), file_path=file_path, query=query)
-        return format_tool_error(f"検索エラー: {str(e)}")
+    return format_tool_success("\n".join(result_lines))

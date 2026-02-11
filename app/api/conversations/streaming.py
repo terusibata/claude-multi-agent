@@ -42,6 +42,7 @@ async def _background_execution(
     バックグラウンドでコンテナ隔離エージェントを実行し、イベントをキューに送信。
     独立したDBセッションを使用する。
     """
+    # 循環インポート回避のため遅延インポート
     from app.database import async_session_maker
 
     async with async_session_maker() as db:
@@ -265,6 +266,7 @@ async def _handle_file_upload(
     db: AsyncSession,
 ) -> None:
     """ファイルアップロードを処理"""
+    # ストリーミング以外のパスでは不要なため遅延インポート
     from app.schemas.workspace import FileUploadMetadata
 
     try:
