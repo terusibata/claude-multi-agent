@@ -23,29 +23,58 @@ AWS Bedrock + Claude Agent SDKを利用したマルチテナント対応AIエー
 ## アーキテクチャ
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  クライアント (フロントエンド)                                    │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  FastAPI Backend                                                │
-│  ┌────────────────────────────────────────────────────────────┐ │
-│  │ ミドルウェアスタック                                        │ │
-│  │ ├── トレーシング (X-Request-ID)                            │ │
-│  │ ├── API認証 (X-API-Key / Bearer Token)                    │ │
-│  │ ├── レート制限 (Redis)                                     │ │
-│  │ ├── CORS                                                   │ │
-│  │ └── セキュリティヘッダー                                    │ │
-│  └────────────────────────────────────────────────────────────┘ │
-│  ├── /tenants - テナント管理                                     │
-│  ├── /models - モデル管理                                        │
-│  ├── /tenants/{tenant_id}/conversations - 会話管理               │
-│  ├── /tenants/{tenant_id}/skills - スキル管理                    │
-│  └── /tenants/{tenant_id}/mcp-servers - MCPサーバー管理          │
-└─────────────────────────────────────────────────────────────────┘
-     │              │              │              │
-     ▼              ▼              ▼              ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│  クライアント (フロントエンド)                                            │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│  FastAPI Backend                                                        │
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │ ミドルウェアスタック                                                │  │
+│  │ ├── トレーシング (X-Request-ID)                                   │  │
+│  │ ├── API認証 (X-API-Key / Bearer Token)                           │  │
+│  │ ├── レート制限 (Redis)                                            │  │
+│  │ ├── CORS                                                          │  │
+│  │ └── セキュリティヘッダー                                           │  │
+│  └───────────────────────────────────────────────────────────────────┘  │
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │ APIエンドポイント                                                  │  │
+│  │ /tenants, /models, /conversations, /simple-chats,                 │  │
+│  │ /skills, /mcp-servers, /usage, /files                             │  │
+│  └───────────────────────────────────────────────────────────────────┘  │
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │ コンテナオーケストレーション                                        │  │
+│  │ ├── Orchestrator  (コンテナ割当・再利用)                           │  │
+│  │ ├── WarmPool      (事前起動プール: min 2, max 10)                 │  │
+│  │ ├── Lifecycle     (作成・ヘルスチェック・破棄)                      │  │
+│  │ └── GC            (TTL/絶対期限による自動回収)                      │  │
+│  └───────────────────────────────────────────────────────────────────┘  │
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │ Credential Injection Proxy                                        │  │
+│  │ ├── Reverse Proxy → Bedrock API (SigV4署名注入)                   │  │
+│  │ └── Forward Proxy → 外部通信 (ドメインホワイトリスト)               │  │
+│  └───────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────┘
+        │          │          │                    │
+        │          │          │  Unix Socket       │  S3ファイル同期
+        │          │          │  (SSE中継)          │  (実行前後)
+        │          │          ▼                    │
+        │          │  ┌───────────────────────┐    │
+        │          │  │ ワークスペースコンテナ   │    │
+        │          │  │ (会話ごとに1つ)         │    │
+        │          │  │                       │    │
+        │          │  │  workspace_agent      │    │
+        │          │  │  ├── Claude Agent SDK  │    │
+        │          │  │  ├── Skills/MCPツール   │    │
+        │          │  │  └── /workspace (作業)  │    │
+        │          │  │                       │    │
+        │          │  │  セキュリティ: 12層防御   │    │
+        │          │  │  (network:none,         │    │
+        │          │  │   seccomp, AppArmor,   │    │
+        │          │  │   cap-drop ALL, etc.)   │    │
+        │          │  └───────────────────────┘    │
+        ▼          ▼                               ▼
 ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐
 │PostgreSQL│  │  Redis   │  │AWS Bedrock│  │ Amazon S3│
 │(メタデータ)│  │(ロック等) │  │  (LLM)    │  │(ワークスペース)│
@@ -74,6 +103,7 @@ app/
 │   └── metrics_endpoint.py   # Prometheusメトリクス
 ├── api/                   # APIエンドポイント
 │   ├── dependencies.py    # 共通依存性注入 (テナント・モデル検証等)
+│   ├── health.py          # ヘルスチェックAPI
 │   ├── tenants.py         # テナント管理API
 │   ├── models.py          # モデル管理API
 │   ├── conversations/     # 会話API (パッケージ)
@@ -97,18 +127,46 @@ app/
 ├── services/              # ビジネスロジック
 │   ├── execute_service.py       # エージェント実行 (コンテナ隔離)
 │   ├── tenant_service.py        # テナント管理
+│   ├── model_service.py         # モデル管理
 │   ├── conversation_service.py  # 会話管理
 │   ├── message_log_service.py   # メッセージログ管理
 │   ├── usage_service.py         # 使用量管理
 │   ├── simple_chat_service.py   # シンプルチャット管理
+│   ├── skill_service.py         # スキル管理
+│   ├── mcp_server_service.py    # MCPサーバー管理
+│   ├── openapi_mcp_service.py   # OpenAPI→MCP変換
 │   ├── bedrock_client.py        # Bedrock API クライアント
+│   ├── aws_config.py            # AWS設定
 │   ├── workspace_service.py     # ワークスペース操作
 │   ├── container/               # コンテナ管理
 │   │   ├── orchestrator.py      # コンテナオーケストレーター
-│   │   └── lifecycle.py         # コンテナライフサイクル
+│   │   ├── lifecycle.py         # コンテナライフサイクル
+│   │   ├── warm_pool.py         # WarmPoolマネージャー
+│   │   ├── gc.py                # コンテナGC (TTL/絶対期限)
+│   │   ├── config.py            # コンテナ作成設定 (セキュリティ制御)
+│   │   └── models.py            # コンテナデータモデル
+│   ├── proxy/                   # Credential Injection Proxy
+│   │   ├── credential_proxy.py  # Reverse/Forward Proxy (Unix Socket)
+│   │   ├── sigv4.py             # AWS SigV4 リクエスト署名
+│   │   ├── domain_whitelist.py  # ドメインホワイトリスト
+│   │   └── dns_cache.py         # DNSキャッシュ
+│   ├── builtin_tools/           # 組み込みツール
+│   │   ├── definitions.py       # ツール定義
+│   │   ├── file_presentation.py # ファイル表示
+│   │   └── server.py            # ツールサーバー
 │   └── workspace/               # ワークスペースインフラ
 │       ├── s3_storage.py        # S3ストレージバックエンド
-│       └── file_sync.py         # ファイル同期
+│       ├── file_sync.py         # ファイル同期 (S3↔コンテナ)
+│       ├── file_processors.py   # ファイル処理ディスパッチ
+│       ├── context_builder.py   # ファイルコンテキスト構築
+│       └── file_tools/          # ファイル種別プロセッサ
+│           ├── pdf_tools.py     # PDF処理
+│           ├── excel_tools.py   # Excel処理
+│           ├── word_tools.py    # Word処理
+│           ├── pptx_tools.py    # PowerPoint処理
+│           ├── image_tools.py   # 画像処理
+│           ├── registry.py      # プロセッサ登録
+│           └── utils.py         # 共通ユーティリティ
 ├── infrastructure/        # インフラストラクチャ層
 │   ├── redis.py           # Redis接続管理
 │   ├── distributed_lock.py # 分散ロック
@@ -127,11 +185,22 @@ app/
 ├── config.py              # 設定管理
 ├── database.py            # データベース接続
 └── main.py                # エントリーポイント (create_app呼び出し)
+workspace-base/            # コンテナベースイメージ
+├── Dockerfile             # Python 3.11 + Node.js 20
+├── entrypoint.sh          # エントリーポイント (socat起動等)
+└── workspace-requirements.txt
+workspace_agent/           # コンテナ内エージェントサーバー
+├── main.py                # FastAPI (Unix Socket) エントリーポイント
+├── sdk_client.py          # Claude Agent SDK クライアント
+└── models.py              # リクエスト/レスポンスモデル
 deployment/                # デプロイメント設定
 ├── docker/                # Docker デーモン設定 (userns-remap)
 ├── seccomp/               # seccomp プロファイル (システムコール制限)
 ├── apparmor/              # AppArmor プロファイル (ファイルアクセス制限)
 └── s3/                    # S3 ライフサイクルポリシー
+monitoring/                # 監視設定
+├── prometheus/            # Prometheus (メトリクス収集・アラート)
+└── grafana/               # Grafana (ダッシュボード)
 alembic/                   # DBマイグレーション
 docs/                      # ドキュメント
 tests/                     # テスト
@@ -268,6 +337,17 @@ AI実行系API（一般ユーザー向け）のみにレート制限が適用さ
 | GET | `/api/tenants/{tenant_id}/conversations/{id}/messages` | メッセージログ取得 |
 | DELETE | `/api/tenants/{tenant_id}/conversations/{id}` | 会話削除 |
 
+### モデル管理
+
+| メソッド | パス | 説明 |
+|---------|------|------|
+| GET | `/api/models` | モデル一覧取得 |
+| GET | `/api/models/{model_id}` | モデル詳細取得 |
+| POST | `/api/models` | モデル登録 |
+| PUT | `/api/models/{model_id}` | モデル定義更新 |
+| PATCH | `/api/models/{model_id}/status` | ステータス変更 |
+| DELETE | `/api/models/{model_id}` | モデル削除 |
+
 ### シンプルチャット
 
 | メソッド | パス | 説明 |
@@ -277,6 +357,46 @@ AI実行系API（一般ユーザー向け）のみにレート制限が適用さ
 | POST | `/api/tenants/{tenant_id}/simple-chats/stream` | ストリーミング実行 (新規/継続) |
 | POST | `/api/tenants/{tenant_id}/simple-chats/{id}/archive` | アーカイブ |
 | DELETE | `/api/tenants/{tenant_id}/simple-chats/{id}` | 削除 |
+
+### スキル管理
+
+| メソッド | パス | 説明 |
+|---------|------|------|
+| GET | `/api/tenants/{tenant_id}/skills` | Skills一覧取得 |
+| GET | `/api/tenants/{tenant_id}/skills/{skill_id}` | Skill詳細取得 |
+| POST | `/api/tenants/{tenant_id}/skills` | Skill作成 |
+| PUT | `/api/tenants/{tenant_id}/skills/{skill_id}` | Skillメタデータ更新 |
+| PUT | `/api/tenants/{tenant_id}/skills/{skill_id}/files` | Skillファイル更新 |
+| DELETE | `/api/tenants/{tenant_id}/skills/{skill_id}` | Skill削除 |
+
+### MCPサーバー管理
+
+| メソッド | パス | 説明 |
+|---------|------|------|
+| GET | `/api/tenants/{tenant_id}/mcp-servers` | MCPサーバー一覧取得 |
+| GET | `/api/tenants/{tenant_id}/mcp-servers/builtin` | ビルトインサーバー一覧 |
+| GET | `/api/tenants/{tenant_id}/mcp-servers/{server_id}` | MCPサーバー詳細取得 |
+| POST | `/api/tenants/{tenant_id}/mcp-servers` | MCPサーバー登録 |
+| PUT | `/api/tenants/{tenant_id}/mcp-servers/{server_id}` | MCPサーバー更新 |
+| DELETE | `/api/tenants/{tenant_id}/mcp-servers/{server_id}` | MCPサーバー削除 |
+
+### 使用状況・コスト
+
+| メソッド | パス | 説明 |
+|---------|------|------|
+| GET | `/api/tenants/{tenant_id}/usage` | 使用状況取得 |
+| GET | `/api/tenants/{tenant_id}/usage/users/{user_id}` | ユーザー使用状況取得 |
+| GET | `/api/tenants/{tenant_id}/usage/summary` | 使用状況サマリー取得 |
+| GET | `/api/tenants/{tenant_id}/cost-report` | コストレポート取得 |
+| GET | `/api/tenants/{tenant_id}/tool-logs` | ツール実行ログ取得 |
+
+### ワークスペース（ファイル管理）
+
+| メソッド | パス | 説明 |
+|---------|------|------|
+| GET | `/api/tenants/{tenant_id}/conversations/{id}/files` | ファイル一覧取得 |
+| GET | `/api/tenants/{tenant_id}/conversations/{id}/files/download` | ファイルダウンロード |
+| GET | `/api/tenants/{tenant_id}/conversations/{id}/files/presented` | AI作成ファイル一覧 |
 
 ### 基本フロー
 

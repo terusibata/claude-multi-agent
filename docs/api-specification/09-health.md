@@ -23,6 +23,7 @@ Kubernetesのliveness/readinessプローブとして使用できます。
 | GET | `/health` | 詳細ヘルスチェック | モニタリング |
 | GET | `/health/live` | Liveness Probe | Kubernetes |
 | GET | `/health/ready` | Readiness Probe | Kubernetes |
+| GET | `/metrics` | Prometheusメトリクス | メトリクス収集 |
 
 ---
 
@@ -317,7 +318,7 @@ curl -X GET "https://api.example.com/health/ready"
 # prometheus.yml
 scrape_configs:
   - job_name: 'ai-agent-backend'
-    metrics_path: '/health'
+    metrics_path: '/metrics'
     static_configs:
       - targets: ['api.example.com:8000']
 ```
@@ -371,6 +372,84 @@ services:
 
 ---
 
+## GET /metrics
+
+Prometheus形式でアプリケーションメトリクスを公開するエンドポイント。
+
+### 概要
+
+| 項目 | 値 |
+|------|-----|
+| パス | `/metrics` |
+| 認証 | 開発環境: 不要、本番環境: 認証必要 |
+| レスポンス形式 | `text/plain; version=0.0.4; charset=utf-8` (Prometheus text exposition format) |
+
+### 公開メトリクス
+
+#### HTTPメトリクス
+
+| メトリクス名 | 型 | ラベル | 説明 |
+|-------------|------|--------|------|
+| `http_requests_total` | Counter | method, endpoint, status_code | HTTPリクエスト総数 |
+| `http_request_duration_seconds` | Histogram | method, endpoint | HTTPリクエスト処理時間 |
+| `active_connections` | Gauge | type | アクティブ接続数 |
+
+#### インフラメトリクス
+
+| メトリクス名 | 型 | ラベル | 説明 |
+|-------------|------|--------|------|
+| `db_pool_connections` | Gauge | state (idle/active/overflow) | DBコネクションプール状態 |
+| `redis_operations_total` | Counter | operation, status | Redis操作数 |
+| `s3_operations_total` | Counter | operation, status | S3操作数 |
+| `errors_total` | Counter | type, code | エラー総数 |
+
+#### Bedrockメトリクス
+
+| メトリクス名 | 型 | ラベル | 説明 |
+|-------------|------|--------|------|
+| `bedrock_requests_total` | Counter | model, status | Bedrock APIリクエスト数 |
+| `bedrock_tokens_total` | Counter | model, type (input/output) | トークン使用量 |
+| `agent_executions_total` | Counter | tenant_id, status | エージェント実行数 |
+| `agent_execution_duration_seconds` | Histogram | tenant_id | エージェント実行時間 |
+
+#### ワークスペースコンテナメトリクス
+
+| メトリクス名 | 型 | ラベル | 説明 |
+|-------------|------|--------|------|
+| `workspace_active_containers` | Gauge | - | アクティブコンテナ数 |
+| `workspace_warm_pool_size` | Gauge | - | WarmPoolサイズ |
+| `workspace_host_cpu_percent` | Gauge | - | ホストCPU使用率 |
+| `workspace_container_startup_seconds` | Histogram | - | コンテナ起動時間 |
+| `workspace_warm_pool_acquire_seconds` | Histogram | - | WarmPool取得時間 |
+| `workspace_requests_total` | Counter | status | コンテナリクエスト総数 |
+| `workspace_container_crashes_total` | Counter | - | コンテナクラッシュ数 |
+| `workspace_s3_sync_errors_total` | Counter | direction | S3同期エラー数 |
+| `workspace_proxy_blocked_total` | Counter | - | Proxyドメインブロック数 |
+| `workspace_warm_pool_exhausted_total` | Counter | - | WarmPool枯渇回数 |
+| `workspace_gc_cycles_total` | Counter | result | GCサイクル数 |
+| `workspace_proxy_request_duration_seconds` | Histogram | method | Proxyリクエスト処理時間 |
+
+### Prometheus scrape設定例
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: 'ai-agent-backend'
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['backend:8000']
+```
+
+### curlの例
+
+```bash
+curl -X GET "http://localhost:8000/metrics"
+```
+
+---
+
 ## 関連API
 
 - [概要](./00-overview.md) - API全体の情報
+- [監視ガイド](../operations/monitoring-guide.md) - メトリクスの活用方法
