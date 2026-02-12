@@ -132,6 +132,7 @@ class ContainerOrchestrator:
         self,
         conversation_id: str,
         request_body: dict,
+        container_info: ContainerInfo | None = None,
     ) -> AsyncIterator[bytes]:
         """
         コンテナ内のエージェントにリクエストを転送し、SSEストリームを中継
@@ -141,11 +142,13 @@ class ContainerOrchestrator:
         Args:
             conversation_id: 会話ID
             request_body: ExecuteRequest のJSON dict
+            container_info: 事前に取得済みのコンテナ情報（省略時は内部で取得）
 
         Yields:
             SSEイベントのバイト列
         """
-        info = await self.get_or_create(conversation_id)
+        info = container_info or await self.get_or_create(conversation_id)
+        recovered = False
 
         # ステータスを running に更新
         info.status = ContainerStatus.RUNNING
@@ -198,6 +201,8 @@ class ContainerOrchestrator:
                 try:
                     await self._cleanup_container(info)
                     new_info = await self.get_or_create(conversation_id)
+                    info = new_info
+                    recovered = True
                     logger.info(
                         "コンテナ復旧完了",
                         old_container_id=info.id,
@@ -228,6 +233,8 @@ class ContainerOrchestrator:
             try:
                 await self._cleanup_container(info)
                 new_info = await self.get_or_create(conversation_id)
+                info = new_info
+                recovered = True
                 logger.info(
                     "コンテナ復旧完了",
                     old_container_id=info.id,
@@ -240,10 +247,11 @@ class ContainerOrchestrator:
         else:
             get_workspace_requests_total().inc(status="success")
         finally:
-            # ステータスを idle に更新
-            info.status = ContainerStatus.IDLE
-            info.touch()
-            await self._update_redis(info)
+            # 復旧済みの場合はget_or_createが既にRedisを更新済みなのでスキップ
+            if not recovered:
+                info.status = ContainerStatus.IDLE
+                info.touch()
+                await self._update_redis(info)
 
     async def destroy(self, conversation_id: str) -> None:
         """会話に紐づくコンテナを破棄"""

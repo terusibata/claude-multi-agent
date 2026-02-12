@@ -60,6 +60,10 @@ def _build_sdk_options(request: ExecuteRequest):
         env=env,
     )
 
+    # セッション再開: session_id が指定されている場合は resume で既存セッションを継続
+    if request.session_id:
+        options.resume = request.session_id
+
     if mcp_servers:
         options.mcp_servers = mcp_servers
 
