@@ -31,6 +31,7 @@ from app.infrastructure.audit_log import (
 from app.models.model import Model
 from app.models.tenant import Tenant
 from app.schemas.execute import ExecuteRequest
+from app.services.container.models import ContainerInfo
 from app.services.container.orchestrator import ContainerOrchestrator
 from app.services.workspace.file_sync import WorkspaceFileSync
 from app.services.workspace.s3_storage import S3StorageBackend
@@ -294,7 +295,7 @@ class ExecuteService:
         request: ExecuteRequest,
         model: Model,
         seq_counter: SequenceCounter,
-        container_info,
+        container_info: ContainerInfo,
     ) -> AsyncGenerator[dict, None]:
         """コンテナ内エージェントからSSEストリームを受信・中継"""
         container_request = {
