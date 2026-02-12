@@ -31,17 +31,23 @@ deployment/
   │  Unix Socket 経由で SSE 中継
   │
   ▼
-┌──────────────────────────────────────────────┐
-│  ワークスペースコンテナ（会話ごとに1つ）        │
-│                                              │
-│  適用されるセキュリティ:                       │
-│  ├── userns-remap  (Docker daemon)           │
-│  ├── seccomp       (システムコール制限)        │
-│  ├── AppArmor      (ファイルアクセス制限)      │
-│  ├── no-new-privileges                       │
-│  ├── read-only rootfs                        │
-│  └── network: none                           │
-└──────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────┐
+│  ワークスペースコンテナ（会話ごとに1つ）                  │
+│                                                        │
+│  適用されるセキュリティ:                                 │
+│  ├── userns-remap      (Docker daemon: UID/GIDリマップ) │
+│  ├── seccomp           (システムコール制限)              │
+│  ├── AppArmor          (ファイルアクセス制限)            │
+│  ├── no-new-privileges (権限昇格の防止)                 │
+│  ├── read-only rootfs  (ルートFS書き込み禁止)            │
+│  ├── network: none     (ネットワーク隔離)               │
+│  ├── cap-drop ALL      (全Capability剥奪)              │
+│  │   └── cap-add: CHOWN, SETUID, SETGID, DAC_OVERRIDE │
+│  ├── PID制限           (256プロセス)                    │
+│  ├── メモリ制限         (2GB, swap無効)                  │
+│  ├── CPU制限           (2コア)                          │
+│  └── ディスク制限       (5GB)                           │
+└────────────────────────────────────────────────────────┘
 ```
 
 各セキュリティ層の設定値は `app/config.py` で管理され、`app/services/container/config.py` でコンテナ作成時に適用されます。
@@ -287,6 +293,49 @@ aws s3api get-bucket-lifecycle-configuration --bucket <bucket-name>
 
 ---
 
+## 5. リソース制限（`app/config.py`）
+
+### 概要
+
+コンテナに対するリソース制限は `app/services/container/config.py` でコンテナ作成時に自動適用されます。
+デフォルト値は `app/config.py` で管理されており、環境変数で変更可能です。
+
+### 設定項目
+
+| 設定 | 環境変数 | デフォルト値 | 説明 |
+|------|---------|------------|------|
+| Capability | - | CapDrop ALL, CapAdd 最小限 | 全Capabilityを剥奪し、CHOWN, SETUID, SETGID, DAC_OVERRIDEのみ復元 |
+| PID制限 | `CONTAINER_PIDS_LIMIT` | 256 | コンテナ内の最大プロセス数（fork bomb対策）。SDK CLIサブプロセス + socat を考慮した値 |
+| メモリ制限 | `CONTAINER_MEMORY_LIMIT` | 2GB | コンテナの最大メモリ。MemorySwap = Memory でswapを無効化 |
+| CPU制限 | `CONTAINER_CPU_QUOTA` | 200000 (2コア) | CpuPeriod=100000に対するクォータ。200000 = 2コア分 |
+| ディスク制限 | `CONTAINER_DISK_LIMIT` | 5G | コンテナのストレージ上限（Docker storage driver の StorageOpt） |
+
+### Capability ポリシー
+
+```
+CapDrop: ALL           # 全38種のLinux Capabilityを剥奪
+CapAdd:
+  - CHOWN              # ファイル所有権の変更（パッケージインストール時に必要）
+  - SETUID             # プロセスのUID変更（su/sudo等で使用）
+  - SETGID             # プロセスのGID変更
+  - DAC_OVERRIDE       # ファイルパーミッションのバイパス（root操作時に必要）
+```
+
+### Tmpfs マウント
+
+read-only rootfs と組み合わせて、書き込み可能な領域をTmpfsで提供します:
+
+| パス | サイズ | オプション | 用途 |
+|------|-------|----------|------|
+| `/tmp` | 512M | `rw,noexec,nosuid` | 一時ファイル |
+| `/var/tmp` | 256M | `rw,noexec,nosuid` | 一時ファイル |
+| `/run` | 64M | `rw,noexec,nosuid` | ランタイムデータ |
+| `/home/appuser/.cache` | 512M | `rw,noexec,nosuid` | キャッシュ（pip等） |
+| `/home/appuser` | 128M | `rw,noexec,nosuid` | ユーザーホーム |
+| `/workspace` | 1G | `rw,nosuid` | 作業ディレクトリ（コード実行あり） |
+
+---
+
 ## 環境別の推奨設定
 
 | 設定 | 開発環境 | ステージング | 本番環境 |
@@ -297,6 +346,11 @@ aws s3api get-bucket-lifecycle-configuration --bucket <bucket-name>
 | S3 ライフサイクル | 不要 | 適用推奨 | **必須** |
 | read-only rootfs | 任意 | 有効 | **必須** |
 | network: none | 任意 | 有効 | **必須** |
+| cap-drop ALL | 有効 | 有効 | **必須** |
+| PID制限 | 有効 (256) | 有効 (256) | **必須** |
+| メモリ制限 | 有効 (2GB) | 有効 (2GB) | **必須** |
+| CPU制限 | 有効 (2コア) | 有効 (2コア) | **必須** |
+| ディスク制限 | 有効 (5G) | 有効 (5G) | **必須** |
 
 ### 開発環境での無効化例
 

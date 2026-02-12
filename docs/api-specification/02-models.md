@@ -453,15 +453,12 @@ curl -X DELETE "https://api.example.com/api/models/old-model" \
 
 ## AWS Bedrock モデルID一覧（参考）
 
-よく使用されるAWS BedrockのモデルID:
+本システムでデフォルト設定されているAWS BedrockのモデルID:
 
 | モデル | Bedrock Model ID |
 |--------|------------------|
-| Claude Sonnet 4.5 | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` |
-| Claude Sonnet 4 | `us.anthropic.claude-sonnet-4-20250514-v1:0` |
-| Claude Opus 4 | `us.anthropic.claude-opus-4-20250514-v1:0` |
-| Claude 3.5 Sonnet | `anthropic.claude-3-5-sonnet-20241022-v2:0` |
-| Claude 3 Haiku | `anthropic.claude-3-haiku-20240307-v1:0` |
+| Claude Sonnet 4.5 | `global.anthropic.claude-sonnet-4-5-20250929-v1:0` |
+| Claude 4.5 Haiku | `global.anthropic.claude-haiku-4-5-20251001-v1:0` |
 
 ---
 
