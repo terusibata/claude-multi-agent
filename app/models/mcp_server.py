@@ -1,6 +1,6 @@
 """
 MCPサーバー定義テーブル
-テナントごとのMCPサーバー設定を管理
+テナントごとのMCPサーバー設定を管理（OpenAPI仕様ベース）
 """
 from datetime import datetime
 from uuid import uuid4
@@ -15,7 +15,7 @@ from app.database import Base
 class McpServer(Base):
     """
     MCPサーバー定義テーブル
-    Model Context Protocol (MCP) サーバーの設定を管理
+    OpenAPI仕様からMCPツールを動的生成するサーバー設定を管理
     """
     __tablename__ = "mcp_servers"
 
@@ -34,20 +34,6 @@ class McpServer(Base):
     # 表示名
     display_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
 
-    # タイプ: http / sse / stdio / builtin / openapi
-    # builtinはアプリケーション組み込みのMCPサーバー
-    # openapiはOpenAPI仕様からツールを動的生成するタイプ
-    type: Mapped[str] = mapped_column(String(20), nullable=False)
-
-    # サーバーURL（http/sseの場合）
-    url: Mapped[str | None] = mapped_column(String(500), nullable=True)
-
-    # 起動コマンド（stdioの場合）
-    command: Mapped[str | None] = mapped_column(String(500), nullable=True)
-
-    # コマンド引数（stdioの場合）（JSON配列）
-    args: Mapped[list | None] = mapped_column(JSON, nullable=True)
-
     # 環境変数（JSON）
     env: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
@@ -59,17 +45,13 @@ class McpServer(Base):
     # 例: ["mcp__servicenow__create_ticket", "mcp__servicenow__get_ticket"]
     allowed_tools: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
-    # ツール定義（JSON配列）- builtinタイプの場合に使用
-    # 例: [{"name": "present_files", "description": "...", "input_schema": {...}}]
-    tools: Mapped[list | None] = mapped_column(JSON, nullable=True)
-
     # 説明
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    # OpenAPI仕様（JSON）- openapiタイプの場合に使用
+    # OpenAPI仕様（JSON）
     openapi_spec: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
-    # OpenAPI APIのベースURL（openapiタイプの場合）
+    # OpenAPI APIのベースURL
     # 仕様のserversセクションを上書き
     openapi_base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
 

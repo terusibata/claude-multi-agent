@@ -313,7 +313,6 @@ class ExecuteService:
             "model": model.bedrock_model_id,
             "session_id": None,
             "max_turns": None,
-            "mcp_servers": [],
             "allowed_tools": [],
             "cwd": "/workspace",
         }

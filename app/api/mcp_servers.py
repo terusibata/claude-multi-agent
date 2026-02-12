@@ -1,8 +1,8 @@
 """
 MCPサーバー管理API
-テナントごとのMCPサーバー設定のCRUD操作
+テナントごとのMCPサーバー設定のCRUD操作（OpenAPI専用）
 """
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_mcp_server_or_404
@@ -32,17 +32,6 @@ async def get_mcp_servers(
     return await service.get_all_by_tenant(tenant_id, status=status)
 
 
-@router.get("/builtin", summary="ビルトインMCPサーバー一覧取得")
-async def get_builtin_mcp_servers(
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    利用可能なビルトインMCPサーバーの一覧を取得します。
-    """
-    service = McpServerService(db)
-    return service.get_all_builtin_servers()
-
-
 @router.get("/{server_id}", response_model=McpServerResponse, summary="MCPサーバー詳細取得")
 async def get_mcp_server(
     server: McpServer = Depends(get_mcp_server_or_404),
@@ -68,43 +57,11 @@ async def create_mcp_server(
     新しいMCPサーバーを登録します。
 
     - **name**: MCPサーバー名（識別子）
-    - **type**: http / sse / stdio / builtin / openapi
-    - **url**: サーバーURL（http/sseの場合）
-    - **command**: 起動コマンド（stdioの場合）
-    - **tools**: ツール定義リスト（builtinの場合）
-    - **openapi_spec**: OpenAPI仕様（openapiの場合）
-    - **openapi_base_url**: OpenAPI APIのベースURL（openapiの場合、オプション）
+    - **openapi_spec**: OpenAPI仕様（JSON形式、必須）
+    - **openapi_base_url**: OpenAPI APIのベースURL（オプション）
     - **headers_template**: ヘッダーテンプレート（例: {"Authorization": "Bearer ${token}"}）
     """
     service = McpServerService(db)
-
-    # タイプに応じたバリデーション
-    if server_data.type in ["http", "sse"] and not server_data.url:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"タイプ '{server_data.type}' にはURLが必要です",
-        )
-    if server_data.type == "stdio" and not server_data.command:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="タイプ 'stdio' にはコマンドが必要です",
-        )
-    if server_data.type == "builtin" and not server_data.tools:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="タイプ 'builtin' にはツール定義（tools）が必要です",
-        )
-    if server_data.type == "openapi" and not server_data.openapi_spec:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="タイプ 'openapi' にはOpenAPI仕様（openapi_spec）が必要です",
-        )
-    if server_data.type not in ["http", "sse", "stdio", "builtin", "openapi"]:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"不正なタイプ '{server_data.type}'。http / sse / stdio / builtin / openapi のいずれかを指定してください",
-        )
-
     return await service.create(tenant_id, server_data)
 
 
