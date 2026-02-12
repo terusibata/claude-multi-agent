@@ -192,8 +192,9 @@ class ContainerGarbageCollector:
                 info.id, grace_period=self._settings.container_grace_period
             )
 
-            # Redis メタデータ削除
+            # Redis メタデータ削除（正引き + 逆引き）
             await self.redis.delete(f"{REDIS_KEY_CONTAINER}:{info.conversation_id}")
+            await self.redis.delete(f"{REDIS_KEY_CONTAINER_REVERSE}:{info.id}")
 
             # BUG-13修正: アクティブコンテナメトリクスをデクリメント
             get_workspace_active_containers().dec()
