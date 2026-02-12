@@ -23,6 +23,12 @@ from app.services.workspace.s3_storage import S3StorageBackend
 
 logger = structlog.get_logger(__name__)
 
+# システム内部で使用する予約プレフィックス
+# これらのパスはワークスペース同期（sync_from_container / sync_to_container）から除外される
+RESERVED_PREFIXES = frozenset({
+    "_sdk_session/",
+})
+
 
 class WorkspaceFileSync:
     """S3 ↔ コンテナ間のファイル同期"""
@@ -36,6 +42,14 @@ class WorkspaceFileSync:
         self.s3 = s3
         self.lifecycle = lifecycle
         self.db = db
+
+    @staticmethod
+    def _is_reserved_path(file_path: str) -> bool:
+        """予約プレフィックスに該当するパスかチェック"""
+        return any(
+            file_path.startswith(prefix) or file_path == prefix.rstrip("/")
+            for prefix in RESERVED_PREFIXES
+        )
 
     async def sync_to_container(
         self,
@@ -68,6 +82,14 @@ class WorkspaceFileSync:
 
         synced = 0
         for file_record in files:
+            # 防御的チェック: 予約パスがDBに存在していた場合はスキップ
+            if self._is_reserved_path(file_record.file_path):
+                logger.warning(
+                    "予約パスのファイルレコード検出（スキップ）",
+                    file_path=file_record.file_path,
+                    conversation_id=conversation_id,
+                )
+                continue
             try:
                 data, _ = await self.s3.download(
                     tenant_id, conversation_id, file_record.file_path
@@ -131,6 +153,9 @@ class WorkspaceFileSync:
             return 0
 
         file_paths = [p.strip() for p in output.strip().split("\n") if p.strip()]
+
+        # 予約プレフィックスのファイルを除外（システム内部ファイルがワークスペースとして同期されるのを防止）
+        file_paths = [p for p in file_paths if not self._is_reserved_path(p)]
 
         if not file_paths:
             return 0
