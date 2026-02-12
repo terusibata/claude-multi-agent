@@ -100,7 +100,7 @@ async def execute_streaming(request: ExecuteRequest) -> AsyncIterator[str]:
 
 
 def _message_to_sse_events(
-    message, tool_name_map: dict[str, str] | None = None
+    message, tool_name_map: dict[str, str]
 ) -> list[str]:
     """
     SDKメッセージオブジェクトをSSEイベント文字列のリストに変換
@@ -125,14 +125,10 @@ def _message_to_sse_events(
     events = []
 
     if isinstance(message, AssistantMessage):
-        # tool_use_id → tool_name マッピングを構築
-        # メッセージ内ローカル用 + メッセージ横断の共有マップに蓄積
-        local_map: dict[str, str] = {}
+        # tool_use_id → tool_name マッピングを蓄積（メッセージ横断で共有）
         for block in message.content:
             if isinstance(block, ToolUseBlock):
-                local_map[block.id] = block.name
-                if tool_name_map is not None:
-                    tool_name_map[block.id] = block.name
+                tool_name_map[block.id] = block.name
 
         for block in message.content:
             if isinstance(block, TextBlock):
@@ -144,12 +140,9 @@ def _message_to_sse_events(
                     "input": block.input,
                 }))
             elif isinstance(block, ToolResultBlock):
-                resolved_name = local_map.get(block.tool_use_id, "")
-                if not resolved_name and tool_name_map:
-                    resolved_name = tool_name_map.get(block.tool_use_id, "")
                 events.append(_format_sse("tool_result", {
                     "tool_use_id": block.tool_use_id,
-                    "tool_name": resolved_name,
+                    "tool_name": tool_name_map.get(block.tool_use_id, ""),
                     "content": str(block.content) if block.content else "",
                     "is_error": block.is_error or False,
                 }))
@@ -182,10 +175,9 @@ def _message_to_sse_events(
                 if isinstance(block, ToolResultBlock):
                     # メッセージ横断マップから tool_name を解決
                     # （前の AssistantMessage の ToolUseBlock で登録済み）
-                    resolved_name = (tool_name_map or {}).get(block.tool_use_id, "")
                     events.append(_format_sse("tool_result", {
                         "tool_use_id": block.tool_use_id,
-                        "tool_name": resolved_name,
+                        "tool_name": tool_name_map.get(block.tool_use_id, ""),
                         "content": str(block.content) if block.content else "",
                         "is_error": block.is_error or False,
                     }))
