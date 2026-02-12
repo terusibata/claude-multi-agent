@@ -97,7 +97,7 @@ class WarmPoolManager:
                 break
 
             info = await self._get_pool_container_info(container_id)
-            if info and await self.lifecycle.is_healthy(container_id):
+            if info and await self.lifecycle.is_healthy(container_id, check_agent=True):
                 # プール情報を削除
                 await self.redis.delete(f"{REDIS_KEY_WARM_POOL_INFO}:{container_id}")
                 # 非同期で補充をスケジュール

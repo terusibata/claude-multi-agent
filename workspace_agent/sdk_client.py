@@ -155,8 +155,18 @@ def _message_to_sse_events(message) -> list[str]:
         }))
 
     elif isinstance(message, UserMessage):
-        # UserMessage は通常中継不要だが、ログ用に記録
-        pass
+        # UserMessage 内の ToolResultBlock を処理
+        # SDKの実装によっては、ツール実行結果が UserMessage.content 内に
+        # ToolResultBlock として含まれる場合がある
+        if hasattr(message, "content") and isinstance(message.content, list):
+            for block in message.content:
+                if isinstance(block, ToolResultBlock):
+                    events.append(_format_sse("tool_result", {
+                        "tool_use_id": block.tool_use_id,
+                        "tool_name": "",
+                        "content": str(block.content) if block.content else "",
+                        "is_error": block.is_error or False,
+                    }))
 
     else:
         # 不明なメッセージ型はスキップ（ログのみ）
