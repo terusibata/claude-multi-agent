@@ -73,8 +73,11 @@ async def execute_streaming(request: ExecuteRequest) -> AsyncIterator[str]:
 
     try:
         done_emitted = False
+        # メッセージ横断で tool_use_id → tool_name のマッピングを蓄積
+        # AssistantMessage内のToolUseBlockで登録し、UserMessage内のToolResultBlockで参照
+        tool_name_map: dict[str, str] = {}
         async for message in query(prompt=request.user_input, options=options):
-            sse_events = _message_to_sse_events(message)
+            sse_events = _message_to_sse_events(message, tool_name_map)
             for event in sse_events:
                 if "event: done\n" in event:
                     done_emitted = True
@@ -96,8 +99,18 @@ async def execute_streaming(request: ExecuteRequest) -> AsyncIterator[str]:
         yield _format_sse("error", {"message": str(e)})
 
 
-def _message_to_sse_events(message) -> list[str]:
-    """SDKメッセージオブジェクトをSSEイベント文字列のリストに変換"""
+def _message_to_sse_events(
+    message, tool_name_map: dict[str, str] | None = None
+) -> list[str]:
+    """
+    SDKメッセージオブジェクトをSSEイベント文字列のリストに変換
+
+    Args:
+        message: SDKメッセージオブジェクト
+        tool_name_map: メッセージ横断の tool_use_id → tool_name マッピング。
+            AssistantMessage内のToolUseBlockで蓄積し、
+            UserMessage内のToolResultBlockで参照する。
+    """
     try:
         from claude_agent_sdk import (
             AssistantMessage,
@@ -112,11 +125,14 @@ def _message_to_sse_events(message) -> list[str]:
     events = []
 
     if isinstance(message, AssistantMessage):
-        # tool_use_id → tool_name マッピングを構築（ToolResultBlock用）
-        tool_name_map: dict[str, str] = {}
+        # tool_use_id → tool_name マッピングを構築
+        # メッセージ内ローカル用 + メッセージ横断の共有マップに蓄積
+        local_map: dict[str, str] = {}
         for block in message.content:
             if isinstance(block, ToolUseBlock):
-                tool_name_map[block.id] = block.name
+                local_map[block.id] = block.name
+                if tool_name_map is not None:
+                    tool_name_map[block.id] = block.name
 
         for block in message.content:
             if isinstance(block, TextBlock):
@@ -128,9 +144,12 @@ def _message_to_sse_events(message) -> list[str]:
                     "input": block.input,
                 }))
             elif isinstance(block, ToolResultBlock):
+                resolved_name = local_map.get(block.tool_use_id, "")
+                if not resolved_name and tool_name_map:
+                    resolved_name = tool_name_map.get(block.tool_use_id, "")
                 events.append(_format_sse("tool_result", {
                     "tool_use_id": block.tool_use_id,
-                    "tool_name": tool_name_map.get(block.tool_use_id, ""),
+                    "tool_name": resolved_name,
                     "content": str(block.content) if block.content else "",
                     "is_error": block.is_error or False,
                 }))
@@ -161,9 +180,12 @@ def _message_to_sse_events(message) -> list[str]:
         if hasattr(message, "content") and isinstance(message.content, list):
             for block in message.content:
                 if isinstance(block, ToolResultBlock):
+                    # メッセージ横断マップから tool_name を解決
+                    # （前の AssistantMessage の ToolUseBlock で登録済み）
+                    resolved_name = (tool_name_map or {}).get(block.tool_use_id, "")
                     events.append(_format_sse("tool_result", {
                         "tool_use_id": block.tool_use_id,
-                        "tool_name": "",
+                        "tool_name": resolved_name,
                         "content": str(block.content) if block.content else "",
                         "is_error": block.is_error or False,
                     }))
