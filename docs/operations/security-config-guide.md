@@ -14,7 +14,7 @@ L1: --network none（Phase 1）
 L2: Custom seccomp profile（Phase 2）
 L3: --read-only + tmpfs（Phase 1）
 L4: --cap-drop ALL（Phase 1）
-L5: --pids-limit 50（Phase 1）
+L5: --pids-limit 256（Phase 1）
 L6: --memory / --cpus（Phase 1）
 L7: userns-remap（Phase 2）
 L8: no-new-privileges（Phase 1）
@@ -97,7 +97,7 @@ SECCOMP_PROFILE_PATH=/path/to/deployment/seccomp/workspace-seccomp.json
 | プロセス管理 | clone, execve, fork, wait4, exit_group |
 | ファイルI/O | read, write, open, close, stat, fstat |
 | メモリ管理 | mmap, mprotect, brk, munmap |
-| ネットワーク | (最小限 - `--network none` のため socket/connect は制限) |
+| ネットワーク | socket, connect, bind（Unix socket通信用に許可。外部通信は `--network none` で遮断） |
 | シグナル | rt_sigaction, rt_sigprocmask, kill |
 | その他 | futex, epoll_*, pipe, dup2 |
 
@@ -134,9 +134,9 @@ Docker デフォルトの seccomp プロファイルのみ。開発者の自由�
 ### ステージング環境
 ```env
 SECCOMP_PROFILE_PATH=/app/deployment/seccomp/workspace-seccomp.json
-USERNS_REMAP_ENABLED=false
+USERNS_REMAP_ENABLED=true
 ```
-seccomp で syscall 制限を検証。userns は無効で互換性問題を回避。
+seccomp + userns-remap を有効化し、本番環境と同等の構成で検証。互換性問題がある場合のみ `USERNS_REMAP_ENABLED=false` に変更。
 
 ### 本番環境（推奨）
 ```env

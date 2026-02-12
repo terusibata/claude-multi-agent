@@ -132,6 +132,7 @@ data: {"seq": <number>, "timestamp": "<ISO8601>", ...}
 | `context_status` | コンテキスト使用状況 | done直前（実行終了時） |
 | `done` | 完了 | 実行完了時 |
 | `error` | エラー | エラー発生時 |
+| `container_recovered` | コンテナ復旧通知 | コンテナクラッシュからの自動復旧時 |
 
 ---
 
@@ -680,6 +681,31 @@ type ErrorType =
 }
 ```
 
+### 14. container_recovered（コンテナ復旧通知）
+
+コンテナクラッシュ後の自動復旧が完了したときに送信されます。このイベントを受信した場合、クライアントはリクエストの再送を推奨されます。
+
+```typescript
+interface ContainerRecoveredEvent {
+  message: string;               // 復旧メッセージ
+  recovered: boolean;            // 復旧成功フラグ（常にtrue）
+  retry_recommended: boolean;    // 再試行推奨フラグ（常にtrue）
+}
+```
+
+**例:**
+```json
+{
+  "message": "Container recovered",
+  "recovered": true,
+  "retry_recommended": true
+}
+```
+
+**フロントエンド実装ガイド:**
+- `retry_recommended: true` の場合、ユーザーに再送信を促すUIを表示
+- 自動リトライを実装する場合は、短いディレイ（1-2秒）後に再送信
+
 ---
 
 ## エラーレスポンス
@@ -732,8 +758,11 @@ type ErrorType =
 
 | 設定 | 値 | 説明 |
 |------|-----|------|
-| イベントタイムアウト | 300秒（5分） | 最後のイベントからこの時間経過でタイムアウト |
+| 実行タイムアウト | 600秒（10分） | コンテナ内でのエージェント実行の最大時間 |
+| イベントタイムアウト | 720秒（12分） | 実行タイムアウト後の後処理を含む安全ネット |
 | ハートビート間隔 | 10秒 | pingイベント送信間隔 |
+
+> **タイムアウト階層**: 実行タイムアウト(600s) < イベントタイムアウト(720s) < ロックTTL(900s)
 
 ### タイムアウト時の動作
 

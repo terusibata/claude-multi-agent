@@ -12,8 +12,9 @@
 |---------|-----|------|
 | Grafana | http://localhost:3002 | 監視ダッシュボード |
 | Prometheus | http://localhost:9090 | メトリクス収集・クエリ |
-| Alertmanager | http://localhost:9093 | アラート管理 |
 | アプリケーション /metrics | http://localhost:8000/metrics | メトリクスエンドポイント |
+
+> **注**: アラート管理が必要な場合は Alertmanager を別途デプロイしてください。現在の docker-compose.yml には Prometheus + Grafana のみが含まれています。
 
 ---
 
@@ -77,7 +78,7 @@ Grafanaダッシュボード「Workspace Containers」は4つの行（Row）で�
 | WarmPool Size | Gauge | `workspace_warm_pool_size` | 現在のプールサイズ。min_size以上であること |
 | WarmPool Exhaustion Events | Counter | `rate(workspace_warm_pool_exhausted_total[5m])` | プール枯渇の発生率。0が理想 |
 | WarmPool Acquire Latency (P95) | Graph | `histogram_quantile(0.95, workspace_warm_pool_acquire_seconds_bucket)` | プールからのコンテナ取得時間。通常数ミリ秒 |
-| WarmPool Hit Rate | Graph | `rate(workspace_warm_pool_hits_total[5m]) / rate(workspace_warm_pool_requests_total[5m]) * 100` | プールヒット率（%）。100%が理想 |
+| WarmPool Hit Rate | Graph | `1 - (rate(workspace_warm_pool_exhausted_total[5m]) / rate(workspace_warm_pool_acquire_seconds_count[5m])) * 100` | プールヒット率（%）。100%が理想。枯渇回数と取得総数から算出 |
 
 **確認ポイント**:
 - プールサイズが0になっていないか（枯渇状態）
@@ -88,7 +89,7 @@ Grafanaダッシュボード「Workspace Containers」は4つの行（Row）で�
 
 | パネル | 種類 | メトリクス | 説明 |
 |--------|------|----------|------|
-| Proxy Request Rate | Graph | `rate(workspace_proxy_requests_total[5m])` | Proxyを経由するリクエストレート |
+| Proxy Request Rate | Graph | `rate(workspace_proxy_request_duration_seconds_count[5m])` | Proxyを経由するリクエストレート |
 | Proxy Latency (P95) | Graph | `histogram_quantile(0.95, workspace_proxy_request_duration_seconds_bucket)` | Proxyレイテンシ P95。SLO: 100ms以下 |
 | Proxy Latency Distribution | Heatmap | `workspace_proxy_request_duration_seconds_bucket` | レイテンシの分布。異常値の検出に有用 |
 | Domain Blocked Rate | Counter | `rate(workspace_proxy_blocked_total[5m])` | ドメインホワイトリストによるブロック率。不正リクエストの検出 |
@@ -403,8 +404,8 @@ histogram_quantile(0.95, rate(workspace_warm_pool_acquire_seconds_bucket[5m]))
 ### 6.3 Proxy
 
 ```promql
-# Proxyリクエストレート
-rate(workspace_proxy_requests_total[5m])
+# Proxyリクエストレート（Histogram の _count から算出）
+rate(workspace_proxy_request_duration_seconds_count[5m])
 
 # Proxyレイテンシ（パーセンタイル別）
 histogram_quantile(0.50, rate(workspace_proxy_request_duration_seconds_bucket[5m]))
@@ -414,8 +415,8 @@ histogram_quantile(0.99, rate(workspace_proxy_request_duration_seconds_bucket[5m
 # ドメインブロック率
 rate(workspace_proxy_blocked_total[5m])
 
-# S3同期エラー率
-rate(workspace_s3_sync_errors_total[5m]) / rate(workspace_s3_sync_total[5m]) * 100
+# S3同期エラー数（/5分）
+rate(workspace_s3_sync_errors_total[5m])
 ```
 
 ### 6.4 セキュリティ & GC
