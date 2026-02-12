@@ -69,7 +69,7 @@ AWS Bedrock + Claude Agent SDKを利用したマルチテナント対応AIエー
         │          │  │  ├── Skills/MCPツール   │    │
         │          │  │  └── /workspace (作業)  │    │
         │          │  │                       │    │
-        │          │  │  セキュリティ: 12層防御   │    │
+        │          │  │  セキュリティ: 8層防御    │    │
         │          │  │  (network:none,         │    │
         │          │  │   seccomp, AppArmor,   │    │
         │          │  │   cap-drop ALL, etc.)   │    │
