@@ -159,6 +159,16 @@ class WarmPoolManager:
                     return False
 
                 info = await self.lifecycle.create_container()
+                # エージェントソケットの起動完了を待つ
+                # プールに追加する前に確認することで、取得直後のConnectionErrorを防止
+                ready = await self.lifecycle.wait_for_agent_ready(info.agent_socket)
+                if not ready:
+                    logger.warning(
+                        "WarmPool: エージェント起動タイムアウト、破棄",
+                        container_id=info.id,
+                    )
+                    await self.lifecycle.destroy_container(info.id, grace_period=5)
+                    continue  # リトライ
                 # Redis に情報保存
                 await self.redis.hset(
                     f"{REDIS_KEY_WARM_POOL_INFO}:{info.id}",

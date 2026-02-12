@@ -40,6 +40,7 @@ from app.infrastructure.metrics import (
 from app.services.container.config import (
     CONTAINER_TTL_SECONDS,
     REDIS_KEY_CONTAINER,
+    REDIS_KEY_CONTAINER_REVERSE,
 )
 from app.services.container.lifecycle import ContainerLifecycleManager
 from app.services.container.models import ContainerInfo, ContainerStatus
@@ -177,6 +178,22 @@ class ContainerOrchestrator:
                 conversation_id=conversation_id,
             )
             yield b"event: error\ndata: {\"message\": \"Execution timeout\"}\n\n"
+            # タイムアウト後もコンテナ内エージェントが実行中の可能性があるため、
+            # コンテナを破棄して次回リクエスト用に新規作成する
+            try:
+                old_container_id = info.id
+                await self._cleanup_container(info)
+                new_info = await self.get_or_create(conversation_id)
+                info = new_info
+                recovered = True
+                logger.info(
+                    "タイムアウトコンテナ復旧完了",
+                    old_container_id=old_container_id,
+                    new_container_id=new_info.id,
+                    conversation_id=conversation_id,
+                )
+            except Exception as cleanup_err:
+                logger.error("タイムアウトコンテナクリーンアップ失敗", error=str(cleanup_err))
         except ConnectionError as e:
             # Proxy接続エラー: まずProxy単体の再起動を試行（Step 3-3）
             get_workspace_requests_total().inc(status="error")
@@ -189,7 +206,7 @@ class ContainerOrchestrator:
             yield b"event: error\ndata: {\"message\": \"Container execution failed\"}\n\n"
             try:
                 await self._restart_proxy(info)
-                yield b'event: container_recovered\ndata: {"message": "Container recovered", "recovered": true}\n\n'
+                yield b'event: container_recovered\ndata: {"message": "Container recovered", "recovered": true, "retry_recommended": true}\n\n'
             except Exception as proxy_err:
                 logger.error("Proxy再起動失敗、コンテナ全体復旧へ", error=str(proxy_err))
                 get_workspace_container_crashes().inc()
@@ -199,17 +216,18 @@ class ContainerOrchestrator:
                     error=str(e),
                 )
                 try:
+                    old_container_id = info.id
                     await self._cleanup_container(info)
                     new_info = await self.get_or_create(conversation_id)
                     info = new_info
                     recovered = True
                     logger.info(
                         "コンテナ復旧完了",
-                        old_container_id=info.id,
+                        old_container_id=old_container_id,
                         new_container_id=new_info.id,
                         conversation_id=conversation_id,
                     )
-                    yield b'event: container_recovered\ndata: {"message": "Container recovered", "recovered": true}\n\n'
+                    yield b'event: container_recovered\ndata: {"message": "Container recovered", "recovered": true, "retry_recommended": true}\n\n'
                 except Exception as recovery_err:
                     logger.error("コンテナ復旧失敗", error=str(recovery_err))
 
@@ -231,17 +249,18 @@ class ContainerOrchestrator:
 
             # クラッシュ復旧: 不健全コンテナをクリーンアップし新コンテナを準備
             try:
+                old_container_id = info.id
                 await self._cleanup_container(info)
                 new_info = await self.get_or_create(conversation_id)
                 info = new_info
                 recovered = True
                 logger.info(
                     "コンテナ復旧完了",
-                    old_container_id=info.id,
+                    old_container_id=old_container_id,
                     new_container_id=new_info.id,
                     conversation_id=conversation_id,
                 )
-                yield b'event: container_recovered\ndata: {"message": "Container recovered", "recovered": true}\n\n'
+                yield b'event: container_recovered\ndata: {"message": "Container recovered", "recovered": true, "retry_recommended": true}\n\n'
             except Exception as recovery_err:
                 logger.error("コンテナ復旧失敗", error=str(recovery_err))
         else:
@@ -332,6 +351,9 @@ class ContainerOrchestrator:
         key = f"{REDIS_KEY_CONTAINER}:{info.conversation_id}"
         await self.redis.hset(key, mapping=info.to_redis_hash())
         await self.redis.expire(key, CONTAINER_TTL_SECONDS)
+        # 逆引きマッピング: container_id → conversation_id（GCが正しくコンテナを識別するため）
+        reverse_key = f"{REDIS_KEY_CONTAINER_REVERSE}:{info.id}"
+        await self.redis.set(reverse_key, info.conversation_id, ex=CONTAINER_TTL_SECONDS)
 
     async def _update_redis(self, info: ContainerInfo) -> None:
         """コンテナ情報をRedisで更新（TTLリセット含む）"""
@@ -341,6 +363,9 @@ class ContainerOrchestrator:
             "status": info.status.value,
         })
         await self.redis.expire(key, CONTAINER_TTL_SECONDS)
+        # 逆引きマッピングのTTLもリセット
+        reverse_key = f"{REDIS_KEY_CONTAINER_REVERSE}:{info.id}"
+        await self.redis.expire(reverse_key, CONTAINER_TTL_SECONDS)
 
     async def _cleanup_container(self, info: ContainerInfo) -> None:
         """コンテナとProxy、Redisメタデータをクリーンアップ"""
@@ -352,6 +377,7 @@ class ContainerOrchestrator:
         except Exception as e:
             logger.error("コンテナ破棄エラー", container_id=info.id, error=str(e))
         await self.redis.delete(f"{REDIS_KEY_CONTAINER}:{info.conversation_id}")
+        await self.redis.delete(f"{REDIS_KEY_CONTAINER_REVERSE}:{info.id}")
         get_workspace_active_containers().dec()
         audit_container_destroyed(
             container_id=info.id,

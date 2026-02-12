@@ -11,7 +11,11 @@ from redis.asyncio import Redis
 
 from app.config import get_settings
 from app.infrastructure.metrics import get_workspace_active_containers, get_workspace_gc_cycles
-from app.services.container.config import REDIS_KEY_CONTAINER
+from app.services.container.config import (
+    REDIS_KEY_CONTAINER,
+    REDIS_KEY_CONTAINER_REVERSE,
+    REDIS_KEY_WARM_POOL_INFO,
+)
 from app.services.container.lifecycle import ContainerLifecycleManager
 from app.services.container.models import ContainerInfo, ContainerStatus
 
@@ -82,6 +86,23 @@ class ContainerGarbageCollector:
 
             if not container_id:
                 continue
+
+            # WarmPoolが管理するコンテナはGC対象外
+            # WarmPool Redis infoが存在する = まだプール内で待機中
+            pool_info_exists = await self.redis.exists(
+                f"{REDIS_KEY_WARM_POOL_INFO}:{container_id}"
+            )
+            if pool_info_exists:
+                continue
+
+            # Docker labelのconversation_idが空の場合、逆引きマッピングから正しいIDを取得
+            # （WarmPoolから取得後のコンテナはDockerラベルが更新されないため）
+            if not conversation_id:
+                mapped_id = await self.redis.get(
+                    f"{REDIS_KEY_CONTAINER_REVERSE}:{container_id}"
+                )
+                if mapped_id:
+                    conversation_id = mapped_id
 
             # Redis からコンテナメタデータ取得
             redis_data = await self.redis.hgetall(
@@ -171,8 +192,9 @@ class ContainerGarbageCollector:
                 info.id, grace_period=self._settings.container_grace_period
             )
 
-            # Redis メタデータ削除
+            # Redis メタデータ削除（正引き + 逆引き）
             await self.redis.delete(f"{REDIS_KEY_CONTAINER}:{info.conversation_id}")
+            await self.redis.delete(f"{REDIS_KEY_CONTAINER_REVERSE}:{info.id}")
 
             # BUG-13修正: アクティブコンテナメトリクスをデクリメント
             get_workspace_active_containers().dec()

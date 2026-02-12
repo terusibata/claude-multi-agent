@@ -90,6 +90,7 @@ def get_container_create_config(container_id: str) -> dict:
 
 # Redis キープレフィックス
 REDIS_KEY_CONTAINER = "workspace:container"  # workspace:container:{conversation_id}
+REDIS_KEY_CONTAINER_REVERSE = "workspace:container_reverse"  # workspace:container_reverse:{container_id} → conversation_id
 REDIS_KEY_WARM_POOL = "workspace:warm_pool"  # List
 REDIS_KEY_WARM_POOL_INFO = "workspace:warm_pool_info"  # workspace:warm_pool_info:{container_id}
 

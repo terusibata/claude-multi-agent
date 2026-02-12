@@ -238,7 +238,9 @@ class TestGCOrphanContainerHandling:
         ]
 
         mock_redis = AsyncMock()
+        mock_redis.exists.return_value = 0  # WarmPoolに属していない
         mock_redis.hgetall.return_value = {}  # Redisにメタデータなし
+        mock_redis.get.return_value = None  # 逆引きマッピングなし
 
         gc = ContainerGarbageCollector(mock_lifecycle, mock_redis)
         await gc._collect()

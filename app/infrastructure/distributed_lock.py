@@ -54,7 +54,8 @@ class DistributedLockManager:
     LOCK_PREFIX = "lock:"
 
     # デフォルトタイムアウト（秒）
-    DEFAULT_LOCK_TTL = 600  # 10分
+    # 実行タイムアウト(600s) + 後処理マージン(300s) を確保
+    DEFAULT_LOCK_TTL = 900  # 15分
     DEFAULT_ACQUIRE_TIMEOUT = 5.0  # 5秒
     DEFAULT_RETRY_INTERVAL = 0.1  # 100ms
 

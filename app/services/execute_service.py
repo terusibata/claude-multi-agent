@@ -184,6 +184,7 @@ class ExecuteService:
             # コンテナ内エージェントにリクエスト送信・SSEストリーム中継
             done_data = None
             last_sync_time = 0.0
+            last_lock_extend_time = time.time()
             background_sync_tasks: set[asyncio.Task] = set()
 
             async for event in self._stream_from_container(
@@ -193,6 +194,14 @@ class ExecuteService:
                 # SDK側の "done" イベントを _translate_event() でホスト形式に変換
                 if event.get("event") == "done":
                     done_data = event.get("data", {})
+
+                # 長時間実行時のロックTTL延長（60秒間隔）
+                if lock_token and (time.time() - last_lock_extend_time) > 60:
+                    try:
+                        await lock_manager.extend(conversation_id, lock_token, additional_ttl=600)
+                    except Exception as ext_err:
+                        logger.warning("ロック延長失敗", conversation_id=conversation_id, error=str(ext_err))
+                    last_lock_extend_time = time.time()
 
                 # tool_result イベント検出時に非同期ファイル同期をトリガー
                 if (

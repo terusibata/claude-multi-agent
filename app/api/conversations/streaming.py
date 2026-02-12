@@ -13,6 +13,7 @@ import structlog
 from sse_starlette.sse import EventSourceResponse
 
 from app.api.dependencies import get_active_model, get_active_tenant, get_orchestrator
+from app.config import get_settings
 from app.database import get_db
 from app.models.model import Model
 from app.models.tenant import Tenant
@@ -26,8 +27,7 @@ from app.utils.streaming import format_error_event, format_ping_event, to_sse_pa
 router = APIRouter()
 logger = structlog.get_logger(__name__)
 
-# タイムアウト関連の定数
-EVENT_TIMEOUT_SECONDS = 300
+# ハートビート間隔（秒）
 HEARTBEAT_INTERVAL_SECONDS = 10
 
 
@@ -80,8 +80,19 @@ async def _event_generator(
 ) -> AsyncIterator[dict]:
     """
     SSEイベントジェネレータ（コンテナ隔離版）
-    クライアントが切断しても、バックグラウンド処理は継続します。
+
+    タイムアウト階層:
+      container_execution_timeout (600s) - httpx絶対タイムアウト（先に発火）
+        < event_timeout (720s)           - SSEアイドルタイムアウト（安全ネット）
+          < Lock TTL (900s)              - 分散ロック自動失効（最終安全ネット）
+
+    クライアント切断 vs アイドルタイムアウトの動作差異:
+      - CancelledError（ブラウザ閉じ）→ バックグラウンド継続（結果保存のため）
+      - アイドルタイムアウト → バックグラウンドをキャンセル（スタック状態の解放）
     """
+    settings = get_settings()
+    event_timeout_seconds = settings.event_timeout
+
     event_queue: asyncio.Queue = asyncio.Queue()
     start_time = time.time()
     last_event_time = start_time
@@ -130,14 +141,27 @@ async def _event_generator(
                         yield to_sse_payload(error_event)
                     break
 
-                # タイムアウト判定
+                # アイドルタイムアウト判定
+                # 通常は container_execution_timeout (httpx) が先に発火し、
+                # エラーイベントがキュー経由で届くため、ここには到達しない。
+                # ここに到達するのは後処理スタック等の異常時のみ。
                 time_since_last_event = current_time - last_event_time
-                if time_since_last_event >= EVENT_TIMEOUT_SECONDS:
+                if time_since_last_event >= event_timeout_seconds:
                     logger.error(
-                        "イベントタイムアウト",
+                        "SSEアイドルタイムアウト（バックグラウンドタスクをキャンセル）",
                         elapsed_seconds=round(time_since_last_event, 1),
+                        event_timeout=event_timeout_seconds,
                         conversation_id=request.conversation_id,
                     )
+                    # アイドルタイムアウト: バックグラウンドタスクをキャンセルして
+                    # リソース（コンテナ、ロック、DB接続）を即座に解放する。
+                    # ※ CancelledError（ブラウザ閉じ）とは異なり、ここでは
+                    #   明らかにスタックしているためキャンセルが正しい。
+                    background_task.cancel()
+                    try:
+                        await background_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
                     error_event = format_error_event(
                         seq=0,
                         error_type="timeout_error",
@@ -150,8 +174,9 @@ async def _event_generator(
                 continue
 
     except asyncio.CancelledError:
-        # クライアント切断: バックグラウンドタスクはキャンセルせず継続させる
-        # ExecuteService が DB記録・ファイル同期を最後まで完了する
+        # クライアント切断（ブラウザ閉じ/ネットワーク断）:
+        # バックグラウンドタスクはキャンセルせず継続させる。
+        # ExecuteService が DB記録・ファイル同期・ロック解放を最後まで完了する。
         logger.info(
             "クライアント切断（バックグラウンド実行は継続）",
             conversation_id=request.conversation_id,
