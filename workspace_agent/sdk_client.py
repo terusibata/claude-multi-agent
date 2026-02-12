@@ -73,8 +73,11 @@ async def execute_streaming(request: ExecuteRequest) -> AsyncIterator[str]:
 
     try:
         done_emitted = False
+        # メッセージ横断で tool_use_id → tool_name のマッピングを蓄積
+        # AssistantMessage内のToolUseBlockで登録し、UserMessage内のToolResultBlockで参照
+        tool_name_map: dict[str, str] = {}
         async for message in query(prompt=request.user_input, options=options):
-            sse_events = _message_to_sse_events(message)
+            sse_events = _message_to_sse_events(message, tool_name_map)
             for event in sse_events:
                 if "event: done\n" in event:
                     done_emitted = True
@@ -96,8 +99,18 @@ async def execute_streaming(request: ExecuteRequest) -> AsyncIterator[str]:
         yield _format_sse("error", {"message": str(e)})
 
 
-def _message_to_sse_events(message) -> list[str]:
-    """SDKメッセージオブジェクトをSSEイベント文字列のリストに変換"""
+def _message_to_sse_events(
+    message, tool_name_map: dict[str, str]
+) -> list[str]:
+    """
+    SDKメッセージオブジェクトをSSEイベント文字列のリストに変換
+
+    Args:
+        message: SDKメッセージオブジェクト
+        tool_name_map: メッセージ横断の tool_use_id → tool_name マッピング。
+            AssistantMessage内のToolUseBlockで蓄積し、
+            UserMessage内のToolResultBlockで参照する。
+    """
     try:
         from claude_agent_sdk import (
             AssistantMessage,
@@ -112,8 +125,7 @@ def _message_to_sse_events(message) -> list[str]:
     events = []
 
     if isinstance(message, AssistantMessage):
-        # tool_use_id → tool_name マッピングを構築（ToolResultBlock用）
-        tool_name_map: dict[str, str] = {}
+        # tool_use_id → tool_name マッピングを蓄積（メッセージ横断で共有）
         for block in message.content:
             if isinstance(block, ToolUseBlock):
                 tool_name_map[block.id] = block.name
@@ -155,8 +167,20 @@ def _message_to_sse_events(message) -> list[str]:
         }))
 
     elif isinstance(message, UserMessage):
-        # UserMessage は通常中継不要だが、ログ用に記録
-        pass
+        # UserMessage 内の ToolResultBlock を処理
+        # SDKの実装によっては、ツール実行結果が UserMessage.content 内に
+        # ToolResultBlock として含まれる場合がある
+        if hasattr(message, "content") and isinstance(message.content, list):
+            for block in message.content:
+                if isinstance(block, ToolResultBlock):
+                    # メッセージ横断マップから tool_name を解決
+                    # （前の AssistantMessage の ToolUseBlock で登録済み）
+                    events.append(_format_sse("tool_result", {
+                        "tool_use_id": block.tool_use_id,
+                        "tool_name": tool_name_map.get(block.tool_use_id, ""),
+                        "content": str(block.content) if block.content else "",
+                        "is_error": block.is_error or False,
+                    }))
 
     else:
         # 不明なメッセージ型はスキップ（ログのみ）

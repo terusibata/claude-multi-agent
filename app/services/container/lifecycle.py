@@ -111,14 +111,49 @@ class ContainerLifecycleManager:
 
         logger.info("コンテナ破棄完了", container_id=container_id)
 
-    async def is_healthy(self, container_id: str) -> bool:
-        """コンテナが健全かどうか確認"""
+    async def is_healthy(
+        self, container_id: str, check_agent: bool = False
+    ) -> bool:
+        """
+        コンテナが健全かどうか確認
+
+        Args:
+            container_id: コンテナID
+            check_agent: Trueの場合、Docker状態に加えてagent.sock経由で
+                         workspace_agentプロセスの死活も確認する。
+                         WarmPoolからの取得時に使用し、プロセスレベルの
+                         クラッシュを検出する。
+
+        Returns:
+            True: 健全, False: 不健全
+        """
         try:
             container = await self.docker.containers.get(container_id)
             info = await container.show()
             state = info.get("State", {})
-            return state.get("Running", False) and not state.get("OOMKilled", False)
+            if not state.get("Running", False) or state.get("OOMKilled", False):
+                return False
         except aiodocker.exceptions.DockerError:
+            return False
+
+        if not check_agent:
+            return True
+
+        # エージェントプロセスレベルのヘルスチェック
+        agent_socket = str(
+            Path(self._settings.workspace_socket_base_path) / container_id / "agent.sock"
+        )
+        try:
+            import httpx
+            transport = httpx.AsyncHTTPTransport(uds=agent_socket)
+            async with httpx.AsyncClient(transport=transport, timeout=3.0) as client:
+                resp = await client.get("http://localhost/health")
+                return resp.status_code == 200
+        except Exception:
+            logger.warning(
+                "エージェントヘルスチェック失敗",
+                container_id=container_id,
+            )
             return False
 
     async def list_workspace_containers(self) -> list[dict]:
