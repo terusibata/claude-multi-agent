@@ -51,6 +51,8 @@ class ContainerLifecycleManager:
 
         config = get_container_create_config(container_id)
         config["Labels"]["workspace.conversation_id"] = conversation_id
+        # WarmPool用コンテナ（conversation_id未割当）にはラベルを付与し、GCの誤破棄を防止
+        config["Labels"]["workspace.warm_pool"] = "true" if not conversation_id else "false"
 
         logger.info(
             "コンテナ作成中",

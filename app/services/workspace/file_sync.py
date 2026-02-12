@@ -6,6 +6,7 @@ S3 ↔ コンテナ間のファイル同期を担当
   - sync_to_container: S3 → コンテナ（コンテナ割り当て時）
   - sync_from_container: コンテナ → S3（実行完了時、コンテナ破棄時）
 """
+import asyncio
 import io
 import tarfile
 
@@ -42,6 +43,8 @@ class WorkspaceFileSync:
         self.s3 = s3
         self.lifecycle = lifecycle
         self.db = db
+        # バックグラウンド同期タスクからの並行DB操作を排他制御
+        self._db_lock = asyncio.Lock()
 
     @staticmethod
     def _is_reserved_path(file_path: str) -> bool:
@@ -348,29 +351,31 @@ class WorkspaceFileSync:
         from uuid import uuid4
         from datetime import datetime, timezone
 
-        stmt = select(ConversationFile).where(
-            ConversationFile.conversation_id == conversation_id,
-            ConversationFile.file_path == file_path,
-        )
-        result = await self.db.execute(stmt)
-        existing = result.scalar_one_or_none()
-
-        if existing:
-            existing.file_size = file_size
-            existing.version += 1
-            existing.source = "ai_modified"
-            existing.updated_at = datetime.now(timezone.utc)
-        else:
-            new_file = ConversationFile(
-                file_id=str(uuid4()),
-                conversation_id=conversation_id,
-                file_path=file_path,
-                original_name=file_path.split("/")[-1],
-                file_size=file_size,
-                source="ai_created",
+        # バックグラウンド同期タスクからの並行呼び出しによるAsyncSessionの競合を防止
+        async with self._db_lock:
+            stmt = select(ConversationFile).where(
+                ConversationFile.conversation_id == conversation_id,
+                ConversationFile.file_path == file_path,
             )
-            self.db.add(new_file)
+            result = await self.db.execute(stmt)
+            existing = result.scalar_one_or_none()
 
-        # flush のみ実行（SQL文をDBに送信するがトランザクションは確定しない）
-        # 最終的なコミットは ExecuteService.execute_streaming() の finally で一括実行
-        await self.db.flush()
+            if existing:
+                existing.file_size = file_size
+                existing.version += 1
+                existing.source = "ai_modified"
+                existing.updated_at = datetime.now(timezone.utc)
+            else:
+                new_file = ConversationFile(
+                    file_id=str(uuid4()),
+                    conversation_id=conversation_id,
+                    file_path=file_path,
+                    original_name=file_path.split("/")[-1],
+                    file_size=file_size,
+                    source="ai_created",
+                )
+                self.db.add(new_file)
+
+            # flush のみ実行（SQL文をDBに送信するがトランザクションは確定しない）
+            # 最終的なコミットは ExecuteService.execute_streaming() の finally で一括実行
+            await self.db.flush()
