@@ -132,6 +132,12 @@ class Settings(BaseSettings):
     container_absolute_ttl: int = 28800  # 8時間
     container_execution_timeout: int = 600  # 10分
     container_grace_period: int = 30  # 秒
+
+    # SSEアイドルタイムアウト（秒）
+    # container_execution_timeout より大きく設定し、httpxタイムアウトが先に発火するようにする。
+    # このタイムアウトは「httpx完了後の後処理がスタックした場合」の安全ネット。
+    # 階層: container_execution_timeout(600s) < event_timeout(720s) < Lock TTL(900s)
+    event_timeout: int = 720  # 12分
     container_healthcheck_interval: int = 30  # 秒
     container_gc_interval: int = 60  # GCループ間隔（秒）
 
