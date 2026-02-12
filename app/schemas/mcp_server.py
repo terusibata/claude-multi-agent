@@ -1,5 +1,5 @@
 """
-MCPサーバー定義スキーマ
+MCPサーバー定義スキーマ（OpenAPI専用）
 """
 from datetime import datetime
 from typing import Any
@@ -7,38 +7,11 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class McpToolInputSchema(BaseModel):
-    """MCPツールの入力スキーマ"""
-
-    type: str = Field(default="object", description="JSONスキーマのタイプ")
-    properties: dict[str, Any] = Field(default_factory=dict, description="プロパティ定義")
-    required: list[str] | None = Field(None, description="必須プロパティ")
-
-
-class McpToolDefinition(BaseModel):
-    """MCPツール定義"""
-
-    name: str = Field(..., description="ツール名")
-    description: str = Field(..., description="ツールの説明")
-    input_schema: McpToolInputSchema = Field(..., description="入力スキーマ")
-
-
 class McpServerBase(BaseModel):
     """MCPサーバー定義の共通フィールド"""
 
     name: str = Field(..., description="MCPサーバー名（識別子）", max_length=200)
     display_name: str | None = Field(None, description="表示名", max_length=300)
-    type: str = Field(
-        ...,
-        description="タイプ (http / sse / stdio / builtin / openapi)",
-    )
-    url: str | None = Field(
-        None, description="サーバーURL（http/sseの場合）", max_length=500
-    )
-    command: str | None = Field(
-        None, description="起動コマンド（stdioの場合）", max_length=500
-    )
-    args: list[str] | None = Field(None, description="コマンド引数（stdioの場合）")
     env: dict[str, str] | None = Field(None, description="環境変数")
     headers_template: dict[str, str] | None = Field(
         None,
@@ -47,14 +20,10 @@ class McpServerBase(BaseModel):
     allowed_tools: list[str] | None = Field(
         None, description="許可するツール名のリスト"
     )
-    tools: list[McpToolDefinition] | None = Field(
-        None, description="ツール定義リスト（builtinタイプの場合）"
-    )
     description: str | None = Field(None, description="説明")
-    # OpenAPIタイプ用のフィールド
     openapi_spec: dict[str, Any] | None = Field(
         None,
-        description="OpenAPI仕様（JSON形式）。openapiタイプの場合に使用",
+        description="OpenAPI仕様（JSON形式）",
     )
     openapi_base_url: str | None = Field(
         None,
@@ -66,22 +35,22 @@ class McpServerBase(BaseModel):
 class McpServerCreate(McpServerBase):
     """MCPサーバー作成リクエスト"""
 
-    pass
+    openapi_spec: dict[str, Any] = Field(
+        ...,
+        description="OpenAPI仕様（JSON形式）。必須。",
+    )
 
 
 class McpServerUpdate(BaseModel):
     """MCPサーバー更新リクエスト"""
 
     display_name: str | None = Field(None, max_length=300)
-    type: str | None = None
-    url: str | None = Field(None, max_length=500)
-    command: str | None = Field(None, max_length=500)
-    args: list[str] | None = None
     env: dict[str, str] | None = None
     headers_template: dict[str, str] | None = None
     allowed_tools: list[str] | None = None
-    tools: list[McpToolDefinition] | None = None
     description: str | None = None
+    openapi_spec: dict[str, Any] | None = None
+    openapi_base_url: str | None = Field(None, max_length=500)
     status: str | None = Field(None, pattern="^(active|inactive)$")
 
 
@@ -90,7 +59,6 @@ class McpServerResponse(McpServerBase):
 
     mcp_server_id: str
     tenant_id: str
-    tools: list[McpToolDefinition] | None = None
     status: str
     created_at: datetime
     updated_at: datetime

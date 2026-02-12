@@ -5,17 +5,6 @@
 from pydantic import BaseModel, Field
 
 
-class MCPServerConfig(BaseModel):
-    """MCP サーバー設定"""
-
-    name: str
-    type: str  # "http" | "sse" | "stdio"
-    url: str | None = None
-    command: str | None = None
-    args: list[str] | None = None
-    env: dict[str, str] | None = None
-
-
 class ExecuteRequest(BaseModel):
     """エージェント実行リクエスト"""
 
@@ -24,7 +13,6 @@ class ExecuteRequest(BaseModel):
     model: str = "claude-sonnet-4-5-20250929"
     session_id: str | None = None
     max_turns: int | None = None
-    mcp_servers: list[MCPServerConfig] = Field(default_factory=list)
     allowed_tools: list[str] = Field(default_factory=list)
     cwd: str = "/workspace"
 

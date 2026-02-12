@@ -30,27 +30,6 @@ def _build_sdk_options(request: ExecuteRequest):
         "HTTPS_PROXY": os.environ.get("HTTPS_PROXY", "http://127.0.0.1:8080"),
     }
 
-    # MCP servers を dict 形式に変換
-    mcp_servers = {}
-    if request.mcp_servers:
-        for server in request.mcp_servers:
-            config = {}
-            if server.type == "stdio" and server.command:
-                config = {
-                    "type": "stdio",
-                    "command": server.command,
-                    "args": server.args or [],
-                }
-                if server.env:
-                    config["env"] = server.env
-            elif server.type in ("sse", "http") and server.url:
-                config = {
-                    "type": server.type,
-                    "url": server.url,
-                }
-            if config:
-                mcp_servers[server.name] = config
-
     options = ClaudeAgentOptions(
         model=request.model or None,
         cwd=request.cwd,
@@ -63,9 +42,6 @@ def _build_sdk_options(request: ExecuteRequest):
     # セッション再開: session_id が指定されている場合は resume で既存セッションを継続
     if request.session_id:
         options.resume = request.session_id
-
-    if mcp_servers:
-        options.mcp_servers = mcp_servers
 
     if request.allowed_tools:
         options.allowed_tools = request.allowed_tools
