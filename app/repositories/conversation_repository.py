@@ -69,7 +69,9 @@ class ConversationRepository(BaseRepository[Conversation]):
         conversation.total_output_tokens = (
             conversation.total_output_tokens or 0
         ) + total_output_tokens
-        conversation.estimated_context_tokens = estimated_context_tokens
+        conversation.estimated_context_tokens = (
+            conversation.estimated_context_tokens or 0
+        ) + estimated_context_tokens
         conversation.context_limit_reached = context_limit_reached
 
         self.db.add(conversation)

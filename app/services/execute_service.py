@@ -167,12 +167,27 @@ class ExecuteService:
             if request.workspace_enabled:
                 await self._sync_files_to_container(request, container_info)
 
+            # セッションファイル復元（コンテナ破棄後の再開時にS3から復元）
+            conversation = await self.conversation_service.get_conversation_by_id(
+                request.conversation_id, request.tenant_id
+            )
+            if conversation and conversation.session_id and self._file_sync:
+                try:
+                    await self._file_sync.restore_session_file(
+                        request.tenant_id, request.conversation_id,
+                        container_info.id, conversation.session_id,
+                    )
+                except Exception as e:
+                    logger.warning("セッションファイル復元エラー（続行）", error=str(e))
+
             # コンテナ内エージェントにリクエスト送信・SSEストリーム中継
             done_data = None
             last_sync_time = 0.0
             background_sync_tasks: set[asyncio.Task] = set()
 
-            async for event in self._stream_from_container(request, model, seq_counter):
+            async for event in self._stream_from_container(
+                request, model, seq_counter, container_info,
+            ):
                 # done イベントからメタデータ（usage/cost）を抽出
                 # SDK側の "done" イベントを _translate_event() でホスト形式に変換
                 if event.get("event") == "done":
@@ -217,6 +232,25 @@ class ExecuteService:
                     cost_usd=str(done_data.get("cost_usd", "0")),
                 )
 
+                # session_id をDBに保存（セッション再開用）
+                new_session_id = done_data.get("session_id")
+                if new_session_id:
+                    await self.conversation_service.update_conversation(
+                        conversation_id=request.conversation_id,
+                        tenant_id=request.tenant_id,
+                        session_id=new_session_id,
+                    )
+
+                    # セッションファイルをS3に保存（コンテナ破棄時の復旧用）
+                    if self._file_sync:
+                        try:
+                            await self._file_sync.save_session_file(
+                                request.tenant_id, request.conversation_id,
+                                container_id, new_session_id,
+                            )
+                        except Exception as e:
+                            logger.warning("セッションファイル保存エラー（続行）", error=str(e))
+
             execution_success = True
 
         except Exception as e:
@@ -260,6 +294,7 @@ class ExecuteService:
         request: ExecuteRequest,
         model: Model,
         seq_counter: SequenceCounter,
+        container_info,
     ) -> AsyncGenerator[dict, None]:
         """コンテナ内エージェントからSSEストリームを受信・中継"""
         container_request = {
@@ -282,7 +317,8 @@ class ExecuteService:
 
         buffer = ""
         async for chunk in self.orchestrator.execute(
-            request.conversation_id, container_request
+            request.conversation_id, container_request,
+            container_info=container_info,
         ):
             decoded = chunk.decode("utf-8", errors="replace")
             buffer += decoded
@@ -446,7 +482,16 @@ class ExecuteService:
         """コンテキスト状況を更新"""
         estimated = input_tokens + output_tokens
         max_context = model.context_window
-        usage_percent = (estimated / max_context) * 100 if max_context > 0 else 0
+
+        # 累積後の値で limit_reached を正確に判定
+        conversation = await self.conversation_service.get_conversation_by_id(
+            conversation_id, tenant_id
+        )
+        accumulated_after = (
+            (conversation.estimated_context_tokens or 0) + estimated
+            if conversation else estimated
+        )
+        usage_percent = (accumulated_after / max_context) * 100 if max_context > 0 else 0
         limit_reached = usage_percent >= 95
 
         await self.conversation_service.update_conversation_context_status(

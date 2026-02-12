@@ -225,6 +225,96 @@ class WorkspaceFileSync:
             logger.error("コンテナからの読み出し失敗", src_path=src_path, error=str(e))
             return None
 
+    async def save_session_file(
+        self,
+        tenant_id: str,
+        conversation_id: str,
+        container_id: str,
+        session_id: str,
+    ) -> bool:
+        """
+        コンテナ内のSDKセッションファイルをS3に保存
+
+        SDKは ~/.claude/projects/<mangled-cwd>/<session_id>.jsonl にセッションを保存する。
+        cwd=/workspace の場合、mangled path は -workspace。
+
+        Args:
+            tenant_id: テナントID
+            conversation_id: 会話ID
+            container_id: コンテナID
+            session_id: SDKセッションID
+
+        Returns:
+            保存成功した場合True
+        """
+        session_path = f"/home/appuser/.claude/projects/-workspace/{session_id}.jsonl"
+        data = await self._read_from_container(container_id, session_path)
+        if data is None:
+            logger.debug(
+                "セッションファイル未検出（スキップ）",
+                session_id=session_id,
+                container_id=container_id,
+            )
+            return False
+
+        await self.s3.upload(
+            tenant_id, conversation_id,
+            f"_sdk_session/{session_id}.jsonl", data,
+        )
+        logger.info(
+            "セッションファイルS3保存完了",
+            session_id=session_id,
+            conversation_id=conversation_id,
+            size=len(data),
+        )
+        return True
+
+    async def restore_session_file(
+        self,
+        tenant_id: str,
+        conversation_id: str,
+        container_id: str,
+        session_id: str,
+    ) -> bool:
+        """
+        S3からコンテナにSDKセッションファイルを復元
+
+        コンテナ破棄後の再開時に、S3に保存されたセッションファイルを
+        コンテナ内の正しいパスに復元する。
+
+        Args:
+            tenant_id: テナントID
+            conversation_id: 会話ID
+            container_id: コンテナID
+            session_id: SDKセッションID
+
+        Returns:
+            復元成功した場合True
+        """
+        try:
+            data, _ = await self.s3.download(
+                tenant_id, conversation_id,
+                f"_sdk_session/{session_id}.jsonl",
+            )
+        except Exception:
+            logger.debug(
+                "S3にセッションファイルなし（新規セッション）",
+                session_id=session_id,
+                conversation_id=conversation_id,
+            )
+            return False
+
+        dest_path = f"/home/appuser/.claude/projects/-workspace/{session_id}.jsonl"
+        await self._write_to_container(container_id, dest_path, data)
+        logger.info(
+            "セッションファイル復元完了",
+            session_id=session_id,
+            conversation_id=conversation_id,
+            container_id=container_id,
+            size=len(data),
+        )
+        return True
+
     async def _upsert_file_record(
         self, conversation_id: str, file_path: str, file_size: int
     ) -> None:
