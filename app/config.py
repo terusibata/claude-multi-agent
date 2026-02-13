@@ -224,10 +224,19 @@ class Settings(BaseSettings):
             if "aiagent_password" in self.database_url:
                 raise ValueError("本番環境ではデフォルトのデータベースパスワードは使用できません")
 
-            # 本番環境ではlocalhostのCORSオリジンを警告
-            if "localhost" in self.cors_origins:
-                import warnings
-                warnings.warn("本番環境でlocalhostのCORSオリジンが設定されています")
+            # 本番環境ではlocalhost/127.0.0.1のCORSオリジンを拒否
+            if any("localhost" in origin or "127.0.0.1" in origin
+                   for origin in self.cors_origins.split(",")):
+                raise ValueError(
+                    "本番環境ではlocalhost/127.0.0.1のCORSオリジンは使用できません。"
+                    "CORS_ORIGINS環境変数を本番URLに設定してください。"
+                )
+
+            # ワイルドカードも拒否
+            if "*" in self.cors_origins:
+                raise ValueError(
+                    "本番環境ではワイルドカード(*)のCORSオリジンは使用できません。"
+                )
 
         return self
 
