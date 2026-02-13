@@ -108,6 +108,11 @@ services:
       - ${WORKSPACE_SOCKET_HOST_PATH:-/var/run/workspace-sockets}:/var/run/workspace-sockets
     ports:
       - "${APP_PORT:-8000}:8000"
+    networks:
+      default: {}
+      agent-network:
+        aliases:
+          - backend
 
   # 本番環境用バックエンド
   backend-prod:
@@ -141,6 +146,11 @@ services:
           memory: 4G
     # グレースフルシャットダウン
     stop_grace_period: 30s
+    networks:
+      default: {}
+      agent-network:
+        aliases:
+          - backend
 
   # ============================================
   # 監視スタック
@@ -196,3 +206,15 @@ volumes:
     driver: local
   grafana_data:
     driver: local
+
+# =============================================================================
+# ネットワーク設定
+# =============================================================================
+# agent-network: フロントエンド(internal-agent-hub)との共有ネットワーク
+# name: を指定することで、external: true 不要で同名ネットワークを自動共有。
+# 先に起動した側が作成し、後から起動した側が再利用する。
+
+networks:
+  agent-network:
+    name: agent-network
+    driver: bridge

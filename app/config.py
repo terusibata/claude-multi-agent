@@ -116,8 +116,9 @@ class Settings(BaseSettings):
     rate_limit_requests: int = 100
     rate_limit_period: int = 60
 
-    # HSTS設定
-    hsts_enabled: bool = True
+    # HSTS設定（プライベートネットワーク内のHTTP通信では無効にすること）
+    # デフォルトはFalse。HTTPS終端がある環境では HSTS_ENABLED=true を設定
+    hsts_enabled: bool = False
     hsts_max_age: int = 31536000  # 1年
 
     # ============================================
@@ -236,6 +237,12 @@ class Settings(BaseSettings):
             if "*" in self.cors_origins:
                 raise ValueError(
                     "本番環境ではワイルドカード(*)のCORSオリジンは使用できません。"
+                )
+
+            # 本番環境ではRedisパスワードが必須
+            if not self.redis_password:
+                raise ValueError(
+                    "本番環境ではREDIS_PASSWORDの設定が必須です。"
                 )
 
         return self
