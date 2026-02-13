@@ -534,37 +534,24 @@ class OpenAPIMcpService:
                 verify=self.verify_ssl,
                 timeout=self.timeout,
             ) as client:
-                if method == "GET":
-                    response = await client.get(url, params=query_params, headers=headers)
-                elif method == "POST":
-                    # 空の辞書は json={} として送信（None ではなく）
-                    response = await client.post(
-                        url,
-                        params=query_params,
-                        json=body_data if body_data else None,
-                        headers=headers,
-                    )
-                elif method == "PUT":
-                    response = await client.put(
-                        url,
-                        params=query_params,
-                        json=body_data if body_data else None,
-                        headers=headers,
-                    )
-                elif method == "PATCH":
-                    response = await client.patch(
-                        url,
-                        params=query_params,
-                        json=body_data if body_data else None,
-                        headers=headers,
-                    )
-                elif method == "DELETE":
-                    response = await client.delete(url, params=query_params, headers=headers)
-                else:
+                # サポート対象のHTTPメソッド
+                supported_methods = {"GET", "POST", "PUT", "PATCH", "DELETE"}
+                if method not in supported_methods:
                     return {
                         "content": [{"type": "text", "text": f"Unsupported HTTP method: {method}"}],
                         "is_error": True,
                     }
+
+                # GET/DELETEはボディなし、POST/PUT/PATCHはJSONボディを送信
+                json_body = body_data if body_data and method not in ("GET", "DELETE") else None
+
+                response = await client.request(
+                    method=method,
+                    url=url,
+                    params=query_params,
+                    json=json_body,
+                    headers=headers,
+                )
 
                 response.raise_for_status()
 
