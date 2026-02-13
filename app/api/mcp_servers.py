@@ -10,6 +10,7 @@ from app.database import get_db
 from app.models.mcp_server import McpServer
 from app.schemas.mcp_server import (
     McpServerCreate,
+    McpServerListResponse,
     McpServerResponse,
     McpServerUpdate,
 )
@@ -19,17 +20,27 @@ from app.utils.error_handler import raise_not_found
 router = APIRouter()
 
 
-@router.get("", response_model=list[McpServerResponse], summary="MCPサーバー一覧取得")
+@router.get("", response_model=McpServerListResponse, summary="MCPサーバー一覧取得")
 async def get_mcp_servers(
     tenant_id: str,
     status: str | None = Query(None, description="ステータスフィルター"),
+    limit: int = Query(50, ge=1, le=100, description="取得件数"),
+    offset: int = Query(0, ge=0, description="オフセット"),
     db: AsyncSession = Depends(get_db),
 ):
     """
     テナントのMCPサーバー一覧を取得します。
     """
     service = McpServerService(db)
-    return await service.get_all_by_tenant(tenant_id, status=status)
+    servers, total = await service.get_all_by_tenant(
+        tenant_id, status=status, limit=limit, offset=offset
+    )
+    return McpServerListResponse(
+        items=servers,
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/{server_id}", response_model=McpServerResponse, summary="MCPサーバー詳細取得")

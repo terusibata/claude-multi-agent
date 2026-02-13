@@ -6,7 +6,7 @@ import re
 from uuid import uuid4
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.mcp_server import McpServer
@@ -26,24 +26,39 @@ class McpServerService:
         self,
         tenant_id: str,
         status: str | None = None,
-    ) -> list[McpServer]:
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[McpServer], int]:
         """
         テナントの全MCPサーバーを取得
 
         Args:
             tenant_id: テナントID
             status: フィルタリング用ステータス
+            limit: 取得件数（デフォルト50）
+            offset: オフセット（デフォルト0）
 
         Returns:
-            MCPサーバーリスト
+            (MCPサーバーリスト, 総件数)
         """
-        query = select(McpServer).where(McpServer.tenant_id == tenant_id)
-        if status:
-            query = query.where(McpServer.status == status)
-        query = query.order_by(McpServer.name)
+        base_filter = McpServer.tenant_id == tenant_id
+        status_filter = McpServer.status == status if status else None
+
+        # 総件数を取得
+        count_query = select(func.count()).select_from(McpServer).where(base_filter)
+        if status_filter is not None:
+            count_query = count_query.where(status_filter)
+        count_result = await self.db.execute(count_query)
+        total = count_result.scalar() or 0
+
+        # データ取得
+        query = select(McpServer).where(base_filter)
+        if status_filter is not None:
+            query = query.where(status_filter)
+        query = query.order_by(McpServer.name).limit(limit).offset(offset)
 
         result = await self.db.execute(query)
-        return list(result.scalars().all())
+        return list(result.scalars().all()), total
 
     async def get_by_id(
         self,

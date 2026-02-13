@@ -64,3 +64,12 @@ class McpServerResponse(McpServerBase):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class McpServerListResponse(BaseModel):
+    """MCPサーバー一覧レスポンス"""
+
+    items: list[McpServerResponse]
+    total: int
+    limit: int
+    offset: int
