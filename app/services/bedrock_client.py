@@ -11,6 +11,7 @@ from botocore.exceptions import ClientError, EndpointConnectionError
 
 from app.config import get_settings
 from app.infrastructure.metrics import get_bedrock_requests, get_bedrock_tokens
+from app.infrastructure.circuit_breaker import CircuitBreaker, CircuitBreakerConfig
 from app.infrastructure.retry import RetryConfig, retry_sync
 from app.services.aws_config import AWSConfig
 
@@ -64,6 +65,13 @@ class BedrockChatClient:
         """
         self.aws_config = aws_config
         self._retry_config = get_bedrock_retry_config()
+        self._circuit_breaker = CircuitBreaker(
+            name="bedrock",
+            config=CircuitBreakerConfig(
+                failure_threshold=5,
+                reset_timeout=60.0,
+            ),
+        )
 
     def _format_messages(
         self,
@@ -167,8 +175,9 @@ class BedrockChatClient:
         output_tokens = 0
 
         try:
-            # リトライ付きでAPI呼び出し
-            response = retry_sync(
+            # サーキットブレーカー + リトライ付きでAPI呼び出し
+            response = self._circuit_breaker.execute(
+                retry_sync,
                 self._call_converse_stream,
                 client,
                 request_params,
@@ -273,8 +282,9 @@ class BedrockChatClient:
         start_time = time.perf_counter()
 
         try:
-            # リトライ付きでAPI呼び出し
-            response = retry_sync(
+            # サーキットブレーカー + リトライ付きでAPI呼び出し
+            response = self._circuit_breaker.execute(
+                retry_sync,
                 self._call_converse,
                 client,
                 request_params,
