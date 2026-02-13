@@ -16,7 +16,8 @@ from sqlalchemy import and_, select, update, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.utils.exceptions import FileSizeError
+from app.utils.exceptions import FileSizeError, WorkspaceSecurityError
+from app.utils.security import validate_conversation_id, validate_path_traversal
 from app.models.conversation import Conversation
 from app.models.conversation_file import ConversationFile
 from app.schemas.workspace import (
@@ -29,8 +30,6 @@ from app.schemas.workspace import (
 from app.services.workspace.s3_storage import S3StorageBackend
 from app.services.workspace.context_builder import AIContextBuilder
 from app.services.workspace.file_processors import FileTypeClassifier
-
-from app.utils.exceptions import WorkspaceSecurityError
 
 logger = structlog.get_logger(__name__)
 
@@ -133,7 +132,6 @@ class WorkspaceService:
             WorkspaceSecurityError: パスが無効な場合
         """
         # パストラバーサル攻撃の防止
-        from app.utils.security import validate_path_traversal
         try:
             validate_path_traversal(file_path)
         except Exception as e:
@@ -244,7 +242,6 @@ class WorkspaceService:
             WorkspaceSecurityError: 会話IDが無効な場合
         """
         # 会話IDのバリデーション（パストラバーサル防止）
-        from app.utils.security import validate_conversation_id
         try:
             validate_conversation_id(conversation_id)
         except Exception as e:
@@ -375,19 +372,6 @@ class WorkspaceService:
             logger.info("ローカルワークスペース削除完了", conversation_id=conversation_id)
         else:
             logger.debug("ローカルワークスペースは存在しません", conversation_id=conversation_id)
-
-    def get_workspace_cwd(self, tenant_id: str, conversation_id: str) -> str:
-        """
-        会話専用ワークスペースのcwd（作業ディレクトリ）を取得
-
-        Args:
-            tenant_id: テナントID
-            conversation_id: 会話ID
-
-        Returns:
-            cwdパス（ローカル一時ディレクトリ）
-        """
-        return self.get_workspace_local_path(conversation_id)
 
     async def get_workspace_info(
         self,
