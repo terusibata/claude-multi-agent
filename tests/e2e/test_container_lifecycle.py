@@ -134,8 +134,8 @@ class TestContainerCreateConfig:
             assert f"seccomp={fake_seccomp}" in security_opt
             assert "apparmor=workspace-container" in security_opt
 
-    def test_config_has_node_proxy_env_vars(self):
-        """Node.js global-agent 環境変数が含まれること"""
+    def test_config_does_not_set_node_options(self):
+        """NODE_OPTIONS と GLOBAL_AGENT_* がコンテナ環境変数に含まれないこと"""
         with patch("app.services.container.config.get_settings") as mock_settings:
             mock_settings.return_value = MagicMock(
                 container_image="workspace-base:latest",
@@ -146,14 +146,19 @@ class TestContainerCreateConfig:
                 resolved_socket_host_path="/var/run/ws",
                 seccomp_profile_path="",
                 apparmor_profile_name="",
+                aws_region="us-west-2",
             )
 
             from app.services.container.config import get_container_create_config
 
             config = get_container_create_config("ws-e2e-test")
             env_list = config["Env"]
-            assert "GLOBAL_AGENT_HTTP_PROXY=http://127.0.0.1:8080" in env_list
-            assert "NODE_OPTIONS=--require global-agent/bootstrap" in env_list
+            # NODE_OPTIONS はSDKバンドルCLIのNode.jsをクラッシュさせるため除外
+            assert not any("NODE_OPTIONS" in e for e in env_list)
+            assert not any("GLOBAL_AGENT" in e for e in env_list)
+            # pip/curl用のProxy環境変数は維持
+            assert "HTTP_PROXY=http://127.0.0.1:8080" in env_list
+            assert "HTTPS_PROXY=http://127.0.0.1:8080" in env_list
 
 
 class TestProxyCommunication:

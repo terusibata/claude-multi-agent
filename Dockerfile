@@ -27,7 +27,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Node.js のインストール（Claude Agent SDKに必要）
+# Node.js のインストール（MCP サーバー等に必要）
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*

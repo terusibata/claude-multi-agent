@@ -2,7 +2,7 @@
 Claude Agent SDK クライアントラッパー
 コンテナ内でSDKを起動し、SSEストリームを生成する
 
-SDK API (claude-agent-sdk >= 0.1.33):
+SDK API (claude-agent-sdk == 0.1.36):
   - query(prompt, options) -> AsyncIterator[Message]
   - Message = UserMessage | AssistantMessage | SystemMessage | ResultMessage
 """
@@ -20,14 +20,15 @@ def _build_sdk_options(request: ExecuteRequest):
     """SDK実行オプションを ClaudeAgentOptions として組み立てる"""
     from claude_agent_sdk import ClaudeAgentOptions
 
-    # Bedrock + Proxy 経由の環境変数を明示的に渡す
+    # Bedrock 経由の環境変数を明示的に渡す
+    # API通信は ANTHROPIC_BEDROCK_BASE_URL で直接ルーティングされるため HTTP_PROXY 不要
     env = {
         "CLAUDE_CODE_USE_BEDROCK": os.environ.get("CLAUDE_CODE_USE_BEDROCK", "1"),
         "CLAUDE_CODE_SKIP_BEDROCK_AUTH": os.environ.get("CLAUDE_CODE_SKIP_BEDROCK_AUTH", "1"),
         "AWS_REGION": os.environ.get("AWS_REGION", "us-west-2"),
         "ANTHROPIC_BEDROCK_BASE_URL": os.environ.get("ANTHROPIC_BEDROCK_BASE_URL", "http://127.0.0.1:8080"),
-        "HTTP_PROXY": os.environ.get("HTTP_PROXY", "http://127.0.0.1:8080"),
-        "HTTPS_PROXY": os.environ.get("HTTPS_PROXY", "http://127.0.0.1:8080"),
+        # NODE_OPTIONS を明示的にクリア（コンテナ環境変数の継承を防止）
+        "NODE_OPTIONS": "",
     }
 
     options = ClaudeAgentOptions(
@@ -69,7 +70,10 @@ async def execute_streaming(request: ExecuteRequest) -> AsyncIterator[str]:
         return
 
     options = _build_sdk_options(request)
-    logger.info("SDK実行開始: model=%s, cwd=%s", request.model, request.cwd)
+    logger.info(
+        "SDK実行開始: model=%s, cwd=%s, sdk_version=%s",
+        request.model, request.cwd, _get_sdk_version(),
+    )
 
     try:
         done_emitted = False
@@ -95,8 +99,19 @@ async def execute_streaming(request: ExecuteRequest) -> AsyncIterator[str]:
                 "usage": {},
             })
     except Exception as e:
-        logger.error("SDK実行エラー: %s", str(e), exc_info=True)
-        yield _format_sse("error", {"message": str(e)})
+        error_msg = str(e)
+        logger.error(
+            "SDK実行エラー: %s (type=%s)", error_msg, type(e).__name__, exc_info=True,
+        )
+        if "timeout" in error_msg.lower() and "initialize" in error_msg.lower():
+            yield _format_sse("error", {
+                "message": "CLI subprocess failed to initialize. "
+                           "Check NODE_OPTIONS and CLI binary availability.",
+                "error_type": "cli_init_timeout",
+                "details": error_msg,
+            })
+        else:
+            yield _format_sse("error", {"message": error_msg})
 
 
 def _message_to_sse_events(
@@ -187,6 +202,15 @@ def _message_to_sse_events(
         logger.debug("未知のメッセージ型: %s", type(message).__name__)
 
     return events
+
+
+def _get_sdk_version() -> str:
+    """インストール済みSDKバージョンを返す（診断用）"""
+    try:
+        from importlib.metadata import version
+        return version("claude-agent-sdk")
+    except Exception:
+        return "unknown"
 
 
 def _format_sse(event_type: str, data: dict) -> str:

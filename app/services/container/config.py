@@ -82,11 +82,6 @@ def get_container_create_config(container_id: str) -> dict:
             "HTTPS_PROXY=http://127.0.0.1:8080",
             "NO_PROXY=localhost,127.0.0.1",
             "PIP_REQUIRE_VIRTUALENV=true",
-            # Node.js 20: global-agentでHTTP_PROXYをfetch()に適用
-            "GLOBAL_AGENT_HTTP_PROXY=http://127.0.0.1:8080",
-            "GLOBAL_AGENT_HTTPS_PROXY=http://127.0.0.1:8080",
-            "GLOBAL_AGENT_NO_PROXY=localhost,127.0.0.1",
-            "NODE_OPTIONS=--require global-agent/bootstrap",
         ],
         "User": "1000:1000",
         "Labels": {
