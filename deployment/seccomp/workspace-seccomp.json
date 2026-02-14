@@ -132,10 +132,13 @@
         "sched_getaffinity",
         "sched_setaffinity",
         "sched_getscheduler",
-        "sched_getparam"
+        "sched_getparam",
+        "capget",
+        "capset",
+        "vfork"
       ],
       "action": "SCMP_ACT_ALLOW",
-      "comment": "Process: creation, execution, scheduling, and identity management"
+      "comment": "Process: creation, execution, scheduling, identity management, and capability queries"
     },
     {
       "names": [

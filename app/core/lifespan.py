@@ -51,6 +51,15 @@ async def _init_container_stack(app: FastAPI, settings) -> tuple:
     )
     app.state.gc = gc
 
+    # 起動時クリーンアップ: 前回プロセスの残存コンテナを全破棄
+    # docker compose restart / force-recreate ではワークスペースコンテナが残るため、
+    # seccompプロファイル等の設定変更を確実に反映するには新規作成が必要
+    try:
+        await orchestrator.destroy_all()
+        logger.info("起動時クリーンアップ完了（残存コンテナ破棄済み）")
+    except Exception as e:
+        logger.warning("起動時クリーンアップエラー（続行）", error=str(e))
+
     # WarmPoolプリヒート
     try:
         created = await warm_pool.preheat()

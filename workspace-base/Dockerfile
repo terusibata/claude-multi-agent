@@ -10,6 +10,13 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
 # global-agent: Node.js 20でHTTP_PROXYをfetch()に適用するために必要
 RUN npm install -g global-agent
 
+# no-new-privileges + CapDrop ALL 環境でのEPERMを防止:
+# Node.jsバイナリにファイルケーパビリティが付与されている場合、
+# bounding setに含まれないケーパビリティがあるとexecve時にEPERMになる
+RUN apt-get update && apt-get install -y --no-install-recommends libcap2-bin \
+    && setcap -r /usr/bin/node 2>/dev/null || true \
+    && apt-get purge -y libcap2-bin && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH" PIP_REQUIRE_VIRTUALENV=true
 
