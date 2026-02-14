@@ -94,7 +94,7 @@ FROM production AS development
 USER root
 
 # 開発用依存パッケージをインストール
-COPY requirements-dev.txt /tmp/
+COPY requirements.txt requirements-dev.txt /tmp/
 RUN pip install --no-cache-dir -r /tmp/requirements-dev.txt
 
 USER appuser
