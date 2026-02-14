@@ -160,6 +160,51 @@ class TestContainerCreateConfig:
             assert "HTTP_PROXY=http://127.0.0.1:8080" in env_list
             assert "HTTPS_PROXY=http://127.0.0.1:8080" in env_list
 
+    def test_config_has_claude_env_vars(self):
+        """CLI用のHOME・CLAUDE_CONFIG_DIRがコンテナ環境変数に含まれること"""
+        with patch("app.services.container.config.get_settings") as mock_settings:
+            mock_settings.return_value = MagicMock(
+                container_image="workspace-base:latest",
+                container_cpu_quota=200000,
+                container_memory_limit=2 * 1024**3,
+                container_pids_limit=256,
+                container_disk_limit="5G",
+                resolved_socket_host_path="/var/run/ws",
+                seccomp_profile_path="",
+                apparmor_profile_name="",
+                aws_region="us-west-2",
+            )
+
+            from app.services.container.config import get_container_create_config
+
+            config = get_container_create_config("ws-e2e-test")
+            env_list = config["Env"]
+            assert "HOME=/home/appuser" in env_list
+            assert "CLAUDE_CONFIG_DIR=/home/appuser/.claude" in env_list
+
+    def test_tmp_allows_exec(self):
+        """SDK CLIバイナリ実行のため /tmp に noexec がないこと"""
+        with patch("app.services.container.config.get_settings") as mock_settings:
+            mock_settings.return_value = MagicMock(
+                container_image="workspace-base:latest",
+                container_cpu_quota=200000,
+                container_memory_limit=2 * 1024**3,
+                container_pids_limit=256,
+                container_disk_limit="5G",
+                resolved_socket_host_path="/var/run/ws",
+                seccomp_profile_path="",
+                apparmor_profile_name="",
+                aws_region="us-west-2",
+            )
+
+            from app.services.container.config import get_container_create_config
+
+            config = get_container_create_config("ws-e2e-test")
+            tmpfs = config["HostConfig"]["Tmpfs"]
+            assert "noexec" not in tmpfs["/tmp"]
+            # /workspace も exec 可能であること
+            assert "noexec" not in tmpfs["/workspace"]
+
 
 class TestProxyCommunication:
     """Proxy 通信テスト"""

@@ -168,6 +168,19 @@ class TestConversationsCRUD:
         assert response.status_code == 404
 
     @pytest.mark.integration
+    async def test_get_conversation_invalid_uuid(
+        self, client: AsyncClient, sample_tenant: dict
+    ):
+        """不正なUUID形式で400エラー"""
+        response = await client.get(
+            f"/api/tenants/{sample_tenant['tenant_id']}/conversations/33ecd56f-4017-451a-823b-e6a9d801d68"
+        )
+        assert response.status_code == 400
+
+        data = response.json()
+        assert data["error"]["code"] == "VALIDATION_ERROR"
+
+    @pytest.mark.integration
     async def test_get_conversation_wrong_tenant(
         self, client: AsyncClient, sample_conversation: dict, sample_model: dict
     ):

@@ -71,6 +71,9 @@ def get_container_create_config(container_id: str) -> dict:
     return {
         "Image": image,
         "Env": [
+            # ホームディレクトリ・設定パス: CLIが ~/.claude/ に設定を書き込むため明示指定
+            "HOME=/home/appuser",
+            "CLAUDE_CONFIG_DIR=/home/appuser/.claude",
             # Bedrock設定: Proxy側でSigV4署名を注入するため、SDK側の認証はスキップ
             "CLAUDE_CODE_USE_BEDROCK=1",
             "CLAUDE_CODE_SKIP_BEDROCK_AUTH=1",
@@ -103,7 +106,7 @@ def get_container_create_config(container_id: str) -> dict:
             "IpcMode": "private",
             # userns-remap はデーモンレベルで有効化（コンテナ単位の指定不要）
             "Tmpfs": {
-                "/tmp": "rw,noexec,nosuid,size=512M",
+                "/tmp": "rw,nosuid,size=512M",
                 "/var/tmp": "rw,noexec,nosuid,size=256M",
                 "/run": "rw,noexec,nosuid,size=64M",
                 "/home/appuser/.cache": "rw,noexec,nosuid,size=512M",

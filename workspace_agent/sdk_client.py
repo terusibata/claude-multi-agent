@@ -29,6 +29,10 @@ def _build_sdk_options(request: ExecuteRequest):
         "ANTHROPIC_BEDROCK_BASE_URL": os.environ.get("ANTHROPIC_BEDROCK_BASE_URL", "http://127.0.0.1:8080"),
         # NODE_OPTIONS を明示的にクリア（コンテナ環境変数の継承を防止）
         "NODE_OPTIONS": "",
+        # CLI の一時ファイル配置先を明示
+        "TMPDIR": "/tmp",
+        # サンドボックド bash コマンドの TMPDIR を exec 可能な /workspace に設定
+        "CLAUDE_TMPDIR": "/workspace/.tmp",
     }
 
     options = ClaudeAgentOptions(
