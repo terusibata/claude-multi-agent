@@ -35,7 +35,8 @@ class TestContainerCreateConfig:
 
     def test_config_has_network_none(self):
         """コンテナが --network none で作成されること"""
-        with patch("app.services.container.config.get_settings") as mock_settings:
+        with patch("app.services.container.config.get_settings") as mock_settings, \
+             patch("app.services.container.config._load_seccomp_profile", return_value='{}'):
             mock_settings.return_value = MagicMock(
                 container_image="workspace-base:latest",
                 container_cpu_quota=200000,
@@ -111,7 +112,9 @@ class TestContainerCreateConfig:
 
     def test_config_has_seccomp_and_apparmor(self):
         """seccomp と AppArmor が SecurityOpt に含まれること"""
-        with patch("app.services.container.config.get_settings") as mock_settings:
+        fake_seccomp = '{"defaultAction":"SCMP_ACT_ERRNO"}'
+        with patch("app.services.container.config.get_settings") as mock_settings, \
+             patch("app.services.container.config._load_seccomp_profile", return_value=fake_seccomp):
             mock_settings.return_value = MagicMock(
                 container_image="workspace-base:latest",
                 container_cpu_quota=200000,
@@ -128,7 +131,7 @@ class TestContainerCreateConfig:
             config = get_container_create_config("ws-e2e-test")
             security_opt = config["HostConfig"]["SecurityOpt"]
             assert "no-new-privileges:true" in security_opt
-            assert "seccomp=deployment/seccomp/workspace-seccomp.json" in security_opt
+            assert f"seccomp={fake_seccomp}" in security_opt
             assert "apparmor=workspace-container" in security_opt
 
     def test_config_has_node_proxy_env_vars(self):
@@ -403,7 +406,8 @@ class TestAppArmorProfile:
 
     def test_config_includes_apparmor(self):
         """コンテナ設定に AppArmor プロファイルが含まれること"""
-        with patch("app.services.container.config.get_settings") as mock_settings:
+        with patch("app.services.container.config.get_settings") as mock_settings, \
+             patch("app.services.container.config._load_seccomp_profile", return_value='{}'):
             mock_settings.return_value = MagicMock(
                 container_image="workspace-base:latest",
                 container_cpu_quota=200000,

@@ -160,7 +160,12 @@ class TestSeccompConfig:
 
     def test_seccomp_profile_applied_when_configured(self):
         """seccompプロファイルパスが設定されている場合にSecurityOptに追加されること"""
-        with patch("app.services.container.config.get_settings") as mock_settings:
+        import app.services.container.config as container_config
+        container_config._seccomp_json_cache = None  # キャッシュリセット
+
+        fake_seccomp = '{"defaultAction":"SCMP_ACT_ERRNO"}'
+        with patch("app.services.container.config.get_settings") as mock_settings, \
+             patch("app.services.container.config._load_seccomp_profile", return_value=fake_seccomp):
             mock_settings.return_value = MagicMock(
                 container_image="workspace-base:latest",
                 container_cpu_quota=200000,
@@ -178,7 +183,7 @@ class TestSeccompConfig:
             security_opts = config["HostConfig"]["SecurityOpt"]
 
             assert "no-new-privileges:true" in security_opts
-            assert "seccomp=/etc/docker/seccomp/workspace.json" in security_opts
+            assert f"seccomp={fake_seccomp}" in security_opts
 
     def test_seccomp_default_when_not_configured(self):
         """seccompプロファイルが未設定の場合はDockerデフォルトが使われること"""
@@ -191,6 +196,7 @@ class TestSeccompConfig:
                 container_disk_limit="5G",
                 resolved_socket_host_path="/var/run/ws",
                 seccomp_profile_path="",
+                apparmor_profile_name="",
                 userns_remap_enabled=False,
             )
 
@@ -207,7 +213,8 @@ class TestUsernsRemapConfig:
 
     def test_no_userns_mode_in_container_config(self):
         """コンテナ設定にUsernsMode が含まれないこと（デーモンレベルで管理）"""
-        with patch("app.services.container.config.get_settings") as mock_settings:
+        with patch("app.services.container.config.get_settings") as mock_settings, \
+             patch("app.services.container.config._load_seccomp_profile", return_value='{}'):
             mock_settings.return_value = MagicMock(
                 container_image="workspace-base:latest",
                 container_cpu_quota=200000,

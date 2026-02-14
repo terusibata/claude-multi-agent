@@ -128,7 +128,7 @@ class Settings(BaseSettings):
     container_cpu_quota: int = 200000  # 2 cores (CpuPeriod=100000)
     container_memory_limit: int = 2 * 1024 ** 3  # 2GB
     container_pids_limit: int = 256  # SDK CLIサブプロセス + socat を考慮
-    container_disk_limit: str = "5G"
+    container_disk_limit: str = ""  # ディスク制限（本番: "5G"、xfs+pquota必須）
     container_inactive_ttl: int = 3600  # 60分
     container_absolute_ttl: int = 28800  # 8時間
     container_execution_timeout: int = 600  # 10分
@@ -159,8 +159,8 @@ class Settings(BaseSettings):
     # セキュリティ強化設定 (Phase 2/5)
     # ============================================
     seccomp_profile_path: str = "deployment/seccomp/workspace-seccomp.json"
-    userns_remap_enabled: bool = True  # userns-remap有効化（Docker daemon設定と連動）
-    apparmor_profile_name: str = "workspace-container"  # AppArmorプロファイル名（Phase 5）
+    userns_remap_enabled: bool = False  # userns-remap有効化（Docker daemon設定と連動）
+    apparmor_profile_name: str = ""  # AppArmorプロファイル名（本番: "workspace-container"、要ホスト側ロード）
 
     # ============================================
     # Docker設定

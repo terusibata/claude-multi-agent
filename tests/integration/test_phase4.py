@@ -12,7 +12,8 @@ class TestContainerEnvVars:
 
     def test_proxy_uses_tcp_not_unix_socket(self):
         """環境変数がTCPプロキシ（socat経由）を使用すること"""
-        with patch("app.services.container.config.get_settings") as mock_settings:
+        with patch("app.services.container.config.get_settings") as mock_settings, \
+             patch("app.services.container.config._load_seccomp_profile", return_value='{}'):
             mock_settings.return_value = MagicMock(
                 container_image="workspace-base:latest",
                 container_cpu_quota=200000,
@@ -21,6 +22,8 @@ class TestContainerEnvVars:
                 container_disk_limit="5G",
                 resolved_socket_host_path="/var/run/ws",
                 seccomp_profile_path="deployment/seccomp/workspace-seccomp.json",
+                apparmor_profile_name="",
+                aws_region="us-west-2",
                 userns_remap_enabled=True,
             )
 
@@ -34,7 +37,7 @@ class TestContainerEnvVars:
                 assert "http+unix://" not in env_var, f"http+unix:// found in: {env_var}"
 
             # TCP proxy が使われていることを確認
-            assert "ANTHROPIC_BASE_URL=http://127.0.0.1:8080" in env_list
+            assert "ANTHROPIC_BEDROCK_BASE_URL=http://127.0.0.1:8080" in env_list
             assert "HTTP_PROXY=http://127.0.0.1:8080" in env_list
             assert "HTTPS_PROXY=http://127.0.0.1:8080" in env_list
 
