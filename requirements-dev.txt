@@ -3,7 +3,7 @@
 -r requirements.txt
 
 # テスト
-pytest==9.0.2
+pytest==8.3.4
 pytest-asyncio==1.1.0
 pytest-cov==7.0.0
 pytest-xdist==3.8.0
