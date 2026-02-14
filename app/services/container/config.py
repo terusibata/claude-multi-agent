@@ -84,7 +84,7 @@ def get_container_create_config(container_id: str) -> dict:
             # pip/npm/curl等の外部通信用Forward Proxy
             "HTTP_PROXY=http://127.0.0.1:8080",
             "HTTPS_PROXY=http://127.0.0.1:8080",
-            "NO_PROXY=localhost,127.0.0.1",
+            "NO_PROXY=localhost,127.0.0.1,169.254.169.254",
             "PIP_REQUIRE_VIRTUALENV=true",
             # Node.js 20: global-agentでHTTP_PROXYをfetch()に適用
             "GLOBAL_AGENT_HTTP_PROXY=http://127.0.0.1:8080",
@@ -93,6 +93,13 @@ def get_container_create_config(container_id: str) -> dict:
             "NODE_OPTIONS=--require global-agent/bootstrap",
             # SDK バージョンチェックをスキップ（コンテナ内ではイメージビルド時に固定済み）
             "CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK=1",
+            # AWS SDK メタデータサービス (169.254.169.254) への接続を無効化
+            # NetworkMode:none では到達不能だが、タイムアウト待ちを防止
+            "AWS_EC2_METADATA_DISABLED=true",
+            # プレースホルダー認証情報: AWS SDK がクレデンシャルプロバイダーチェーンで
+            # ハングするのを防止。実際のSigV4署名はCredential Injection Proxyが注入する。
+            "AWS_ACCESS_KEY_ID=placeholder-for-proxy-signing",
+            "AWS_SECRET_ACCESS_KEY=placeholder-for-proxy-signing",
         ],
         "User": "1000:1000",
         "Labels": {

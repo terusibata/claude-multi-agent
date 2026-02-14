@@ -10,6 +10,11 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
 # global-agent: Node.js 20でHTTP_PROXYをfetch()に適用するために必要
 RUN npm install -g global-agent
 
+# Claude Code CLI: SDK が query() 実行時にサブプロセスとして起動する Node.js アプリ。
+# ビルド時にプリインストールすることで、ランタイムでの npx 経由ダウンロード
+# （NetworkMode:none + Proxy 経由で60秒以上かかる）を回避する。
+RUN npm install -g @anthropic-ai/claude-code
+
 # no-new-privileges + CapDrop ALL 環境でのEPERMを防止:
 # Node.jsバイナリにファイルケーパビリティが付与されている場合、
 # bounding setに含まれないケーパビリティがあるとexecve時にEPERMになる
