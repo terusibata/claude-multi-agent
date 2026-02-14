@@ -45,10 +45,11 @@ def _build_sdk_options(request: ExecuteRequest, stderr_lines: list[str]):
         "CLAUDE_CODE_DISABLE_AUTOUPDATE": "1",
         "DISABLE_AUTOUPDATE": "1",
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-        # SDK バージョンチェックをスキップ（コンテナ内では不要）
-        "CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK": "1",
         # 非対話モードを明示（余計なプロンプト抑止）
         "CI": "1",
+        # 注: CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK はコンテナ環境変数
+        # (config.py Env) で設定。SDK 自身の os.environ を参照するため
+        # options.env（サブプロセス環境）では効果がない。
     }
 
     options = ClaudeAgentOptions(

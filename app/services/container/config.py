@@ -87,6 +87,8 @@ def get_container_create_config(container_id: str) -> dict:
             "GLOBAL_AGENT_HTTPS_PROXY=http://127.0.0.1:8080",
             "GLOBAL_AGENT_NO_PROXY=localhost,127.0.0.1",
             "NODE_OPTIONS=--require global-agent/bootstrap",
+            # SDK バージョンチェックをスキップ（コンテナ内ではイメージビルド時に固定済み）
+            "CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK=1",
         ],
         "User": "1000:1000",
         "Labels": {
