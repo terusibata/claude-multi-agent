@@ -16,9 +16,21 @@ from workspace_agent.models import ExecuteRequest
 logger = logging.getLogger(__name__)
 
 
-def _build_sdk_options(request: ExecuteRequest):
-    """SDK実行オプションを ClaudeAgentOptions として組み立てる"""
+def _build_sdk_options(request: ExecuteRequest, stderr_lines: list[str]):
+    """SDK実行オプションを ClaudeAgentOptions として組み立てる
+
+    Args:
+        request: 実行リクエスト
+        stderr_lines: CLI サブプロセスの stderr 出力を蓄積するリスト
+    """
     from claude_agent_sdk import ClaudeAgentOptions
+
+    def _stderr_handler(line: str) -> None:
+        """CLI サブプロセスの stderr をログに記録し蓄積する"""
+        stripped = line.rstrip()
+        if stripped:
+            logger.warning("CLI stderr: %s", stripped)
+            stderr_lines.append(stripped)
 
     # Bedrock + Proxy 経由の環境変数を明示的に渡す
     env = {
@@ -28,6 +40,15 @@ def _build_sdk_options(request: ExecuteRequest):
         "ANTHROPIC_BEDROCK_BASE_URL": os.environ.get("ANTHROPIC_BEDROCK_BASE_URL", "http://127.0.0.1:8080"),
         "HTTP_PROXY": os.environ.get("HTTP_PROXY", "http://127.0.0.1:8080"),
         "HTTPS_PROXY": os.environ.get("HTTPS_PROXY", "http://127.0.0.1:8080"),
+        # コンテナ環境向け最適化:
+        # NetworkMode:none のため自動更新・テレメトリ等のネットワークアクセスを無効化
+        "CLAUDE_CODE_DISABLE_AUTOUPDATE": "1",
+        "DISABLE_AUTOUPDATE": "1",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+        # SDK バージョンチェックをスキップ（コンテナ内では不要）
+        "CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK": "1",
+        # 非対話モードを明示（余計なプロンプト抑止）
+        "CI": "1",
     }
 
     options = ClaudeAgentOptions(
@@ -37,6 +58,7 @@ def _build_sdk_options(request: ExecuteRequest):
         max_turns=request.max_turns or None,
         permission_mode="bypassPermissions",
         env=env,
+        stderr=_stderr_handler,
     )
 
     # セッション再開: session_id が指定されている場合は resume で既存セッションを継続
@@ -68,7 +90,9 @@ async def execute_streaming(request: ExecuteRequest) -> AsyncIterator[str]:
         yield _format_sse("error", {"message": "SDK not available"})
         return
 
-    options = _build_sdk_options(request)
+    # CLI サブプロセスの stderr 出力を蓄積（エラー時に診断情報として利用）
+    stderr_lines: list[str] = []
+    options = _build_sdk_options(request, stderr_lines)
     logger.info("SDK実行開始: model=%s, cwd=%s", request.model, request.cwd)
 
     try:
@@ -95,8 +119,15 @@ async def execute_streaming(request: ExecuteRequest) -> AsyncIterator[str]:
                 "usage": {},
             })
     except Exception as e:
-        logger.error("SDK実行エラー: %s", str(e), exc_info=True)
-        yield _format_sse("error", {"message": str(e)})
+        # stderr 出力をエラーメッセージに付加して診断を容易にする
+        error_msg = str(e)
+        if stderr_lines:
+            stderr_tail = "\n".join(stderr_lines[-20:])
+            error_msg = f"{error_msg}\nCLI stderr:\n{stderr_tail}"
+            logger.error("SDK実行エラー (stderr あり): %s", error_msg, exc_info=True)
+        else:
+            logger.error("SDK実行エラー: %s", error_msg, exc_info=True)
+        yield _format_sse("error", {"message": error_msg})
 
 
 def _message_to_sse_events(

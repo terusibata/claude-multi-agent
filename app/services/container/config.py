@@ -108,7 +108,9 @@ def get_container_create_config(container_id: str) -> dict:
             "IpcMode": "private",
             # userns-remap はデーモンレベルで有効化（コンテナ単位の指定不要）
             "Tmpfs": {
-                "/tmp": "rw,noexec,nosuid,size=512M",
+                # noexec なし: Claude Code CLI がスクリプト実行に /tmp を使用する場合がある
+                # セキュリティは seccomp プロファイルで担保
+                "/tmp": "rw,nosuid,size=512M",
                 "/var/tmp": "rw,noexec,nosuid,size=256M",
                 "/run": "rw,noexec,nosuid,size=64M",
                 "/home/appuser/.cache": "rw,noexec,nosuid,size=512M",
