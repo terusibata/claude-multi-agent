@@ -17,13 +17,84 @@ from workspace_agent.models import ExecuteRequest
 logger = logging.getLogger(__name__)
 
 # SDK初期化タイムアウト時のリトライ設定
-_MAX_INIT_RETRIES = 2
-_INIT_RETRY_BASE_DELAY = 2.0  # seconds
+_MAX_INIT_RETRIES = 3
+_INIT_RETRY_BASE_DELAY = 3.0  # seconds
 
 # ログ出力時にマスクする環境変数キー
 _SENSITIVE_ENV_KEYS = frozenset({
     "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "API_KEY",
 })
+
+# 診断ログの重複出力を防ぐフラグ
+_diagnostics_logged = False
+
+
+async def _check_proxy_connectivity(
+    host: str = "127.0.0.1",
+    port: int = 8080,
+    timeout: float = 5.0,
+) -> bool:
+    """
+    TCP接続テストでプロキシの到達可能性を検証する。
+
+    SDK初期化前に実行し、socat→proxy.sockチェーンが
+    動作していることを確認する。
+    """
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port),
+            timeout=timeout,
+        )
+        writer.close()
+        await writer.wait_closed()
+        logger.info("プロキシ接続テスト成功: %s:%d", host, port)
+        return True
+    except asyncio.TimeoutError:
+        logger.warning("プロキシ接続テストタイムアウト: %s:%d (%.1fs)", host, port, timeout)
+        return False
+    except ConnectionRefusedError:
+        logger.warning("プロキシ接続拒否: %s:%d", host, port)
+        return False
+    except OSError as e:
+        logger.warning("プロキシ接続エラー: %s:%d - %s", host, port, str(e))
+        return False
+
+
+def _log_diagnostics() -> None:
+    """診断情報をログ出力する（初回のみ）"""
+    global _diagnostics_logged
+    if _diagnostics_logged:
+        return
+    _diagnostics_logged = True
+
+    sdk_version = "unknown"
+    try:
+        from claude_agent_sdk import __version__ as _sv
+        sdk_version = _sv
+    except (ImportError, AttributeError):
+        pass
+
+    proxy_sock = "/var/run/ws/proxy.sock"
+    proxy_exists = os.path.exists(proxy_sock)
+    proxy_mode = ""
+    if proxy_exists:
+        try:
+            stat = os.stat(proxy_sock)
+            proxy_mode = oct(stat.st_mode)[-3:]
+        except OSError:
+            proxy_mode = "stat-failed"
+
+    logger.info(
+        "SDK診断情報: sdk_version=%s, proxy_sock_exists=%s, proxy_sock_mode=%s, "
+        "uid=%d, gid=%d, HTTP_PROXY=%s, ANTHROPIC_BEDROCK_BASE_URL=%s",
+        sdk_version,
+        proxy_exists,
+        proxy_mode,
+        os.getuid(),
+        os.getgid(),
+        os.environ.get("HTTP_PROXY", "unset"),
+        os.environ.get("ANTHROPIC_BEDROCK_BASE_URL", "unset"),
+    )
 
 
 def _build_sdk_options(request: ExecuteRequest):
@@ -93,7 +164,7 @@ async def execute_streaming(request: ExecuteRequest) -> AsyncIterator[str]:
     Claude Agent SDK を実行し、SSEイベント文字列を生成する
 
     各イベントは 'event: ...\ndata: {...}\n\n' 形式の文字列
-    初期化タイムアウト（"Control request timeout: initialize"）時は最大2回リトライする。
+    初期化タイムアウト（"Control request timeout: initialize"）時は最大3回リトライする。
 
     Args:
         request: 実行リクエスト
@@ -107,6 +178,9 @@ async def execute_streaming(request: ExecuteRequest) -> AsyncIterator[str]:
         logger.error("claude-agent-sdk がインストールされていません")
         yield _format_sse("error", {"message": "SDK not available"})
         return
+
+    # 初回のみ診断情報を出力
+    _log_diagnostics()
 
     last_error = None
     for attempt in range(_MAX_INIT_RETRIES + 1):
@@ -125,6 +199,27 @@ async def execute_streaming(request: ExecuteRequest) -> AsyncIterator[str]:
                 },
             })
             await asyncio.sleep(delay)
+
+        # プロキシ接続事前チェック
+        proxy_ok = await _check_proxy_connectivity()
+        if not proxy_ok:
+            logger.error(
+                "プロキシ接続テスト失敗: attempt=%d/%d - "
+                "socat (127.0.0.1:8080) → proxy.sock チェーンが到達不可。"
+                "proxy.sockの存在とパーミッションを確認してください。",
+                attempt + 1, _MAX_INIT_RETRIES + 1,
+            )
+            if attempt < _MAX_INIT_RETRIES:
+                last_error = Exception(
+                    "Proxy pre-flight check failed: 127.0.0.1:8080 unreachable"
+                )
+                continue  # リトライ
+            else:
+                yield _format_sse("error", {
+                    "message": "Proxy connectivity check failed after all retries. "
+                               "The proxy chain (socat -> proxy.sock) is unreachable.",
+                })
+                return
 
         options = _build_sdk_options(request)
         logger.info(

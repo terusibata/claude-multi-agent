@@ -7,6 +7,7 @@ Unix Socket上で動作し、コンテナからの全外部通信を中継する
 - 全リクエストの監査ログ出力
 """
 import asyncio
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -79,6 +80,13 @@ class CredentialInjectionProxy:
             self._handle_connection,
             path=self.socket_path,
         )
+
+        # ソケットファイルのパーミッションを全ユーザー接続可能に設定
+        # asyncio.start_unix_server はumaskに基づくパーミッション（通常0755）で
+        # ソケットを作成する。Unix socketへのconnectにはwrite権限が必要。
+        # userns-remap有効時やUID不一致時にコンテナ内socatが接続できるよう0o777に設定。
+        os.chmod(self.socket_path, 0o777)
+
         logger.info("Proxy起動", socket_path=self.socket_path)
 
     async def stop(self) -> None:

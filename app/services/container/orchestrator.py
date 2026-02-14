@@ -327,6 +327,66 @@ class ContainerOrchestrator:
         await proxy.start()
         self._proxies[info.id] = proxy
 
+        # Proxyソケットの接続可能性を検証
+        await self._verify_proxy_ready(info.proxy_socket, info.id)
+
+    async def _verify_proxy_ready(
+        self, proxy_socket: str, container_id: str, timeout: float = 5.0
+    ) -> None:
+        """
+        Proxyソケットに接続可能か検証する。
+
+        start()直後にソケットが実際にacceptできる状態かを確認。
+        接続テスト失敗時はエラーログを出力するが、処理は続行する
+        （後続のSDK初期化で再試行されるため）。
+        """
+        import os
+        try:
+            if not os.path.exists(proxy_socket):
+                logger.error(
+                    "Proxy検証: ソケットファイルが存在しません",
+                    proxy_socket=proxy_socket,
+                    container_id=container_id,
+                )
+                return
+
+            stat = os.stat(proxy_socket)
+            mode = oct(stat.st_mode)[-3:]
+            logger.info(
+                "Proxy検証: ソケット情報",
+                proxy_socket=proxy_socket,
+                permissions=mode,
+                uid=stat.st_uid,
+                gid=stat.st_gid,
+                container_id=container_id,
+            )
+
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_unix_connection(proxy_socket),
+                timeout=timeout,
+            )
+            writer.close()
+            await writer.wait_closed()
+            logger.info(
+                "Proxy検証: 接続テスト成功",
+                proxy_socket=proxy_socket,
+                container_id=container_id,
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                "Proxy検証: 接続テストタイムアウト",
+                proxy_socket=proxy_socket,
+                container_id=container_id,
+                timeout=timeout,
+            )
+        except Exception as e:
+            logger.error(
+                "Proxy検証: 接続テスト失敗",
+                proxy_socket=proxy_socket,
+                container_id=container_id,
+                error=str(e),
+            )
+
     async def _stop_proxy(self, container_id: str) -> None:
         """コンテナ用Proxyを停止"""
         proxy = self._proxies.pop(container_id, None)
