@@ -170,12 +170,14 @@ class TestSDKClientOptions:
             assert options.permission_mode == "bypassPermissions"
 
     def test_build_sdk_options_sets_env(self):
-        """_build_sdk_options がenv にProxy設定を含めること"""
+        """_build_sdk_options がenv にProxy設定と非必須トラフィック無効化を含めること"""
         with patch("workspace_agent.sdk_client.os.environ", {
-            "ANTHROPIC_BASE_URL": "http://127.0.0.1:8080",
+            "ANTHROPIC_BEDROCK_BASE_URL": "http://127.0.0.1:8080",
             "HTTP_PROXY": "http://127.0.0.1:8080",
             "HTTPS_PROXY": "http://127.0.0.1:8080",
             "CLAUDE_CODE_USE_BEDROCK": "1",
+            "NODE_OPTIONS": "--require global-agent/bootstrap",
+            "GLOBAL_AGENT_HTTP_PROXY": "http://127.0.0.1:8080",
         }):
             try:
                 from claude_agent_sdk import ClaudeAgentOptions
@@ -188,8 +190,18 @@ class TestSDKClientOptions:
             req = ExecuteRequest(user_input="test")
             options = _build_sdk_options(req)
 
-            assert "ANTHROPIC_BASE_URL" in options.env
-            assert options.env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8080"
+            # Bedrock設定
+            assert options.env["CLAUDE_CODE_USE_BEDROCK"] == "1"
+            assert options.env["ANTHROPIC_BEDROCK_BASE_URL"] == "http://127.0.0.1:8080"
+            # Proxy設定
+            assert options.env["HTTP_PROXY"] == "http://127.0.0.1:8080"
+            assert options.env["HTTPS_PROXY"] == "http://127.0.0.1:8080"
+            assert options.env["NO_PROXY"] == "localhost,127.0.0.1"
+            # Node.js global-agent
+            assert options.env["NODE_OPTIONS"] == "--require global-agent/bootstrap"
+            assert options.env["GLOBAL_AGENT_HTTP_PROXY"] == "http://127.0.0.1:8080"
+            # 非必須トラフィック無効化
+            assert options.env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] == "1"
 
 
 class TestOrchestratorDestroyAll:
