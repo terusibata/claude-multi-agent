@@ -218,6 +218,7 @@ tests/                     # テスト
 ### 前提条件
 
 - Docker & Docker Compose
+- 現在のユーザーが `docker` グループに所属していること
 - AWS認証情報（Bedrock + S3用）
 - S3バケット（ワークスペース用、パブリックアクセスブロック推奨）
 
@@ -227,24 +228,49 @@ tests/                     # テスト
 
 ```bash
 cp .env.example .env
-# .envファイルを編集してAWS認証情報を設定
 ```
 
-2. Dockerコンテナを起動
+`.env` ファイルを編集して以下を設定:
+
+- `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`: AWS認証情報
+- `S3_BUCKET_NAME`: ワークスペース用S3バケット名
+- `DB_PASSWORD`: データベースパスワード（未設定時はデフォルト値 `aiagent_password` を使用）
+
+2. Docker GIDを設定（コンテナ内からDocker Socketにアクセスするために必要）
 
 ```bash
-docker-compose up -d
+echo "DOCKER_GID=$(getent group docker | cut -d: -f3)" >> .env
 ```
 
-3. DBマイグレーション実行
+3. ワークスペース用ソケットディレクトリを作成
 
 ```bash
-docker-compose exec backend alembic upgrade head
+sudo mkdir -p /var/run/workspace-sockets
+sudo chown 1000:1000 /var/run/workspace-sockets
 ```
 
-4. APIドキュメント確認
+4. ワークスペースコンテナのベースイメージをビルド
 
-http://localhost:8000/docs
+```bash
+docker build -t workspace-base:latest -f workspace-base/Dockerfile .
+```
+
+5. バックエンドを起動
+
+```bash
+docker-compose up -d --build
+```
+
+DBマイグレーションはコンテナ起動時に自動実行されます。
+
+6. 起動確認
+
+```bash
+# ログでエラーがないか確認
+docker-compose logs backend
+```
+
+http://localhost:8000/docs でAPIドキュメントにアクセスできれば起動完了です。
 
 ### ローカル開発（Dockerなし）
 
