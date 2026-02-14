@@ -52,6 +52,7 @@ COPY --chown=appuser:appuser app/ /app/app/
 COPY --chown=appuser:appuser alembic/ /app/alembic/
 COPY --chown=appuser:appuser alembic.ini /app/
 COPY --chown=appuser:appuser entrypoint.sh /app/
+COPY --chown=appuser:appuser deployment/seccomp/ /app/deployment/seccomp/
 
 # エントリーポイントスクリプトに実行権限を付与
 RUN chmod +x /app/entrypoint.sh
