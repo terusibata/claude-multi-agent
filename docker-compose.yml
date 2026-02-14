@@ -102,6 +102,7 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
       - ./app:/app/app  # 開発用ホットリロード
+      - ./deployment:/app/deployment:ro  # seccompプロファイル等を開発時も即時反映
       - skills_data:/skills
       - workspaces_data:/var/lib/aiagent/workspaces
       - /var/run/docker.sock:/var/run/docker.sock

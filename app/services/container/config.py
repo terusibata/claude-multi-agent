@@ -19,9 +19,13 @@ def _load_seccomp_profile(path: str) -> str | None:
 
     Docker Engine REST API の SecurityOpt では seccomp=<JSON文字列> が必要。
     Docker CLI はファイルパスを受け取ってくれるが、aiodocker 経由ではJSONを直接渡す。
+
+    開発環境ではキャッシュをスキップし、ファイル変更を即時反映する。
     """
     global _seccomp_json_cache
-    if _seccomp_json_cache is not None:
+    settings = get_settings()
+    # 開発環境ではキャッシュをスキップ（seccompプロファイル変更を即時反映）
+    if _seccomp_json_cache is not None and not settings.is_development:
         return _seccomp_json_cache
 
     profile_path = Path(path)
