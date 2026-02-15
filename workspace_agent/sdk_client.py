@@ -28,6 +28,8 @@ def _build_sdk_options(request: ExecuteRequest):
         "ANTHROPIC_BEDROCK_BASE_URL": os.environ.get("ANTHROPIC_BEDROCK_BASE_URL", "http://127.0.0.1:8080"),
         "HTTP_PROXY": os.environ.get("HTTP_PROXY", "http://127.0.0.1:8080"),
         "HTTPS_PROXY": os.environ.get("HTTPS_PROXY", "http://127.0.0.1:8080"),
+        # NO_PROXY: CLIがBedrock Base URLにアクセスする際にProxy経由のループを防止
+        "NO_PROXY": os.environ.get("NO_PROXY", "localhost,127.0.0.1"),
         # NODE_OPTIONS を明示的にクリア（CLIバイナリ=standalone ELFが壊れるのを防止）
         "NODE_OPTIONS": "",
         # 基本環境変数
