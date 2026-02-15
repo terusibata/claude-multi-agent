@@ -10,7 +10,6 @@ import asyncio
 import io
 import tarfile
 
-import aiodocker
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -270,31 +269,24 @@ class WorkspaceFileSync:
     async def _read_from_container(
         self, container_id: str, src_path: str
     ) -> bytes | None:
-        """docker cpでコンテナからファイルを読み出す"""
+        """exec + cat でコンテナからファイルを読み出す
+
+        Docker の get_archive API は tmpfs マウント上のファイルを読めない場合がある
+        （ReadonlyRootfs + tmpfs 構成、Docker-in-Docker、userns-remap 等）。
+        exec はコンテナ内プロセスとして実行されるため tmpfs も正しく読める。
+        """
         try:
-            container = await self.lifecycle.docker.containers.get(container_id)
-            tar_stream = await container.get_archive(src_path)
-
-            tar_buffer = io.BytesIO()
-            # tar_stream is a dict with 'body' containing the tar data
-            if isinstance(tar_stream, dict):
-                body = tar_stream.get("body", b"")
-                if hasattr(body, "read"):
-                    tar_buffer.write(await body.read())
-                else:
-                    tar_buffer.write(body)
-            else:
-                async for chunk in tar_stream:
-                    tar_buffer.write(chunk)
-
-            tar_buffer.seek(0)
-            with tarfile.open(fileobj=tar_buffer, mode="r") as tar:
-                for member in tar.getmembers():
-                    if member.isfile():
-                        extracted = tar.extractfile(member)
-                        if extracted:
-                            return extracted.read()
-            return None
+            exit_code, data = await self.lifecycle.exec_in_container_binary(
+                container_id, ["cat", src_path]
+            )
+            if exit_code != 0:
+                logger.error(
+                    "コンテナからの読み出し失敗",
+                    src_path=src_path,
+                    exit_code=exit_code,
+                )
+                return None
+            return data
         except Exception as e:
             logger.error("コンテナからの読み出し失敗", src_path=src_path, error=str(e))
             return None
