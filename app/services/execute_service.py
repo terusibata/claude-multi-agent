@@ -50,11 +50,13 @@ from app.utils.streaming import (
     format_done_event,
     format_error_event,
     format_init_event,
+    format_progress_event,
     format_thinking_event,
     format_title_event,
     format_tool_call_event,
     format_tool_result_event,
 )
+from app.utils.progress_messages import get_initial_message
 
 logger = structlog.get_logger(__name__)
 
@@ -353,12 +355,12 @@ class ExecuteService:
                 event_str, buffer = buffer.split("\n\n", 1)
                 raw_event = self._parse_sse_event(event_str)
                 if raw_event:
-                    translated = self._translate_event(
+                    translated_events = self._translate_event(
                         raw_event, seq_counter,
                         conversation_id=request.conversation_id,
                     )
-                    if translated is not None:
-                        yield translated
+                    for evt in translated_events:
+                        yield evt
 
     def _parse_sse_event(self, event_str: str) -> dict | None:
         """SSEイベント文字列をパース"""
@@ -536,15 +538,18 @@ class ExecuteService:
         raw_event: dict,
         seq_counter: SequenceCounter,
         conversation_id: str | None = None,
-    ) -> dict:
+    ) -> list[dict]:
         """
         SDKイベントをホスト正規形式に変換
 
         SDK側（workspace_agent）が送信するイベント形式:
           text_delta, thinking, tool_use, tool_result, done, system, error
         を、ホスト側の正規形式:
-          init, assistant, thinking, tool_call, tool_result, done, error
+          init, progress, assistant, thinking, tool_call, tool_result, done, error
         に変換し、seq と timestamp を付与する。
+
+        Returns:
+            変換後イベントのリスト（1つのSDKイベントから複数のホストイベントを返す場合あり）
         """
         event_type = raw_event.get("event", "")
         data = raw_event.get("data", {})
@@ -552,42 +557,72 @@ class ExecuteService:
         if event_type == "system" and data.get("subtype") == "init":
             # SDK system(init) → 仕様準拠の init イベントに変換
             init_data = data.get("data", {}) if isinstance(data.get("data"), dict) else data
-            return format_init_event(
+            return [format_init_event(
                 seq=seq_counter.next(),
                 session_id=init_data.get("session_id", ""),
                 tools=init_data.get("tools", []),
                 model=init_data.get("model", ""),
                 conversation_id=conversation_id,
-            )
+            )]
         elif event_type == "text_delta":
-            return format_assistant_event(
-                seq=seq_counter.next(),
-                content_blocks=[{"type": "text", "text": data.get("text", "")}],
-            )
+            # progress(generating) + assistant
+            return [
+                format_progress_event(
+                    seq=seq_counter.next(),
+                    progress_type="generating",
+                    message=get_initial_message("generating"),
+                ),
+                format_assistant_event(
+                    seq=seq_counter.next(),
+                    content_blocks=[{"type": "text", "text": data.get("text", "")}],
+                ),
+            ]
         elif event_type == "thinking":
-            return format_thinking_event(
-                seq=seq_counter.next(),
-                content=data.get("content", ""),
-            )
+            # progress(thinking) + thinking
+            return [
+                format_progress_event(
+                    seq=seq_counter.next(),
+                    progress_type="thinking",
+                    message=get_initial_message("thinking"),
+                ),
+                format_thinking_event(
+                    seq=seq_counter.next(),
+                    content=data.get("content", ""),
+                ),
+            ]
         elif event_type == "tool_use":
-            return format_tool_call_event(
-                seq=seq_counter.next(),
-                tool_use_id=data.get("tool_use_id", ""),
-                tool_name=data.get("tool_name", ""),
-                tool_input=data.get("input", {}),
-                summary=f"ツール実行: {data.get('tool_name', '')}",
-            )
+            # progress(tool, running) + tool_call
+            tool_name = data.get("tool_name", "")
+            tool_use_id = data.get("tool_use_id", "")
+            return [
+                format_progress_event(
+                    seq=seq_counter.next(),
+                    progress_type="tool",
+                    message=get_initial_message("tool", tool_name),
+                    tool_use_id=tool_use_id,
+                    tool_name=tool_name,
+                    tool_status="running",
+                ),
+                format_tool_call_event(
+                    seq=seq_counter.next(),
+                    tool_use_id=tool_use_id,
+                    tool_name=tool_name,
+                    tool_input=data.get("input", {}),
+                    summary=f"ツール実行: {tool_name}",
+                ),
+            ]
         elif event_type == "tool_result":
-            return format_tool_result_event(
+            # tool_result のみ（結果自体がステータスを示す）
+            return [format_tool_result_event(
                 seq=seq_counter.next(),
                 tool_use_id=data.get("tool_use_id", ""),
                 tool_name=data.get("tool_name", ""),
                 status="error" if data.get("is_error") else "completed",
                 content=data.get("content", ""),
                 is_error=data.get("is_error", False),
-            )
+            )]
         elif event_type == "done":
-            return format_done_event(
+            return [format_done_event(
                 seq=seq_counter.next(),
                 status="error" if data.get("subtype") == "error_during_execution" else "success",
                 result=data.get("result"),
@@ -597,10 +632,10 @@ class ExecuteService:
                 turn_count=data.get("num_turns", 0),
                 duration_ms=data.get("duration_ms", 0),
                 session_id=data.get("session_id"),
-            )
+            )]
         else:
             # error 等: seq/timestamp を付与してそのまま中継
-            return create_event(event_type, seq_counter.next(), data)
+            return [create_event(event_type, seq_counter.next(), data)]
 
     @staticmethod
     def _normalize_usage(raw_usage: dict) -> dict:
@@ -674,14 +709,23 @@ class ExecuteService:
         sync_from_container() は /workspace 以下のみスキャンするため、
         /workspace 外のファイルは検出されない。このメソッドで事前にコピーすることで
         同期対象に含まれるようにする。
-        """
-        import posixpath
 
+        ディレクトリ構造を保持してコピーする:
+          /tmp/test_file.txt → /workspace/_external/tmp/test_file.txt
+          /home/user/data.csv → /workspace/_external/home/user/data.csv
+        """
         for src_path in external_paths:
-            # /tmp/test_file.txt → /workspace/test_file.txt
-            filename = posixpath.basename(src_path)
-            dest_path = f"/workspace/{filename}"
+            # 先頭の / を除去してディレクトリ構造を保持
+            # /tmp/test_file.txt → _external/tmp/test_file.txt
+            relative = src_path.lstrip("/")
+            dest_path = f"/workspace/_external/{relative}"
+            dest_dir = "/".join(dest_path.split("/")[:-1])
             try:
+                # 宛先ディレクトリを作成
+                await self.orchestrator.lifecycle.exec_in_container(
+                    container_id,
+                    ["mkdir", "-p", dest_dir],
+                )
                 exit_code, _ = await self.orchestrator.lifecycle.exec_in_container(
                     container_id,
                     ["cp", "-f", src_path, dest_path],

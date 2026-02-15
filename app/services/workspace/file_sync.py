@@ -30,6 +30,28 @@ RESERVED_PREFIXES = frozenset({
     "_sdk_session/",
 })
 
+# 同期対象から除外するパターン
+# ビルド成果物・キャッシュ・VCS等の不要ファイルを S3/DB に同期しない
+_EXCLUDED_DIR_NAMES = frozenset({
+    "__pycache__",
+    ".git",
+    "node_modules",
+    ".venv",
+    "venv",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".tox",
+    ".eggs",
+    ".egg-info",
+})
+
+_EXCLUDED_EXTENSIONS = frozenset({
+    ".pyc",
+    ".pyo",
+    ".DS_Store",
+})
+
 
 class WorkspaceFileSync:
     """S3 ↔ コンテナ間のファイル同期"""
@@ -53,6 +75,27 @@ class WorkspaceFileSync:
             file_path.startswith(prefix) or file_path == prefix.rstrip("/")
             for prefix in RESERVED_PREFIXES
         )
+
+    @staticmethod
+    def _should_exclude(file_path: str) -> bool:
+        """
+        同期対象外のファイルかチェック
+
+        __pycache__、.git、node_modules 等のビルド成果物・キャッシュファイルを除外する。
+        """
+        # パスセグメントを分解して除外ディレクトリ名をチェック
+        segments = file_path.split("/")
+        for seg in segments[:-1]:  # 最後のセグメント（ファイル名）以外
+            if seg in _EXCLUDED_DIR_NAMES:
+                return True
+
+        # ファイル拡張子・名前チェック
+        filename = segments[-1] if segments else ""
+        for ext in _EXCLUDED_EXTENSIONS:
+            if filename.endswith(ext) or filename == ext.lstrip("."):
+                return True
+
+        return False
 
     async def sync_to_container(
         self,
@@ -159,6 +202,9 @@ class WorkspaceFileSync:
 
         # 予約プレフィックスのファイルを除外（システム内部ファイルがワークスペースとして同期されるのを防止）
         file_paths = [p for p in file_paths if not self._is_reserved_path(p)]
+
+        # 不要ファイル（__pycache__、.git、node_modules等）を除外
+        file_paths = [p for p in file_paths if not self._should_exclude(p)]
 
         if not file_paths:
             return 0
