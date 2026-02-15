@@ -15,6 +15,8 @@ class ExecuteRequest(BaseModel):
     max_turns: int | None = None
     allowed_tools: list[str] = Field(default_factory=list)
     cwd: str = "/workspace"
+    setting_sources: list[str] | None = None
+    mcp_server_configs: list[dict] | None = None
 
 
 class HealthResponse(BaseModel):

@@ -7,8 +7,7 @@ S3 ↔ コンテナ間のファイル同期を担当
   - sync_from_container: コンテナ → S3（実行完了時、コンテナ破棄時）
 """
 import asyncio
-import io
-import tarfile
+import base64
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -245,26 +244,52 @@ class WorkspaceFileSync:
     async def _write_to_container(
         self, container_id: str, dest_path: str, data: bytes
     ) -> None:
-        """docker cpでコンテナにファイルを書き込む"""
-        # tarアーカイブを作成
-        tar_buffer = io.BytesIO()
-        with tarfile.open(fileobj=tar_buffer, mode="w") as tar:
-            file_info = tarfile.TarInfo(name=dest_path.split("/")[-1])
-            file_info.size = len(data)
-            file_info.uid = 1000
-            file_info.gid = 1000
-            tar.addfile(file_info, io.BytesIO(data))
-        tar_buffer.seek(0)
+        """exec + base64 でコンテナにファイルを書き込む
 
+        Docker の put_archive API は tmpfs マウント上で失敗する場合がある
+        （ReadonlyRootfs + tmpfs 構成、Docker-in-Docker、userns-remap 等）。
+        exec はコンテナ内プロセスとして実行されるため tmpfs も正しく書き込める。
+        """
         # 親ディレクトリを確保
         parent_dir = "/".join(dest_path.split("/")[:-1])
         await self.lifecycle.exec_in_container(
             container_id, ["mkdir", "-p", parent_dir]
         )
 
-        # docker putでコンテナに送信
-        container = await self.lifecycle.docker.containers.get(container_id)
-        await container.put_archive(parent_dir, tar_buffer.read())
+        encoded = base64.b64encode(data).decode("ascii")
+
+        # チャンク分割（shell 引数制限回避: 60KB 以下で分割）
+        chunk_size = 60000
+        filename = dest_path.split("/")[-1]
+        tmp_path = f"/tmp/_ws_xfer_{filename}"
+
+        for i in range(0, len(encoded), chunk_size):
+            chunk = encoded[i:i + chunk_size]
+            op = ">>" if i > 0 else ">"
+            exit_code, _ = await self.lifecycle.exec_in_container(
+                container_id,
+                ["sh", "-c", f"printf '%s' '{chunk}' {op} '{tmp_path}'"],
+            )
+            if exit_code != 0:
+                await self.lifecycle.exec_in_container(
+                    container_id, ["rm", "-f", tmp_path]
+                )
+                raise RuntimeError(
+                    f"コンテナへのファイル書き込み失敗(chunk): {dest_path}"
+                )
+
+        # base64 デコード → 最終ファイルに書き込み → 一時ファイル削除
+        exit_code, _ = await self.lifecycle.exec_in_container(
+            container_id,
+            ["sh", "-c", f"base64 -d < '{tmp_path}' > '{dest_path}' && rm -f '{tmp_path}'"],
+        )
+        if exit_code != 0:
+            await self.lifecycle.exec_in_container(
+                container_id, ["rm", "-f", tmp_path]
+            )
+            raise RuntimeError(
+                f"コンテナへのファイル書き込み失敗(decode): {dest_path}"
+            )
 
     async def _read_from_container(
         self, container_id: str, src_path: str

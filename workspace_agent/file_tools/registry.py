@@ -1,22 +1,27 @@
 """
-ファイルツールレジストリ
+ファイルツールレジストリ（コンテナ側）
 
 ツールハンドラーの登録と共通ハンドラー（ファイル一覧・画像読み込み）を提供。
 各形式固有のツールは個別モジュール（excel_tools, word_tools 等）で実装。
+
+ホスト側との違い:
+- workspace_service の代わりにローカルファイルシステム（/workspace）を使用
+- FileTypeClassifier の代わりにローカルのMIMEタイプ判定を使用
+- ハンドラーは (args: dict) のみを受け取る
 """
 
 import base64
+import mimetypes
+import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import structlog
 
-from app.services.workspace.file_processors import FileCategory, FileTypeClassifier
-
-if TYPE_CHECKING:
-    from app.services.workspace_service import WorkspaceService
-
 logger = structlog.get_logger(__name__)
+
+# ワークスペースのルートディレクトリ
+WORKSPACE_ROOT = Path("/workspace")
 
 
 # システムプロンプト
@@ -47,14 +52,71 @@ FILE_TOOLS_PROMPT = """
 """
 
 
-async def list_workspace_files_handler(
-    workspace_service: "WorkspaceService",
-    tenant_id: str,
-    conversation_id: str,
-    args: dict[str, Any],
-) -> dict[str, Any]:
+# =============================================================================
+# ファイルカテゴリ判定（FileTypeClassifier の代替）
+# =============================================================================
+
+# MIMEタイプによるカテゴリ分類
+_CATEGORY_MAP = {
+    "image": {
+        "image/jpeg", "image/jpg", "image/png", "image/gif",
+        "image/webp", "image/bmp", "image/tiff", "image/svg+xml",
+    },
+    "pdf": {
+        "application/pdf",
+    },
+    "office": {
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "application/vnd.ms-powerpoint",
+    },
+    "text": {
+        "text/plain", "text/csv", "text/html", "text/css",
+        "text/javascript", "application/json", "application/xml",
+        "text/markdown", "text/x-python", "text/x-java",
+    },
+}
+
+# 拡張子によるカテゴリ分類（フォールバック用）
+_EXTENSION_CATEGORY_MAP = {
+    "image": {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif", ".svg"},
+    "pdf": {".pdf"},
+    "office": {".xlsx", ".xls", ".docx", ".doc", ".pptx", ".ppt"},
+    "text": {
+        ".txt", ".csv", ".html", ".css", ".js", ".json", ".xml",
+        ".md", ".py", ".java", ".ts", ".tsx", ".jsx", ".yaml", ".yml",
+        ".sh", ".bash", ".log", ".ini", ".cfg", ".conf", ".toml",
+    },
+}
+
+
+def _get_file_category(file_path: str, mime_type: str | None) -> str:
+    """ファイルのカテゴリを判定"""
+    # MIMEタイプで判定
+    if mime_type:
+        for category, mime_types in _CATEGORY_MAP.items():
+            if mime_type in mime_types:
+                return category
+
+    # 拡張子でフォールバック判定
+    ext = Path(file_path).suffix.lower()
+    for category, extensions in _EXTENSION_CATEGORY_MAP.items():
+        if ext in extensions:
+            return category
+
+    return "other"
+
+
+# =============================================================================
+# 共通ハンドラー
+# =============================================================================
+
+async def list_workspace_files_handler(args: dict[str, Any]) -> dict[str, Any]:
     """
-    ワークスペースファイル一覧を取得
+    ワークスペースファイル一覧を取得（ローカルファイルシステムから）
 
     Args:
         args:
@@ -63,23 +125,41 @@ async def list_workspace_files_handler(
     filter_type = args.get("filter_type", "all")
 
     try:
-        file_list = await workspace_service.list_files(tenant_id, conversation_id)
-
         files_info = []
-        for f in file_list.files:
-            category = FileTypeClassifier.get_category(f.file_path, f.mime_type)
-            category_str = category.value
 
-            if filter_type != "all" and category_str != filter_type:
-                continue
+        for root, dirs, files in os.walk(WORKSPACE_ROOT):
+            # 隠しディレクトリをスキップ
+            dirs[:] = [d for d in dirs if not d.startswith('.')]
 
-            files_info.append({
-                "path": f.file_path,
-                "name": f.original_name,
-                "size": f.file_size,
-                "type": category_str,
-                "mime_type": f.mime_type,
-            })
+            for filename in files:
+                # 隠しファイルをスキップ
+                if filename.startswith('.'):
+                    continue
+
+                full_path = Path(root) / filename
+                rel_path = full_path.relative_to(WORKSPACE_ROOT)
+                file_path_str = str(rel_path)
+
+                # ファイルサイズを取得
+                try:
+                    file_size = full_path.stat().st_size
+                except OSError:
+                    continue
+
+                # MIMEタイプを推測
+                mime_type, _ = mimetypes.guess_type(str(full_path))
+                category = _get_file_category(file_path_str, mime_type)
+
+                if filter_type != "all" and category != filter_type:
+                    continue
+
+                files_info.append({
+                    "path": file_path_str,
+                    "name": filename,
+                    "size": file_size,
+                    "type": category,
+                    "mime_type": mime_type or "application/octet-stream",
+                })
 
         # テキスト形式で返却
         result_text = f"ワークスペース内のファイル一覧（{len(files_info)}件）:\n\n"
@@ -101,14 +181,9 @@ async def list_workspace_files_handler(
         }
 
 
-async def read_image_file_handler(
-    workspace_service: "WorkspaceService",
-    tenant_id: str,
-    conversation_id: str,
-    args: dict[str, Any],
-) -> dict[str, Any]:
+async def read_image_file_handler(args: dict[str, Any]) -> dict[str, Any]:
     """
-    画像ファイルを視覚的に読み込み
+    画像ファイルを視覚的に読み込み（ローカルファイルシステムから）
 
     Args:
         args:
@@ -119,13 +194,15 @@ async def read_image_file_handler(
     max_dimension = args.get("max_dimension", 1920)
 
     try:
-        content, filename, content_type = await workspace_service.download_file(
-            tenant_id, conversation_id, file_path
-        )
+        # ローカルファイルシステムから読み込み
+        full_path = WORKSPACE_ROOT / file_path
+        content = full_path.read_bytes()
+        filename = full_path.name
+        content_type, _ = mimetypes.guess_type(str(full_path))
 
         # サポートされている画像形式かチェック
-        category = FileTypeClassifier.get_category(filename, content_type)
-        if category != FileCategory.IMAGE:
+        category = _get_file_category(filename, content_type)
+        if category != "image":
             return {
                 "content": [{
                     "type": "text",
@@ -224,68 +301,66 @@ async def _resize_image_if_needed(
         return content, content_type
 
 
-def create_file_tools_handlers(
-    workspace_service: "WorkspaceService",
-    tenant_id: str,
-    conversation_id: str,
-):
+# =============================================================================
+# ハンドラー登録
+# =============================================================================
+
+def create_file_tools_handlers() -> dict[str, Any]:
     """
-    ファイルツールハンドラーを作成
+    ファイルツールハンドラーを作成（コンテナ側）
+
+    ホスト側との違い:
+    - workspace_service, tenant_id, conversation_id のバインドが不要
+    - 各ハンドラーは直接 (args: dict) を受け取る
 
     Returns:
-        ハンドラー辞書
+        ハンドラー辞書 {ツール名: ハンドラー関数}
     """
     # 使用時のみロードするため遅延インポート
-    from app.services.workspace.file_tools.excel_tools import (
+    from workspace_agent.file_tools.excel_tools import (
         get_sheet_info_handler,
         get_sheet_csv_handler,
         search_workbook_handler,
     )
-    from app.services.workspace.file_tools.pdf_tools import (
+    from workspace_agent.file_tools.pdf_tools import (
         inspect_pdf_file_handler,
         read_pdf_pages_handler,
         convert_pdf_to_images_handler,
     )
-    from app.services.workspace.file_tools.word_tools import (
+    from workspace_agent.file_tools.word_tools import (
         get_document_info_handler,
         get_document_content_handler,
         search_document_handler,
     )
-    from app.services.workspace.file_tools.pptx_tools import (
+    from workspace_agent.file_tools.pptx_tools import (
         get_presentation_info_handler,
         get_slides_content_handler,
         search_presentation_handler,
     )
-    from app.services.workspace.file_tools.image_tools import (
+    from workspace_agent.file_tools.image_tools import (
         inspect_image_file_handler,
     )
 
-    # 共通引数をバインド
-    def bind_handler(handler):
-        async def bound_handler(args: dict[str, Any]) -> dict[str, Any]:
-            return await handler(workspace_service, tenant_id, conversation_id, args)
-        return bound_handler
-
     return {
         # 共通
-        "list_workspace_files": bind_handler(list_workspace_files_handler),
-        "read_image_file": bind_handler(read_image_file_handler),
+        "list_workspace_files": list_workspace_files_handler,
+        "read_image_file": read_image_file_handler,
         # Excel
-        "get_sheet_info": bind_handler(get_sheet_info_handler),
-        "get_sheet_csv": bind_handler(get_sheet_csv_handler),
-        "search_workbook": bind_handler(search_workbook_handler),
+        "get_sheet_info": get_sheet_info_handler,
+        "get_sheet_csv": get_sheet_csv_handler,
+        "search_workbook": search_workbook_handler,
         # PDF
-        "inspect_pdf_file": bind_handler(inspect_pdf_file_handler),
-        "read_pdf_pages": bind_handler(read_pdf_pages_handler),
-        "convert_pdf_to_images": bind_handler(convert_pdf_to_images_handler),
+        "inspect_pdf_file": inspect_pdf_file_handler,
+        "read_pdf_pages": read_pdf_pages_handler,
+        "convert_pdf_to_images": convert_pdf_to_images_handler,
         # Word
-        "get_document_info": bind_handler(get_document_info_handler),
-        "get_document_content": bind_handler(get_document_content_handler),
-        "search_document": bind_handler(search_document_handler),
+        "get_document_info": get_document_info_handler,
+        "get_document_content": get_document_content_handler,
+        "search_document": search_document_handler,
         # PowerPoint
-        "get_presentation_info": bind_handler(get_presentation_info_handler),
-        "get_slides_content": bind_handler(get_slides_content_handler),
-        "search_presentation": bind_handler(search_presentation_handler),
+        "get_presentation_info": get_presentation_info_handler,
+        "get_slides_content": get_slides_content_handler,
+        "search_presentation": search_presentation_handler,
         # 画像
-        "inspect_image_file": bind_handler(inspect_image_file_handler),
+        "inspect_image_file": inspect_image_file_handler,
     }

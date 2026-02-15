@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Excelファイル用ツール
+Excelファイル用ツール（コンテナ側）
 
 AIエージェントがExcelファイルを理解するための軽量ツール。
 3つの機能を提供:
@@ -16,9 +16,9 @@ from typing import Any, TypedDict
 
 import structlog
 
-from app.services.workspace.file_tools.utils import (
+from workspace_agent.file_tools.utils import (
     build_search_pattern,
-    file_tool_handler,
+    local_file_tool_handler,
     format_tool_error,
     format_tool_success,
     normalize_text,
@@ -438,7 +438,7 @@ def search_workbook(
 # Tool Handlers
 # =============================================================================
 
-@file_tool_handler(
+@local_file_tool_handler(
     old_format=(".xls", "Excel", ".xlsx", "openpyxl", "Microsoft Excel"),
     required_library=("openpyxl", "openpyxl"),
     log_prefix="Excel情報取得",
@@ -475,7 +475,7 @@ async def get_sheet_info_handler(*, content, filename, args, **_):
     return format_tool_success("\n".join(result_lines))
 
 
-@file_tool_handler(
+@local_file_tool_handler(
     old_format=(".xls", "Excel", ".xlsx", "openpyxl", "Microsoft Excel"),
     required_library=("openpyxl", "openpyxl"),
     log_prefix="ExcelCSV取得",
@@ -531,7 +531,7 @@ async def get_sheet_csv_handler(*, content, args, **_):
     return format_tool_success("\n".join(result_lines))
 
 
-@file_tool_handler(
+@local_file_tool_handler(
     old_format=(".xls", "Excel", ".xlsx", "openpyxl", "Microsoft Excel"),
     required_library=("openpyxl", "openpyxl"),
     log_prefix="Excel検索",

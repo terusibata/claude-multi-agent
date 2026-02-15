@@ -86,8 +86,31 @@ def _build_sdk_options(request: ExecuteRequest):
     if request.session_id:
         options.resume = request.session_id
 
+    # ビルトイン MCP サーバー作成（file-tools, file-presentation）
+    try:
+        from workspace_agent.builtin_mcp import (
+            create_builtin_mcp_servers,
+            create_openapi_mcp_servers,
+        )
+
+        mcp_servers = create_builtin_mcp_servers()
+
+        # OpenAPI MCP サーバー作成（ホストから受け取った設定を使用）
+        if request.mcp_server_configs:
+            openapi_servers = create_openapi_mcp_servers(request.mcp_server_configs)
+            mcp_servers.update(openapi_servers)
+
+        if mcp_servers:
+            options.mcp_servers = mcp_servers
+            logger.info("MCP servers created: %s", list(mcp_servers.keys()))
+    except Exception as e:
+        logger.error("MCP server creation failed: %s", str(e))
+
     if request.allowed_tools:
         options.allowed_tools = request.allowed_tools
+
+    if request.setting_sources:
+        options.setting_sources = request.setting_sources
 
     return options
 

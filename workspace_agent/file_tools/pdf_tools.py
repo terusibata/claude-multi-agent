@@ -1,5 +1,5 @@
 """
-PDFファイル用ツール
+PDFファイル用ツール（コンテナ側）
 
 inspect_pdf_file: 構造確認（ページ数、目次）
 read_pdf_pages: テキスト抽出
@@ -11,15 +11,15 @@ from typing import Any
 
 import structlog
 
-from app.services.workspace.file_tools.utils import (
-    file_tool_handler,
+from workspace_agent.file_tools.utils import (
+    local_file_tool_handler,
     format_tool_success,
 )
 
 logger = structlog.get_logger(__name__)
 
 
-@file_tool_handler(
+@local_file_tool_handler(
     required_library=("pymupdf", "PyMuPDF"),
     log_prefix="PDF構造確認",
 )
@@ -106,7 +106,7 @@ async def inspect_pdf_file_handler(*, content, filename, args, **_):
     return format_tool_success(result_text)
 
 
-@file_tool_handler(
+@local_file_tool_handler(
     required_library=("pymupdf", "PyMuPDF"),
     log_prefix="PDFテキスト抽出",
 )
@@ -166,15 +166,13 @@ async def read_pdf_pages_handler(*, content, filename, args, **_):
     return format_tool_success("\n".join(result_lines))
 
 
-@file_tool_handler(
+@local_file_tool_handler(
     required_library=("pymupdf", "PyMuPDF"),
     log_prefix="PDF画像変換",
 )
-async def convert_pdf_to_images_handler(
-    *, content, filename, args, workspace_service, tenant_id, conversation_id, **_
-):
+async def convert_pdf_to_images_handler(*, content, filename, args, **_):
     """
-    PDFページを画像に変換してワークスペースに保存
+    PDFページを画像に変換してローカルワークスペースに保存
 
     Args:
         args:
@@ -201,6 +199,10 @@ async def convert_pdf_to_images_handler(
     # ベースファイル名
     base_name = Path(filename).stem
 
+    # 出力ディレクトリをローカルワークスペースに作成
+    output_dir = Path("/workspace/generated")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     saved_paths = []
     zoom = dpi / 72  # 72 DPIが標準
 
@@ -219,25 +221,11 @@ async def convert_pdf_to_images_handler(
             # PNG形式でバイトに変換
             img_bytes = pix.tobytes("png")
 
-            # 保存パス
+            # ローカルファイルシステムに保存
             output_path = f"generated/{base_name}_page_{page_num}.png"
-
-            # ワークスペースに保存（S3にアップロード）
-            await workspace_service.s3.upload(
-                tenant_id,
-                conversation_id,
-                output_path,
-                img_bytes,
-                "image/png",
-            )
-
-            # DBに登録
-            await workspace_service.register_ai_file(
-                tenant_id,
-                conversation_id,
-                output_path,
-                is_presented=False,
-            )
+            full_output_path = Path("/workspace") / output_path
+            full_output_path.parent.mkdir(parents=True, exist_ok=True)
+            full_output_path.write_bytes(img_bytes)
 
             saved_paths.append(output_path)
             logger.info("PDF→画像変換完了", page=page_num, path=output_path)
