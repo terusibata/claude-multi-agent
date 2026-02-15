@@ -327,12 +327,12 @@ read-only rootfs と組み合わせて、書き込み可能な領域をTmpfsで�
 
 | パス | サイズ | オプション | 用途 |
 |------|-------|----------|------|
-| `/tmp` | 512M | `rw,noexec,nosuid` | 一時ファイル |
-| `/var/tmp` | 256M | `rw,noexec,nosuid` | 一時ファイル |
-| `/run` | 64M | `rw,noexec,nosuid` | ランタイムデータ |
-| `/home/appuser/.cache` | 512M | `rw,noexec,nosuid` | キャッシュ（pip等） |
-| `/home/appuser` | 128M | `rw,noexec,nosuid` | ユーザーホーム |
-| `/workspace` | 1G | `rw,nosuid` | 作業ディレクトリ（コード実行あり） |
+| `/tmp` | 512M | `rw,nosuid,uid=1000,gid=1000,mode=1777` | 一時ファイル |
+| `/var/tmp` | 256M | `rw,noexec,nosuid,uid=1000,gid=1000` | 一時ファイル |
+| `/run` | 64M | `rw,noexec,nosuid,uid=1000,gid=1000` | ランタイムデータ |
+| `/home/appuser/.cache` | 512M | `rw,noexec,nosuid,uid=1000,gid=1000` | キャッシュ（pip等） |
+| `/home/appuser` | 128M | `rw,noexec,nosuid,uid=1000,gid=1000` | ユーザーホーム |
+| `/workspace` | 1G | `rw,nosuid,uid=1000,gid=1000` | 作業ディレクトリ（コード実行あり） |
 
 ---
 

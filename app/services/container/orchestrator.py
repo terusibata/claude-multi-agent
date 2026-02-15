@@ -201,6 +201,7 @@ class ContainerOrchestrator:
                 "Proxy接続エラー検出、Proxy再起動試行",
                 container_id=info.id,
                 conversation_id=conversation_id,
+                agent_socket=agent_socket,
                 error=str(e),
             )
             yield b"event: error\ndata: {\"message\": \"Container execution failed\"}\n\n"
@@ -238,6 +239,7 @@ class ContainerOrchestrator:
                 "コンテナ実行エラー",
                 container_id=info.id,
                 conversation_id=conversation_id,
+                agent_socket=agent_socket,
                 error=str(e),
             )
             audit_container_crashed(

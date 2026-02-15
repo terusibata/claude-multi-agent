@@ -105,15 +105,16 @@ def get_container_create_config(container_id: str) -> dict:
             "ReadonlyRootfs": True,
             "IpcMode": "private",
             # userns-remap はデーモンレベルで有効化（コンテナ単位の指定不要）
+            # uid=1000,gid=1000: appuser所有でマウント（デフォルトはroot所有で書き込み不可）
             "Tmpfs": {
-                "/tmp": "rw,nosuid,size=512M",
-                "/var/tmp": "rw,noexec,nosuid,size=256M",
-                "/run": "rw,noexec,nosuid,size=64M",
-                "/home/appuser/.cache": "rw,noexec,nosuid,size=512M",
-                "/home/appuser": "rw,noexec,nosuid,size=128M",
+                "/tmp": "rw,nosuid,size=512M,uid=1000,gid=1000,mode=1777",
+                "/var/tmp": "rw,noexec,nosuid,size=256M,uid=1000,gid=1000",
+                "/run": "rw,noexec,nosuid,size=64M,uid=1000,gid=1000",
+                "/home/appuser/.cache": "rw,noexec,nosuid,size=512M,uid=1000,gid=1000",
+                "/home/appuser": "rw,noexec,nosuid,size=128M,uid=1000,gid=1000",
                 # /workspace はエージェントの作業ディレクトリ（コード実行あり）
                 # ReadonlyRootfs: True のため Tmpfs が必要。S3同期で永続化。
-                "/workspace": "rw,nosuid,size=1G",
+                "/workspace": "rw,nosuid,size=1G,uid=1000,gid=1000",
             },
             "Binds": [
                 # ディレクトリ単位でBind mount（ソケット競合状態を回避）
