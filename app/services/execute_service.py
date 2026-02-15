@@ -90,6 +90,10 @@ class ExecuteService:
     def _create_file_sync(self) -> WorkspaceFileSync | None:
         """ファイル同期インスタンスを生成（S3未設定時はNone）"""
         if not self._settings.s3_bucket_name:
+            logger.warning(
+                "S3バケット未設定: ワークスペースファイル同期が無効です。"
+                "s3_bucket_name を設定してください。"
+            )
             return None
         return WorkspaceFileSync(
             s3=S3StorageBackend(),
