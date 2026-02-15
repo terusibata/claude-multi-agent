@@ -6,11 +6,12 @@
 
 set -e
 
-# CLI が利用するディレクトリを事前作成（tmpfs は初回空のため）
-mkdir -p "$HOME/.claude" 2>/dev/null || true
-mkdir -p "/tmp/claude-$(id -u)" 2>/dev/null || true
-mkdir -p /workspace/.tmp 2>/dev/null || true
-mkdir -p /workspace/.claude 2>/dev/null || true
+# 必須ディレクトリの事前作成（tmpfs は初回空のため）
+mkdir -p /var/run/ws 2>/dev/null || true      # agent.sock 配置先
+mkdir -p "$HOME/.claude" 2>/dev/null || true   # CLI 設定ディレクトリ
+mkdir -p "/tmp/claude-$(id -u)" 2>/dev/null || true  # CLI スクラッチパッド
+mkdir -p /workspace/.tmp 2>/dev/null || true   # サンドボックド bash 用 TMPDIR
+mkdir -p /workspace/.claude 2>/dev/null || true  # プロジェクト設定
 
 # socat: コンテナ内 TCP:8080 → Unix Socket /var/run/ws/proxy.sock
 # pip/npm/curl/SDK CLI は HTTP_PROXY=http://127.0.0.1:8080 で利用

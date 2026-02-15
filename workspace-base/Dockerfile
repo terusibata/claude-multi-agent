@@ -25,6 +25,13 @@ ENV PYTHONPATH="/opt:$PYTHONPATH"
 
 # エントリポイントスクリプト
 COPY workspace-base/entrypoint.sh /opt/entrypoint.sh
+RUN chmod +x /opt/entrypoint.sh
+
+# ソケットディレクトリを事前作成
+# ReadonlyRootfs: True 環境では、/var/run → /run (symlink) + /run が tmpfs のため、
+# Docker がバインドマウントのマウントポイントを動的に作成できない場合がある。
+# イメージ内にディレクトリを作成しておくことで確実にマウントポイントが存在する。
+RUN mkdir -p /var/run/ws
 
 RUN useradd -m -u 1000 appuser && mkdir -p /workspace && chown appuser:appuser /workspace
 USER appuser
