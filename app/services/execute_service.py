@@ -718,10 +718,22 @@ class ExecuteService:
         if event_type == "system" and data.get("subtype") == "init":
             # SDK system(init) → 仕様準拠の init イベントに変換
             init_data = data.get("data", {}) if isinstance(data.get("data"), dict) else data
+            tools = list(init_data.get("tools", []))
+
+            # MCP サーバーのツール名を追加
+            # SDK init メッセージの mcp_servers フィールドから接続済みサーバーの
+            # ツール名を抽出し、mcp__<server>__<tool> 形式で tools リストに追加
+            for mcp_server in init_data.get("mcp_servers", []):
+                server_name = mcp_server.get("name", "")
+                status = mcp_server.get("status", "")
+                if server_name and status == "connected":
+                    for tool_name in mcp_server.get("tools", []):
+                        tools.append(f"mcp__{server_name}__{tool_name}")
+
             return [format_init_event(
                 seq=seq_counter.next(),
                 session_id=init_data.get("session_id", ""),
-                tools=init_data.get("tools", []),
+                tools=tools,
                 model=init_data.get("model", ""),
                 conversation_id=conversation_id,
             )]
