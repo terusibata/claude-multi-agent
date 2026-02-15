@@ -9,11 +9,40 @@ SDK API (claude-agent-sdk >= 0.1.33):
 import json
 import logging
 import os
+import socket as sock
 from collections.abc import AsyncIterator
 
 from workspace_agent.models import ExecuteRequest
 
 logger = logging.getLogger(__name__)
+
+
+def _check_proxy_chain() -> str | None:
+    """proxy.sock 疎通確認。問題なければ None、エラー時はメッセージを返す"""
+    # 1. proxy.sock の存在確認
+    proxy_path = "/var/run/ws/proxy.sock"
+    if not os.path.exists(proxy_path):
+        return f"proxy.sock not found at {proxy_path}"
+
+    # 2. proxy.sock への接続確認
+    try:
+        s = sock.socket(sock.AF_UNIX, sock.SOCK_STREAM)
+        s.settimeout(3)
+        s.connect(proxy_path)
+        s.close()
+    except Exception as e:
+        return f"proxy.sock connection failed: {e}"
+
+    # 3. socat TCP 8080 経由の確認
+    try:
+        s = sock.socket(sock.AF_INET, sock.SOCK_STREAM)
+        s.settimeout(3)
+        s.connect(("127.0.0.1", 8080))
+        s.close()
+    except Exception as e:
+        return f"socat TCP 8080 connection failed: {e}"
+
+    return None
 
 
 def _build_sdk_options(request: ExecuteRequest):
@@ -75,6 +104,13 @@ async def execute_streaming(request: ExecuteRequest) -> AsyncIterator[str]:
     Yields:
         SSEイベント文字列
     """
+    # プリフライトチェック: proxy chain の疎通確認（SDK初期化30秒タイムアウトを回避）
+    preflight_error = _check_proxy_chain()
+    if preflight_error:
+        logger.error("プリフライトチェック失敗: %s", preflight_error)
+        yield _format_sse("error", {"message": f"Proxy chain check failed: {preflight_error}"})
+        return
+
     try:
         from claude_agent_sdk import query
     except ImportError:
@@ -109,8 +145,8 @@ async def execute_streaming(request: ExecuteRequest) -> AsyncIterator[str]:
                 "usage": {},
             })
     except Exception as e:
-        logger.error("SDK実行エラー: %s", str(e), exc_info=True)
-        yield _format_sse("error", {"message": str(e)})
+        logger.error("SDK実行エラー: %s (type=%s)", str(e), type(e).__name__, exc_info=True)
+        yield _format_sse("error", {"message": f"{type(e).__name__}: {e}"})
 
 
 def _message_to_sse_events(

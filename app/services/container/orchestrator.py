@@ -197,12 +197,15 @@ class ContainerOrchestrator:
         except ConnectionError as e:
             # Proxy接続エラー: まずProxy単体の再起動を試行（Step 3-3）
             get_workspace_requests_total().inc(status="error")
+            container_logs = await self._capture_container_logs(info.id)
             logger.warning(
                 "Proxy接続エラー検出、Proxy再起動試行",
                 container_id=info.id,
                 conversation_id=conversation_id,
                 agent_socket=agent_socket,
                 error=str(e),
+                error_type=type(e).__name__,
+                container_logs=container_logs,
             )
             yield b"event: error\ndata: {\"message\": \"Container execution failed\"}\n\n"
             try:
@@ -235,12 +238,15 @@ class ContainerOrchestrator:
         except Exception as e:
             get_workspace_requests_total().inc(status="error")
             get_workspace_container_crashes().inc()
+            container_logs = await self._capture_container_logs(info.id)
             logger.error(
                 "コンテナ実行エラー",
                 container_id=info.id,
                 conversation_id=conversation_id,
                 agent_socket=agent_socket,
                 error=str(e),
+                error_type=type(e).__name__,
+                container_logs=container_logs,
             )
             audit_container_crashed(
                 container_id=info.id,
@@ -311,6 +317,15 @@ class ContainerOrchestrator:
         logger.info("全コンテナ破棄完了", count=len(tasks))
 
     # ---- Private methods ----
+
+    async def _capture_container_logs(self, container_id: str, tail: int = 50) -> str:
+        """コンテナのログ末尾を取得（デバッグ用、破棄前に呼ぶ）"""
+        try:
+            container = await self.lifecycle.docker.containers.get(container_id)
+            logs = await container.log(stdout=True, stderr=True, tail=tail)
+            return "".join(logs) if logs else "<empty>"
+        except Exception as e:
+            return f"<log capture failed: {e}>"
 
     async def _start_proxy(self, info: ContainerInfo) -> None:
         """コンテナ用Proxyを起動"""

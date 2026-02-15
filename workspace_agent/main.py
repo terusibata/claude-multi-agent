@@ -32,6 +32,7 @@ app = FastAPI(title="Workspace Agent", docs_url=None, redoc_url=None)
 @app.post("/execute")
 async def execute(request: ExecuteRequest) -> StreamingResponse:
     """エージェント実行エンドポイント（SSEストリーミング）"""
+    logger.info("実行リクエスト受信", model=request.model, cwd=request.cwd)
     return StreamingResponse(
         execute_streaming(request),
         media_type="text/event-stream",
