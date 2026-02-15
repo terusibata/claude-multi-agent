@@ -13,6 +13,11 @@ ENV PATH="/opt/venv/bin:$PATH" PIP_REQUIRE_VIRTUALENV=true
 COPY workspace-base/workspace-requirements.txt /tmp/workspace-requirements.txt
 RUN pip install --no-cache-dir -r /tmp/workspace-requirements.txt
 
+# SDK バンドル CLI バイナリの実行権限を確保
+# pip wheel がインストール時に実行ビットを落とすことがあるため明示的に設定
+# ReadonlyRootfs: True のため、ビルド時にのみ修正可能
+RUN find /opt/venv/lib -path "*/claude_agent_sdk/_bundled/claude" -exec chmod +x {} \; 2>/dev/null; true
+
 COPY workspace_agent/ /opt/workspace_agent/
 
 # PYTHONPATH: /opt配下のworkspace_agentモジュールをインポート可能にする

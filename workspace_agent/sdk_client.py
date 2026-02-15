@@ -9,7 +9,10 @@ SDK API (claude-agent-sdk == 0.1.36):
 import json
 import logging
 import os
+import stat
+import subprocess
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 from workspace_agent.models import ExecuteRequest
 
@@ -72,6 +75,9 @@ async def execute_streaming(request: ExecuteRequest) -> AsyncIterator[str]:
         logger.error("claude-agent-sdk がインストールされていません")
         yield _format_sse("error", {"message": "SDK not available"})
         return
+
+    # プリフライト診断: CLI バイナリの状態をログに記録
+    _preflight_check()
 
     options = _build_sdk_options(request)
     logger.info(
@@ -206,6 +212,46 @@ def _message_to_sse_events(
         logger.debug("未知のメッセージ型: %s", type(message).__name__)
 
     return events
+
+
+def _preflight_check() -> None:
+    """CLI バイナリの存在・権限・実行可否を診断ログに記録する"""
+    try:
+        import claude_agent_sdk as sdk
+        pkg_dir = Path(sdk.__file__).parent
+        bundled = pkg_dir / "_bundled" / "claude"
+
+        if not bundled.exists():
+            logger.error("CLI バイナリが見つかりません: %s", bundled)
+            return
+
+        st = bundled.stat()
+        is_exec = bool(st.st_mode & stat.S_IXUSR)
+        logger.info(
+            "CLI バイナリ診断: path=%s, size=%d, mode=%o, executable=%s",
+            bundled, st.st_size, st.st_mode, is_exec,
+        )
+
+        if not is_exec:
+            logger.error(
+                "CLI バイナリに実行権限がありません（chmod +x が必要）: %s", bundled,
+            )
+            return
+
+        # バージョン確認（タイムアウト5秒）
+        result = subprocess.run(
+            [str(bundled), "-v"],
+            capture_output=True, text=True, timeout=5,
+            env={**os.environ, "NODE_OPTIONS": ""},
+        )
+        logger.info(
+            "CLI バージョン確認: returncode=%d, stdout=%s, stderr=%s",
+            result.returncode,
+            result.stdout.strip()[:200],
+            result.stderr.strip()[:500],
+        )
+    except Exception as e:
+        logger.error("CLI プリフライトチェック失敗: %s", e, exc_info=True)
 
 
 def _get_sdk_version() -> str:
