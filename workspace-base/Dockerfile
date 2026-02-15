@@ -7,14 +7,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs && rm -rf /var/lib/apt/lists/*
 
-# global-agent: Node.js 20でHTTP_PROXYをfetch()に適用するために必要
-RUN npm install -g global-agent
-
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH" PIP_REQUIRE_VIRTUALENV=true
 
 COPY workspace-base/workspace-requirements.txt /tmp/workspace-requirements.txt
 RUN pip install --no-cache-dir -r /tmp/workspace-requirements.txt
+
+# CLIバイナリに実行権限を付与（pip wheelが実行ビットを落とすことがある）
+RUN find /opt/venv/lib -path "*/claude_agent_sdk/_bundled/claude" -exec chmod +x {} \;
 
 COPY workspace_agent/ /opt/workspace_agent/
 
@@ -23,8 +23,13 @@ ENV PYTHONPATH="/opt:$PYTHONPATH"
 
 # エントリポイントスクリプト
 COPY workspace-base/entrypoint.sh /opt/entrypoint.sh
+RUN chmod +x /opt/entrypoint.sh
 
-RUN useradd -m -u 1000 appuser && mkdir -p /workspace && chown appuser:appuser /workspace
+# /var/run/ws を事前作成（手動テスト用の安全策。本番ではBind mountで上書きされる）
+RUN mkdir -p /var/run/ws
+
+RUN useradd -m -u 1000 appuser && mkdir -p /workspace && chown appuser:appuser /workspace \
+    && chown appuser:appuser /var/run/ws
 USER appuser
 WORKDIR /workspace
 

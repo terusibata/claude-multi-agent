@@ -1,6 +1,6 @@
 {
-  "defaultAction": "SCMP_ACT_ERRNO",
-  "defaultErrnoRet": 1,
+  "defaultAction": "SCMP_ACT_ALLOW",
+  "comment": "Blacklist approach: allow all syscalls by default, explicitly block dangerous ones. This is more robust than the whitelist approach which was missing critical syscalls (chdir, setpgid, sigaltstack, etc.) causing silent container startup failures.",
   "archMap": [
     {
       "architecture": "SCMP_ARCH_X86_64",
@@ -19,269 +19,146 @@
   "syscalls": [
     {
       "names": [
-        "read",
-        "write",
-        "open",
-        "openat",
-        "close",
-        "stat",
-        "fstat",
-        "lstat",
-        "newfstatat",
-        "lseek",
-        "mmap",
-        "access",
-        "faccessat",
-        "faccessat2",
-        "getcwd",
-        "readlink",
-        "readlinkat",
-        "getdents",
-        "getdents64",
-        "rename",
-        "renameat",
-        "renameat2",
-        "mkdir",
-        "mkdirat",
-        "rmdir",
-        "unlink",
-        "unlinkat",
-        "symlink",
-        "symlinkat",
-        "link",
-        "linkat",
-        "chmod",
-        "fchmod",
-        "fchmodat",
-        "chown",
-        "fchown",
-        "fchownat",
-        "utimensat",
-        "truncate",
-        "ftruncate",
-        "fallocate",
-        "dup",
-        "dup2",
-        "dup3",
-        "fcntl",
-        "flock",
-        "fsync",
-        "fdatasync",
-        "statfs",
-        "fstatfs",
-        "statx",
-        "copy_file_range",
-        "sendfile",
-        "splice",
-        "pread64",
-        "pwrite64",
-        "readv",
-        "writev",
-        "preadv",
-        "preadv2",
-        "pwritev",
-        "pwritev2",
-        "llistxattr",
-        "flistxattr",
-        "getxattr",
-        "lgetxattr",
-        "fgetxattr"
-      ],
-      "action": "SCMP_ACT_ALLOW",
-      "comment": "File I/O: general filesystem operations for Python, Node.js, pip, git, and data processing"
-    },
-    {
-      "names": [
-        "clone",
-        "clone3",
-        "execve",
-        "execveat",
-        "wait4",
-        "waitid",
-        "exit",
-        "exit_group",
-        "getpid",
-        "getppid",
-        "gettid",
-        "getuid",
-        "geteuid",
-        "getgid",
-        "getegid",
-        "getgroups",
-        "setuid",
-        "setgid",
-        "setgroups",
-        "setreuid",
-        "setregid",
-        "setresuid",
-        "setresgid",
-        "getresuid",
-        "getresgid",
-        "prctl",
-        "arch_prctl",
-        "set_tid_address",
-        "set_robust_list",
-        "get_robust_list",
-        "futex",
-        "sched_yield",
-        "sched_getaffinity",
-        "sched_setaffinity",
-        "sched_getscheduler",
-        "sched_getparam"
-      ],
-      "action": "SCMP_ACT_ALLOW",
-      "comment": "Process: creation, execution, scheduling, and identity management"
-    },
-    {
-      "names": [
-        "mmap",
-        "mprotect",
-        "munmap",
-        "brk",
-        "mremap",
-        "madvise",
-        "msync",
-        "mincore",
-        "membarrier"
-      ],
-      "action": "SCMP_ACT_ALLOW",
-      "comment": "Memory: allocation, protection, and management"
-    },
-    {
-      "names": [
-        "socket",
-        "connect",
-        "bind",
-        "listen",
-        "accept",
-        "accept4",
-        "getsockname",
-        "getpeername",
-        "socketpair",
-        "sendto",
-        "recvfrom",
-        "sendmsg",
-        "recvmsg",
-        "shutdown",
-        "setsockopt",
-        "getsockopt",
-        "select",
-        "poll",
-        "ppoll",
-        "epoll_create",
-        "epoll_create1",
-        "epoll_ctl",
-        "epoll_wait",
-        "epoll_pwait",
-        "epoll_pwait2",
-        "eventfd",
-        "eventfd2"
-      ],
-      "action": "SCMP_ACT_ALLOW",
-      "comment": "Network: Unix socket operations and I/O event notification"
-    },
-    {
-      "names": [
-        "pipe",
-        "pipe2",
-        "kill",
-        "tgkill",
-        "rt_sigaction",
-        "rt_sigprocmask",
-        "rt_sigreturn",
-        "rt_sigsuspend",
-        "rt_sigpending",
-        "rt_sigtimedwait",
-        "signalfd",
-        "signalfd4",
-        "timerfd_create",
-        "timerfd_settime",
-        "timerfd_gettime"
-      ],
-      "action": "SCMP_ACT_ALLOW",
-      "comment": "Pipe/signal: inter-process communication and signal handling"
-    },
-    {
-      "names": [
-        "clock_gettime",
-        "clock_getres",
-        "gettimeofday",
-        "nanosleep",
-        "clock_nanosleep",
-        "timer_create",
-        "timer_settime",
-        "timer_gettime",
-        "timer_delete"
-      ],
-      "action": "SCMP_ACT_ALLOW",
-      "comment": "Time: clock queries, sleeping, and POSIX timers"
-    },
-    {
-      "names": [
-        "ioctl",
-        "pselect6"
-      ],
-      "action": "SCMP_ACT_ALLOW",
-      "comment": "I/O multiplexing: terminal ioctl and pselect6"
-    },
-    {
-      "names": [
-        "uname",
-        "sysinfo",
-        "getrlimit",
-        "prlimit64",
-        "setrlimit",
-        "getrusage",
-        "times",
-        "umask",
-        "getrandom",
-        "close_range",
-        "rseq",
-        "cacheflush"
-      ],
-      "action": "SCMP_ACT_ALLOW",
-      "comment": "System: kernel info, resource limits, entropy, and misc OS operations (cacheflush for ARM)"
-    },
-    {
-      "names": [
-        "inotify_init",
-        "inotify_init1",
-        "inotify_add_watch",
-        "inotify_rm_watch",
-        "personality",
-        "mlock",
-        "mlock2",
-        "munlock",
-        "mlockall",
-        "munlockall"
-      ],
-      "action": "SCMP_ACT_ALLOW",
-      "comment": "Misc: filesystem watches, personality (Node.js), and memory locking"
-    },
-    {
-      "names": [
         "mount",
+        "umount",
         "umount2",
+        "pivot_root",
+        "chroot"
+      ],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "comment": "Filesystem isolation: prevent mount namespace manipulation"
+    },
+    {
+      "names": [
         "reboot",
         "kexec_load",
-        "kexec_file_load",
-        "ptrace",
+        "kexec_file_load"
+      ],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "comment": "System control: prevent system reboot/shutdown"
+    },
+    {
+      "names": [
         "init_module",
         "finit_module",
         "delete_module",
-        "pivot_root",
-        "swapon",
-        "swapoff",
-        "acct",
+        "create_module"
+      ],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "comment": "Kernel modules: prevent loading/unloading kernel modules"
+    },
+    {
+      "names": [
+        "ptrace",
+        "process_vm_readv",
+        "process_vm_writev",
+        "kcmp"
+      ],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "comment": "Process debugging: prevent debugging/tracing other processes"
+    },
+    {
+      "names": [
         "settimeofday",
         "clock_settime",
         "adjtimex",
+        "clock_adjtime"
+      ],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "comment": "Time manipulation: prevent system clock modification"
+    },
+    {
+      "names": [
+        "swapon",
+        "swapoff"
+      ],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "comment": "Swap: prevent swap space manipulation"
+    },
+    {
+      "names": [
+        "acct"
+      ],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "comment": "Process accounting: prevent enabling/disabling process accounting"
+    },
+    {
+      "names": [
         "nfsservctl",
         "lookup_dcookie"
       ],
       "action": "SCMP_ACT_ERRNO",
       "errnoRet": 1,
-      "comment": "Explicitly blocked: dangerous syscalls for container security"
+      "comment": "NFS/profiling: prevent NFS server control and kernel profiling"
+    },
+    {
+      "names": [
+        "unshare",
+        "setns"
+      ],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "comment": "Namespaces: prevent namespace manipulation (container escape prevention)"
+    },
+    {
+      "names": [
+        "keyctl",
+        "add_key",
+        "request_key"
+      ],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "comment": "Kernel keyring: prevent kernel key management"
+    },
+    {
+      "names": [
+        "bpf",
+        "perf_event_open",
+        "userfaultfd"
+      ],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "comment": "Advanced kernel features: prevent BPF programs, perf events, and userfaultfd (attack surface reduction)"
+    },
+    {
+      "names": [
+        "open_by_handle_at",
+        "name_to_handle_at"
+      ],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "comment": "File handle operations: prevent bypassing filesystem access controls"
+    },
+    {
+      "names": [
+        "io_uring_setup",
+        "io_uring_enter",
+        "io_uring_register"
+      ],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "comment": "io_uring: prevent io_uring usage (known attack surface in older kernels)"
+    },
+    {
+      "names": [
+        "move_mount",
+        "fsopen",
+        "fsconfig",
+        "fsmount",
+        "fspick",
+        "open_tree",
+        "mount_setattr"
+      ],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "comment": "New mount API: prevent filesystem mount operations via new kernel API"
     }
   ]
 }

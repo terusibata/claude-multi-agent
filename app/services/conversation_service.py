@@ -56,7 +56,7 @@ class ConversationService:
         user_id: str,
         model_id: str,
         title: str | None = None,
-        workspace_enabled: bool = False,
+        workspace_enabled: bool = True,
     ) -> Conversation:
         """会話を作成"""
         conversation = Conversation(

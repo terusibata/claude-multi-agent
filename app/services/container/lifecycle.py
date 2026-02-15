@@ -169,7 +169,8 @@ class ContainerLifecycleManager:
         return result
 
     async def wait_for_agent_ready(
-        self, agent_socket: str, timeout: float = 30.0
+        self, agent_socket: str, timeout: float = 30.0,
+        container_id: str | None = None,
     ) -> bool:
         """
         agent.sock がリスン状態になるまでポーリング
@@ -181,6 +182,7 @@ class ContainerLifecycleManager:
         Args:
             agent_socket: agent.sock のパス
             timeout: タイムアウト（秒）
+            container_id: コンテナID（早期終了検出・ログ取得用）
 
         Returns:
             True: 準備完了, False: タイムアウト
@@ -188,7 +190,30 @@ class ContainerLifecycleManager:
         import httpx
 
         deadline = asyncio.get_event_loop().time() + timeout
+        poll_count = 0
         while asyncio.get_event_loop().time() < deadline:
+            # コンテナの生存確認（5回に1回、即ち約2.5秒ごと）
+            # コンテナが既に終了していたら、30秒待つ必要はない
+            if container_id and poll_count % 5 == 0 and poll_count > 0:
+                try:
+                    container = await self.docker.containers.get(container_id)
+                    info = await container.show()
+                    state = info.get("State", {})
+                    if not state.get("Running", False):
+                        exit_code = state.get("ExitCode", -1)
+                        # コンテナが終了していた場合、ログを取得して即座にリターン
+                        container_logs = await self._get_container_logs(container_id)
+                        logger.error(
+                            "エージェントコンテナが早期終了",
+                            container_id=container_id,
+                            exit_code=exit_code,
+                            agent_socket=agent_socket,
+                            container_logs=container_logs,
+                        )
+                        return False
+                except Exception:
+                    pass
+
             try:
                 transport = httpx.AsyncHTTPTransport(uds=agent_socket)
                 async with httpx.AsyncClient(
@@ -203,14 +228,30 @@ class ContainerLifecycleManager:
                         return True
             except Exception:
                 pass
+            poll_count += 1
             await asyncio.sleep(0.5)
 
+        # タイムアウト時にもコンテナログを取得
+        container_logs = ""
+        if container_id:
+            container_logs = await self._get_container_logs(container_id)
         logger.error(
             "エージェント起動タイムアウト",
             agent_socket=agent_socket,
             timeout=timeout,
+            container_id=container_id,
+            container_logs=container_logs,
         )
         return False
+
+    async def _get_container_logs(self, container_id: str, tail: int = 80) -> str:
+        """コンテナのログ末尾を取得（デバッグ用）"""
+        try:
+            container = await self.docker.containers.get(container_id)
+            logs = await container.log(stdout=True, stderr=True, tail=tail)
+            return "".join(logs) if logs else "<empty>"
+        except Exception as e:
+            return f"<log capture failed: {e}>"
 
     async def exec_in_container(
         self, container_id: str, cmd: list[str]
@@ -230,3 +271,28 @@ class ContainerLifecycleManager:
         inspect = await exec_instance.inspect()
         exit_code = inspect.get("ExitCode", -1)
         return exit_code, "".join(output_chunks)
+
+    async def exec_in_container_binary(
+        self, container_id: str, cmd: list[str]
+    ) -> tuple[int, bytes]:
+        """コンテナ内でコマンドを実行（バイナリ出力、stdoutのみ）
+
+        get_archive が tmpfs マウント上のファイルを読めない問題の回避策として、
+        exec + cat でコンテナ内プロセスからファイルを読み出す。
+        """
+        container = await self.docker.containers.get(container_id)
+        exec_instance = await container.exec(cmd=cmd)
+
+        stdout_chunks = []
+        async with exec_instance.start() as stream:
+            while True:
+                msg = await stream.read_out()
+                if msg is None:
+                    break
+                # stream == 1: stdout, stream == 2: stderr
+                if msg.stream == 1:
+                    stdout_chunks.append(msg.data)
+
+        inspect = await exec_instance.inspect()
+        exit_code = inspect.get("ExitCode", -1)
+        return exit_code, b"".join(stdout_chunks)

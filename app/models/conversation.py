@@ -62,7 +62,7 @@ class Conversation(Base):
 
     # ワークスペース有効フラグ
     workspace_enabled: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False
+        Boolean, nullable=False, default=True
     )
 
     # ワークスペースパス（会話専用ディレクトリ）

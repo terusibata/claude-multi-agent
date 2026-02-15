@@ -122,7 +122,9 @@ class WarmPoolManager:
 
         # 新規作成時はエージェントの起動完了を待つ
         # WarmPoolからの取得時はプリヒート中に起動済みのため不要
-        ready = await self.lifecycle.wait_for_agent_ready(info.agent_socket)
+        ready = await self.lifecycle.wait_for_agent_ready(
+            info.agent_socket, container_id=info.id,
+        )
         if not ready:
             logger.error("WarmPool: フォールバック作成のエージェント起動タイムアウト", container_id=info.id)
 
@@ -161,8 +163,11 @@ class WarmPoolManager:
                 info = await self.lifecycle.create_container()
                 # エージェントソケットの起動完了を待つ
                 # プールに追加する前に確認することで、取得直後のConnectionErrorを防止
-                ready = await self.lifecycle.wait_for_agent_ready(info.agent_socket)
+                ready = await self.lifecycle.wait_for_agent_ready(
+                    info.agent_socket, container_id=info.id,
+                )
                 if not ready:
+                    # wait_for_agent_ready がコンテナログを含むエラーログを出力済み
                     logger.warning(
                         "WarmPool: エージェント起動タイムアウト、破棄",
                         container_id=info.id,
