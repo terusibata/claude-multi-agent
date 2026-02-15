@@ -171,16 +171,12 @@ def get_initial_message(phase: str, tool_name: Optional[str] = None) -> str:
         表示メッセージ
     """
     if phase == "tool" and tool_name:
-        # 組み込みツールの場合は専用メッセージ
+        # 組み込みツール / 組み込みMCPツールの場合は専用メッセージ
         if tool_name in BUILTIN_TOOL_MESSAGES:
             return random.choice(BUILTIN_TOOL_MESSAGES[tool_name])
 
-        # MCPツールの場合
+        # 動的MCPツールは汎用メッセージ
         if tool_name.startswith("mcp__"):
-            # 組み込みMCPかチェック
-            if tool_name in BUILTIN_TOOL_MESSAGES:
-                return random.choice(BUILTIN_TOOL_MESSAGES[tool_name])
-            # 動的MCPは汎用メッセージ
             return random.choice(DEFAULT_MCP_MESSAGES)
 
         # 不明なツールはデフォルト

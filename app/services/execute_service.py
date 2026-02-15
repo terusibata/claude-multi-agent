@@ -17,7 +17,7 @@ import asyncio
 import json
 import time
 from datetime import datetime, timezone
-from typing import Any, AsyncGenerator
+from typing import AsyncGenerator
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,13 +46,11 @@ from app.utils.streaming import (
     SequenceCounter,
     create_event,
     format_assistant_event,
-    format_context_status_event,
     format_done_event,
     format_error_event,
     format_init_event,
     format_progress_event,
     format_thinking_event,
-    format_title_event,
     format_tool_call_event,
     format_tool_result_event,
 )
