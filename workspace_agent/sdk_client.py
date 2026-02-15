@@ -18,10 +18,18 @@ from workspace_agent.models import ExecuteRequest
 
 logger = logging.getLogger(__name__)
 
+# CLI stderr ログバッファ（直近のstderr出力を保持し、エラー発生時の診断に使用）
+_cli_stderr_lines: list[str] = []
+_CLI_STDERR_MAX_LINES = 200
+
 
 def _build_sdk_options(request: ExecuteRequest):
     """SDK実行オプションを ClaudeAgentOptions として組み立てる"""
     from claude_agent_sdk import ClaudeAgentOptions
+
+    # CLI が必要とするディレクトリを事前作成
+    # tmpfs マウントは空なので、CLI が書き込む前にディレクトリ構造を準備
+    _ensure_cli_directories()
 
     # Bedrock 経由の環境変数を明示的に渡す
     # API通信は ANTHROPIC_BEDROCK_BASE_URL で直接ルーティングされるため HTTP_PROXY 不要
@@ -36,7 +44,18 @@ def _build_sdk_options(request: ExecuteRequest):
         "TMPDIR": "/tmp",
         # サンドボックド bash コマンドの TMPDIR を exec 可能な /workspace に設定
         "CLAUDE_TMPDIR": "/workspace/.tmp",
+        # SDK バージョンチェックをスキップ（プリフライトで実施済み）
+        "CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK": "1",
     }
+
+    # stderr コールバック: CLI のデバッグ出力をキャプチャ
+    # デフォルトでは SDK が stderr を /dev/null に送るため、診断情報が失われる
+    def _stderr_callback(line: str):
+        global _cli_stderr_lines
+        logger.debug("CLI stderr: %s", line)
+        _cli_stderr_lines.append(line)
+        if len(_cli_stderr_lines) > _CLI_STDERR_MAX_LINES:
+            _cli_stderr_lines = _cli_stderr_lines[-_CLI_STDERR_MAX_LINES:]
 
     options = ClaudeAgentOptions(
         model=request.model or None,
@@ -45,6 +64,7 @@ def _build_sdk_options(request: ExecuteRequest):
         max_turns=request.max_turns or None,
         permission_mode="bypassPermissions",
         env=env,
+        stderr=_stderr_callback,
     )
 
     # セッション再開: session_id が指定されている場合は resume で既存セッションを継続
@@ -55,6 +75,25 @@ def _build_sdk_options(request: ExecuteRequest):
         options.allowed_tools = request.allowed_tools
 
     return options
+
+
+def _ensure_cli_directories():
+    """CLI が必要とするディレクトリを事前作成する
+
+    コンテナの /home/appuser と /workspace は tmpfs で初回は空。
+    CLI は ~/.claude/, /tmp/claude-{uid}/, /workspace/.tmp/ に書き込む。
+    """
+    dirs = [
+        Path.home() / ".claude",           # CLI 設定ディレクトリ
+        Path("/tmp") / f"claude-{os.getuid()}",  # CLI スクラッチパッド
+        Path("/workspace/.tmp"),           # サンドボックド bash 用 TMPDIR
+        Path("/workspace/.claude"),        # プロジェクト設定ディレクトリ
+    ]
+    for d in dirs:
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            logger.warning("ディレクトリ作成失敗: %s (%s)", d, e)
 
 
 async def execute_streaming(request: ExecuteRequest) -> AsyncIterator[str]:
@@ -85,6 +124,10 @@ async def execute_streaming(request: ExecuteRequest) -> AsyncIterator[str]:
         request.model, request.cwd, _get_sdk_version(),
     )
 
+    # stderr バッファをクリア（新しいリクエストごとにリセット）
+    global _cli_stderr_lines
+    _cli_stderr_lines = []
+
     try:
         done_emitted = False
         # メッセージ横断で tool_use_id → tool_name のマッピングを蓄積
@@ -110,8 +153,12 @@ async def execute_streaming(request: ExecuteRequest) -> AsyncIterator[str]:
             })
     except Exception as e:
         error_msg = str(e)
+        # CLI stderr の直近ログを含めてエラー情報を充実させる
+        stderr_tail = "\n".join(_cli_stderr_lines[-50:]) if _cli_stderr_lines else "(no stderr captured)"
         logger.error(
-            "SDK実行エラー: %s (type=%s)", error_msg, type(e).__name__, exc_info=True,
+            "SDK実行エラー: %s (type=%s)\nCLI stderr (last 50 lines):\n%s",
+            error_msg, type(e).__name__, stderr_tail,
+            exc_info=True,
         )
         if "timeout" in error_msg.lower() and "initialize" in error_msg.lower():
             yield _format_sse("error", {
@@ -119,9 +166,13 @@ async def execute_streaming(request: ExecuteRequest) -> AsyncIterator[str]:
                            "Check NODE_OPTIONS and CLI binary availability.",
                 "error_type": "cli_init_timeout",
                 "details": error_msg,
+                "cli_stderr_tail": _cli_stderr_lines[-20:] if _cli_stderr_lines else [],
             })
         else:
-            yield _format_sse("error", {"message": error_msg})
+            yield _format_sse("error", {
+                "message": error_msg,
+                "cli_stderr_tail": _cli_stderr_lines[-10:] if _cli_stderr_lines else [],
+            })
 
 
 def _message_to_sse_events(
@@ -250,8 +301,28 @@ def _preflight_check() -> None:
             result.stdout.strip()[:200],
             result.stderr.strip()[:500],
         )
+
+        # socat ブリッジの疎通確認
+        _check_socat_bridge()
+
     except Exception as e:
         logger.error("CLI プリフライトチェック失敗: %s", e, exc_info=True)
+
+
+def _check_socat_bridge() -> None:
+    """socat TCP:8080 → proxy.sock ブリッジの疎通を確認"""
+    import socket
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(3)
+            s.connect(("127.0.0.1", 8080))
+            logger.info("socat ブリッジ疎通OK: 127.0.0.1:8080 接続成功")
+    except (ConnectionRefusedError, TimeoutError, OSError) as e:
+        logger.error(
+            "socat ブリッジ疎通NG: 127.0.0.1:8080 接続失敗 (%s). "
+            "proxy.sock が存在しない可能性あり",
+            e,
+        )
 
 
 def _get_sdk_version() -> str:
