@@ -17,7 +17,7 @@ import asyncio
 import json
 import time
 from datetime import datetime, timezone
-from typing import Any, AsyncGenerator
+from typing import AsyncGenerator
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,14 +46,15 @@ from app.utils.streaming import (
     SequenceCounter,
     create_event,
     format_assistant_event,
-    format_context_status_event,
     format_done_event,
     format_error_event,
+    format_init_event,
+    format_progress_event,
     format_thinking_event,
-    format_title_event,
     format_tool_call_event,
     format_tool_result_event,
 )
+from app.utils.progress_messages import get_initial_message
 
 logger = structlog.get_logger(__name__)
 
@@ -87,6 +88,10 @@ class ExecuteService:
     def _create_file_sync(self) -> WorkspaceFileSync | None:
         """ファイル同期インスタンスを生成（S3未設定時はNone）"""
         if not self._settings.s3_bucket_name:
+            logger.warning(
+                "S3バケット未設定: ワークスペースファイル同期が無効です。"
+                "s3_bucket_name を設定してください。"
+            )
             return None
         return WorkspaceFileSync(
             s3=S3StorageBackend(),
@@ -186,6 +191,7 @@ class ExecuteService:
             last_sync_time = 0.0
             last_lock_extend_time = time.time()
             background_sync_tasks: set[asyncio.Task] = set()
+            external_file_paths: list[str] = []  # /workspace外に書かれたファイルパスを収集
 
             async for event in self._stream_from_container(
                 request, model, seq_counter, container_info,
@@ -194,6 +200,9 @@ class ExecuteService:
                 # SDK側の "done" イベントを _translate_event() でホスト形式に変換
                 if event.get("event") == "done":
                     done_data = event.get("data", {})
+
+                # tool_call イベントから /workspace 外のファイルパスを収集
+                self._collect_external_file_path(event, external_file_paths)
 
                 # 長時間実行時のロックTTL延長（60秒間隔）
                 if lock_token and (time.time() - last_lock_extend_time) > 60:
@@ -223,6 +232,12 @@ class ExecuteService:
             # バックグラウンド同期タスクの完了待ち（最大5秒）
             if background_sync_tasks:
                 await asyncio.wait(background_sync_tasks, timeout=5.0)
+
+            # /workspace外に書かれたファイルをコンテナ内で/workspaceにコピー
+            if external_file_paths:
+                await self._rescue_external_files(
+                    container_info.id, external_file_paths
+                )
 
             # コンテナ → S3へファイル同期
             if request.workspace_enabled:
@@ -309,7 +324,12 @@ class ExecuteService:
         """コンテナ内エージェントからSSEストリームを受信・中継"""
         container_request = {
             "user_input": request.user_input,
-            "system_prompt": "",
+            "system_prompt": (
+                "あなたのワークスペースは /workspace です。"
+                "ファイルの作成・編集は必ず /workspace ディレクトリ内で行ってください。"
+                "相対パスを使用してください（例: hello.py, docs/readme.md）。"
+                "/tmp や他のディレクトリへの書き込みは禁止です。"
+            ),
             "model": model.bedrock_model_id,
             "session_id": None,
             "max_turns": None,
@@ -337,9 +357,12 @@ class ExecuteService:
                 event_str, buffer = buffer.split("\n\n", 1)
                 raw_event = self._parse_sse_event(event_str)
                 if raw_event:
-                    translated = self._translate_event(raw_event, seq_counter)
-                    if translated is not None:
-                        yield translated
+                    translated_events = self._translate_event(
+                        raw_event, seq_counter,
+                        conversation_id=request.conversation_id,
+                    )
+                    for evt in translated_events:
+                        yield evt
 
     def _parse_sse_event(self, event_str: str) -> dict | None:
         """SSEイベント文字列をパース"""
@@ -512,61 +535,222 @@ class ExecuteService:
             context_limit_reached=limit_reached,
         )
 
-    def _translate_event(self, raw_event: dict, seq_counter: SequenceCounter) -> dict:
+    def _translate_event(
+        self,
+        raw_event: dict,
+        seq_counter: SequenceCounter,
+        conversation_id: str | None = None,
+    ) -> list[dict]:
         """
         SDKイベントをホスト正規形式に変換
 
         SDK側（workspace_agent）が送信するイベント形式:
           text_delta, thinking, tool_use, tool_result, done, system, error
         を、ホスト側の正規形式:
-          assistant, thinking, tool_call, tool_result, done, system, error
+          init, progress, assistant, thinking, tool_call, tool_result, done, error
         に変換し、seq と timestamp を付与する。
+
+        Returns:
+            変換後イベントのリスト（1つのSDKイベントから複数のホストイベントを返す場合あり）
         """
         event_type = raw_event.get("event", "")
         data = raw_event.get("data", {})
 
-        if event_type == "text_delta":
-            return format_assistant_event(
+        if event_type == "system" and data.get("subtype") == "init":
+            # SDK system(init) → 仕様準拠の init イベントに変換
+            init_data = data.get("data", {}) if isinstance(data.get("data"), dict) else data
+            return [format_init_event(
                 seq=seq_counter.next(),
-                content_blocks=[{"type": "text", "text": data.get("text", "")}],
-            )
+                session_id=init_data.get("session_id", ""),
+                tools=init_data.get("tools", []),
+                model=init_data.get("model", ""),
+                conversation_id=conversation_id,
+            )]
+        elif event_type == "text_delta":
+            # progress(generating) + assistant
+            return [
+                format_progress_event(
+                    seq=seq_counter.next(),
+                    progress_type="generating",
+                    message=get_initial_message("generating"),
+                ),
+                format_assistant_event(
+                    seq=seq_counter.next(),
+                    content_blocks=[{"type": "text", "text": data.get("text", "")}],
+                ),
+            ]
         elif event_type == "thinking":
-            return format_thinking_event(
-                seq=seq_counter.next(),
-                content=data.get("content", ""),
-            )
+            # progress(thinking) + thinking
+            return [
+                format_progress_event(
+                    seq=seq_counter.next(),
+                    progress_type="thinking",
+                    message=get_initial_message("thinking"),
+                ),
+                format_thinking_event(
+                    seq=seq_counter.next(),
+                    content=data.get("content", ""),
+                ),
+            ]
         elif event_type == "tool_use":
-            return format_tool_call_event(
-                seq=seq_counter.next(),
-                tool_use_id=data.get("tool_use_id", ""),
-                tool_name=data.get("tool_name", ""),
-                tool_input=data.get("input", {}),
-                summary=f"ツール実行: {data.get('tool_name', '')}",
-            )
+            # progress(tool, running) + tool_call
+            tool_name = data.get("tool_name", "")
+            tool_use_id = data.get("tool_use_id", "")
+            return [
+                format_progress_event(
+                    seq=seq_counter.next(),
+                    progress_type="tool",
+                    message=get_initial_message("tool", tool_name),
+                    tool_use_id=tool_use_id,
+                    tool_name=tool_name,
+                    tool_status="running",
+                ),
+                format_tool_call_event(
+                    seq=seq_counter.next(),
+                    tool_use_id=tool_use_id,
+                    tool_name=tool_name,
+                    tool_input=data.get("input", {}),
+                    summary=f"ツール実行: {tool_name}",
+                ),
+            ]
         elif event_type == "tool_result":
-            return format_tool_result_event(
+            # tool_result のみ（結果自体がステータスを示す）
+            return [format_tool_result_event(
                 seq=seq_counter.next(),
                 tool_use_id=data.get("tool_use_id", ""),
                 tool_name=data.get("tool_name", ""),
                 status="error" if data.get("is_error") else "completed",
                 content=data.get("content", ""),
                 is_error=data.get("is_error", False),
-            )
+            )]
         elif event_type == "done":
-            return format_done_event(
+            return [format_done_event(
                 seq=seq_counter.next(),
                 status="error" if data.get("subtype") == "error_during_execution" else "success",
                 result=data.get("result"),
                 errors=None,
-                usage=data.get("usage", {}),
-                cost_usd=data.get("cost_usd", "0"),
+                usage=self._normalize_usage(data.get("usage", {})),
+                cost_usd=str(data.get("cost_usd", "0")),
                 turn_count=data.get("num_turns", 0),
                 duration_ms=data.get("duration_ms", 0),
                 session_id=data.get("session_id"),
-            )
+            )]
         else:
-            # system, error 等: seq/timestamp を付与してそのまま中継
-            return create_event(event_type, seq_counter.next(), data)
+            # error 等: seq/timestamp を付与してそのまま中継
+            return [create_event(event_type, seq_counter.next(), data)]
+
+    @staticmethod
+    def _normalize_usage(raw_usage: dict) -> dict:
+        """
+        SDK usage フォーマットを仕様準拠のフォーマットに正規化
+
+        SDK形式:
+          input_tokens, output_tokens, cache_creation_input_tokens,
+          cache_read_input_tokens, cache_creation.ephemeral_5m_input_tokens, ...
+        仕様形式:
+          input_tokens, output_tokens, cache_creation_5m_tokens,
+          cache_creation_1h_tokens, cache_read_tokens, total_tokens
+        """
+        input_tokens = raw_usage.get("input_tokens", 0)
+        output_tokens = raw_usage.get("output_tokens", 0)
+
+        # キャッシュトークンの抽出（cache_creation ネストオブジェクトから取得）
+        cache_creation = raw_usage.get("cache_creation", {})
+        if isinstance(cache_creation, dict):
+            cache_5m = cache_creation.get("ephemeral_5m_input_tokens", 0)
+            cache_1h = cache_creation.get("ephemeral_1h_input_tokens", 0)
+        else:
+            cache_5m = 0
+            cache_1h = 0
+
+        # フォールバック: トップレベルの cache_creation_input_tokens を 5m として扱う
+        if cache_5m == 0:
+            cache_5m = raw_usage.get("cache_creation_input_tokens", 0)
+
+        cache_read = raw_usage.get("cache_read_input_tokens", 0)
+
+        total_tokens = input_tokens + output_tokens + cache_5m + cache_1h + cache_read
+
+        return {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cache_creation_5m_tokens": cache_5m,
+            "cache_creation_1h_tokens": cache_1h,
+            "cache_read_tokens": cache_read,
+            "total_tokens": total_tokens,
+        }
+
+    @staticmethod
+    def _collect_external_file_path(event: dict, external_paths: list[str]) -> None:
+        """
+        tool_callイベントからファイルパスを抽出し、/workspace外のパスを収集
+
+        AIがシステムプロンプトの指示を無視して/workspace外にファイルを作成した場合の
+        安全策として、後でコンテナ内コピーにより回収できるようにする。
+        """
+        if event.get("event") != "tool_call":
+            return
+        data = event.get("data", {})
+        tool_name = data.get("tool_name", "")
+        if tool_name not in _FILE_TOOL_NAMES:
+            return
+        tool_input = data.get("input", {})
+        file_path = tool_input.get("file_path", "")
+        if not file_path:
+            return
+        # /workspace 外の絶対パスのみ収集
+        if file_path.startswith("/") and not file_path.startswith("/workspace/"):
+            external_paths.append(file_path)
+
+    async def _rescue_external_files(
+        self, container_id: str, external_paths: list[str]
+    ) -> None:
+        """
+        /workspace外に書かれたファイルをコンテナ内で/workspaceにコピー
+
+        sync_from_container() は /workspace 以下のみスキャンするため、
+        /workspace 外のファイルは検出されない。このメソッドで事前にコピーすることで
+        同期対象に含まれるようにする。
+
+        ディレクトリ構造を保持してコピーする:
+          /tmp/test_file.txt → /workspace/_external/tmp/test_file.txt
+          /home/user/data.csv → /workspace/_external/home/user/data.csv
+        """
+        for src_path in external_paths:
+            # 先頭の / を除去してディレクトリ構造を保持
+            # /tmp/test_file.txt → _external/tmp/test_file.txt
+            relative = src_path.lstrip("/")
+            dest_path = f"/workspace/_external/{relative}"
+            dest_dir = "/".join(dest_path.split("/")[:-1])
+            try:
+                # 宛先ディレクトリを作成
+                await self.orchestrator.lifecycle.exec_in_container(
+                    container_id,
+                    ["mkdir", "-p", dest_dir],
+                )
+                exit_code, _ = await self.orchestrator.lifecycle.exec_in_container(
+                    container_id,
+                    ["cp", "-f", src_path, dest_path],
+                )
+                if exit_code == 0:
+                    logger.info(
+                        "外部ファイルを/workspaceに回収",
+                        src=src_path,
+                        dest=dest_path,
+                        container_id=container_id,
+                    )
+                else:
+                    logger.warning(
+                        "外部ファイル回収失敗（cp失敗）",
+                        src=src_path,
+                        exit_code=exit_code,
+                    )
+            except Exception as e:
+                logger.warning(
+                    "外部ファイル回収エラー",
+                    src=src_path,
+                    error=str(e),
+                )
 
     @staticmethod
     def _is_file_tool_result(event: dict) -> bool:

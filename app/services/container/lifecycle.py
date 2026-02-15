@@ -271,3 +271,28 @@ class ContainerLifecycleManager:
         inspect = await exec_instance.inspect()
         exit_code = inspect.get("ExitCode", -1)
         return exit_code, "".join(output_chunks)
+
+    async def exec_in_container_binary(
+        self, container_id: str, cmd: list[str]
+    ) -> tuple[int, bytes]:
+        """コンテナ内でコマンドを実行（バイナリ出力、stdoutのみ）
+
+        get_archive が tmpfs マウント上のファイルを読めない問題の回避策として、
+        exec + cat でコンテナ内プロセスからファイルを読み出す。
+        """
+        container = await self.docker.containers.get(container_id)
+        exec_instance = await container.exec(cmd=cmd)
+
+        stdout_chunks = []
+        async with exec_instance.start() as stream:
+            while True:
+                msg = await stream.read_out()
+                if msg is None:
+                    break
+                # stream == 1: stdout, stream == 2: stderr
+                if msg.stream == 1:
+                    stdout_chunks.append(msg.data)
+
+        inspect = await exec_instance.inspect()
+        exit_code = inspect.get("ExitCode", -1)
+        return exit_code, b"".join(stdout_chunks)

@@ -131,6 +131,11 @@ class WorkspaceService:
         Raises:
             WorkspaceSecurityError: パスが無効な場合
         """
+        # /workspace/ プレフィックスを除去（絶対パスが指定された場合の正規化）
+        # DB/S3では相対パス（例: "hello.txt"）で保存されている
+        if file_path.startswith("/workspace/"):
+            file_path = file_path[len("/workspace/"):]
+
         # パストラバーサル攻撃の防止
         try:
             validate_path_traversal(file_path)

@@ -10,7 +10,6 @@ import asyncio
 import io
 import tarfile
 
-import aiodocker
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,6 +27,28 @@ logger = structlog.get_logger(__name__)
 # これらのパスはワークスペース同期（sync_from_container / sync_to_container）から除外される
 RESERVED_PREFIXES = frozenset({
     "_sdk_session/",
+})
+
+# 同期対象から除外するパターン
+# ビルド成果物・キャッシュ・VCS等の不要ファイルを S3/DB に同期しない
+_EXCLUDED_DIR_NAMES = frozenset({
+    "__pycache__",
+    ".git",
+    "node_modules",
+    ".venv",
+    "venv",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".tox",
+    ".eggs",
+    ".egg-info",
+})
+
+_EXCLUDED_EXTENSIONS = frozenset({
+    ".pyc",
+    ".pyo",
+    ".DS_Store",
 })
 
 
@@ -53,6 +74,27 @@ class WorkspaceFileSync:
             file_path.startswith(prefix) or file_path == prefix.rstrip("/")
             for prefix in RESERVED_PREFIXES
         )
+
+    @staticmethod
+    def _should_exclude(file_path: str) -> bool:
+        """
+        同期対象外のファイルかチェック
+
+        __pycache__、.git、node_modules 等のビルド成果物・キャッシュファイルを除外する。
+        """
+        # パスセグメントを分解して除外ディレクトリ名をチェック
+        segments = file_path.split("/")
+        for seg in segments[:-1]:  # 最後のセグメント（ファイル名）以外
+            if seg in _EXCLUDED_DIR_NAMES:
+                return True
+
+        # ファイル拡張子・名前チェック
+        filename = segments[-1] if segments else ""
+        for ext in _EXCLUDED_EXTENSIONS:
+            if filename.endswith(ext) or filename == ext.lstrip("."):
+                return True
+
+        return False
 
     async def sync_to_container(
         self,
@@ -160,6 +202,9 @@ class WorkspaceFileSync:
         # 予約プレフィックスのファイルを除外（システム内部ファイルがワークスペースとして同期されるのを防止）
         file_paths = [p for p in file_paths if not self._is_reserved_path(p)]
 
+        # 不要ファイル（__pycache__、.git、node_modules等）を除外
+        file_paths = [p for p in file_paths if not self._should_exclude(p)]
+
         if not file_paths:
             return 0
 
@@ -224,31 +269,24 @@ class WorkspaceFileSync:
     async def _read_from_container(
         self, container_id: str, src_path: str
     ) -> bytes | None:
-        """docker cpでコンテナからファイルを読み出す"""
+        """exec + cat でコンテナからファイルを読み出す
+
+        Docker の get_archive API は tmpfs マウント上のファイルを読めない場合がある
+        （ReadonlyRootfs + tmpfs 構成、Docker-in-Docker、userns-remap 等）。
+        exec はコンテナ内プロセスとして実行されるため tmpfs も正しく読める。
+        """
         try:
-            container = await self.lifecycle.docker.containers.get(container_id)
-            tar_stream = await container.get_archive(src_path)
-
-            tar_buffer = io.BytesIO()
-            # tar_stream is a dict with 'body' containing the tar data
-            if isinstance(tar_stream, dict):
-                body = tar_stream.get("body", b"")
-                if hasattr(body, "read"):
-                    tar_buffer.write(await body.read())
-                else:
-                    tar_buffer.write(body)
-            else:
-                async for chunk in tar_stream:
-                    tar_buffer.write(chunk)
-
-            tar_buffer.seek(0)
-            with tarfile.open(fileobj=tar_buffer, mode="r") as tar:
-                for member in tar.getmembers():
-                    if member.isfile():
-                        extracted = tar.extractfile(member)
-                        if extracted:
-                            return extracted.read()
-            return None
+            exit_code, data = await self.lifecycle.exec_in_container_binary(
+                container_id, ["cat", src_path]
+            )
+            if exit_code != 0:
+                logger.error(
+                    "コンテナからの読み出し失敗",
+                    src_path=src_path,
+                    exit_code=exit_code,
+                )
+                return None
+            return data
         except Exception as e:
             logger.error("コンテナからの読み出し失敗", src_path=src_path, error=str(e))
             return None
