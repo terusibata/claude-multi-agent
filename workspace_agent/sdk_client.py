@@ -28,7 +28,18 @@ def _build_sdk_options(request: ExecuteRequest):
         "ANTHROPIC_BEDROCK_BASE_URL": os.environ.get("ANTHROPIC_BEDROCK_BASE_URL", "http://127.0.0.1:8080"),
         "HTTP_PROXY": os.environ.get("HTTP_PROXY", "http://127.0.0.1:8080"),
         "HTTPS_PROXY": os.environ.get("HTTPS_PROXY", "http://127.0.0.1:8080"),
+        # NODE_OPTIONS を明示的にクリア（CLIバイナリ=standalone ELFが壊れるのを防止）
+        "NODE_OPTIONS": "",
+        # 基本環境変数
+        "HOME": os.environ.get("HOME", "/home/appuser"),
+        "TMPDIR": "/tmp",
+        "CLAUDE_CONFIG_DIR": os.environ.get("CLAUDE_CONFIG_DIR", "/home/appuser/.claude"),
+        # バージョンチェックスキップ（NetworkMode:none コンテナ用）
+        "CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK": "1",
     }
+
+    def _stderr_callback(line: str):
+        logger.warning("CLI stderr: %s", line.rstrip())
 
     options = ClaudeAgentOptions(
         model=request.model or None,
@@ -37,6 +48,7 @@ def _build_sdk_options(request: ExecuteRequest):
         max_turns=request.max_turns or None,
         permission_mode="bypassPermissions",
         env=env,
+        stderr=_stderr_callback,
     )
 
     # セッション再開: session_id が指定されている場合は resume で既存セッションを継続

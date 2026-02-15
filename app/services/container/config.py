@@ -82,11 +82,9 @@ def get_container_create_config(container_id: str) -> dict:
             "HTTPS_PROXY=http://127.0.0.1:8080",
             "NO_PROXY=localhost,127.0.0.1",
             "PIP_REQUIRE_VIRTUALENV=true",
-            # Node.js 20: global-agentでHTTP_PROXYをfetch()に適用
-            "GLOBAL_AGENT_HTTP_PROXY=http://127.0.0.1:8080",
-            "GLOBAL_AGENT_HTTPS_PROXY=http://127.0.0.1:8080",
-            "GLOBAL_AGENT_NO_PROXY=localhost,127.0.0.1",
-            "NODE_OPTIONS=--require global-agent/bootstrap",
+            # CLIバイナリ (standalone ELF) の基本環境変数
+            "HOME=/home/appuser",
+            "CLAUDE_CONFIG_DIR=/home/appuser/.claude",
         ],
         "User": "1000:1000",
         "Labels": {
@@ -108,7 +106,7 @@ def get_container_create_config(container_id: str) -> dict:
             "IpcMode": "private",
             # userns-remap はデーモンレベルで有効化（コンテナ単位の指定不要）
             "Tmpfs": {
-                "/tmp": "rw,noexec,nosuid,size=512M",
+                "/tmp": "rw,nosuid,size=512M",
                 "/var/tmp": "rw,noexec,nosuid,size=256M",
                 "/run": "rw,noexec,nosuid,size=64M",
                 "/home/appuser/.cache": "rw,noexec,nosuid,size=512M",

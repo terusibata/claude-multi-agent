@@ -7,6 +7,8 @@ from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from sqlalchemy.exc import DataError
+
 from app.infrastructure.metrics import get_error_counter
 from app.schemas.error import ErrorCodes, create_error_response
 from app.utils.exceptions import (
@@ -118,6 +120,24 @@ def register_exception_handlers(app: FastAPI) -> None:
                 code=ErrorCodes.VALIDATION_ERROR,
                 message="入力データが不正です",
                 details=details,
+                request_id=_get_request_id(request),
+            ),
+        )
+
+    @app.exception_handler(DataError)
+    async def data_error_handler(request: Request, exc: DataError):
+        """DBデータエラーハンドラー（無効なUUID形式等）"""
+        get_error_counter().inc(type="data_error", code=ErrorCodes.VALIDATION_ERROR)
+        logger.warning(
+            "データエラー",
+            error=str(exc),
+            path=request.url.path,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content=create_error_response(
+                code=ErrorCodes.VALIDATION_ERROR,
+                message="リクエストデータが不正です",
                 request_id=_get_request_id(request),
             ),
         )
