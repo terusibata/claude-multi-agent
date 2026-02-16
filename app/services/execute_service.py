@@ -454,7 +454,11 @@ class ExecuteService:
     async def _sync_skills_to_container(
         self, tenant_id: str, container_id: str
     ) -> bool:
-        """テナントのスキルファイルをコンテナの /workspace/.claude/skills/ に同期"""
+        """テナントのスキルファイルをコンテナの /workspace/.claude/skills/ に同期
+
+        スキルはホストファイルシステム上に保存されているため、
+        S3設定の有無に関わらず exec 経由で直接コンテナに書き込む。
+        """
         try:
             settings = get_settings()
             skills_base = Path(settings.skills_base_path)
@@ -475,16 +479,66 @@ class ExecuteService:
                     )
                     dest = f"/workspace/{relative}"
                     data = file_path.read_bytes()
-                    if self._file_sync:
-                        await self._file_sync._write_to_container(
-                            container_id, dest, data
-                        )
-                        synced = True
+                    await self._write_skill_to_container(
+                        container_id, dest, data
+                    )
+                    synced = True
 
             return synced
         except Exception as e:
             logger.error("スキル同期エラー", error=str(e), tenant_id=tenant_id)
             return False
+
+    async def _write_skill_to_container(
+        self, container_id: str, dest_path: str, data: bytes
+    ) -> None:
+        """スキルファイルをコンテナに書き込む（S3設定不要）
+
+        lifecycle.exec_in_container を直接使用し、
+        _file_sync（S3依存）を経由せずにコンテナへ書き込む。
+        """
+        import base64
+
+        # 親ディレクトリを確保
+        parent_dir = "/".join(dest_path.split("/")[:-1])
+        await self.orchestrator.lifecycle.exec_in_container(
+            container_id, ["mkdir", "-p", parent_dir]
+        )
+
+        encoded = base64.b64encode(data).decode("ascii")
+
+        # チャンク分割（shell 引数制限回避: 60KB 以下で分割）
+        chunk_size = 60000
+        filename = dest_path.split("/")[-1]
+        tmp_path = f"/tmp/_skill_xfer_{filename}"
+
+        for i in range(0, len(encoded), chunk_size):
+            chunk = encoded[i:i + chunk_size]
+            op = ">>" if i > 0 else ">"
+            exit_code, _ = await self.orchestrator.lifecycle.exec_in_container(
+                container_id,
+                ["sh", "-c", f"printf '%s' '{chunk}' {op} '{tmp_path}'"],
+            )
+            if exit_code != 0:
+                await self.orchestrator.lifecycle.exec_in_container(
+                    container_id, ["rm", "-f", tmp_path]
+                )
+                raise RuntimeError(
+                    f"スキルファイルのコンテナ書き込み失敗(chunk): {dest_path}"
+                )
+
+        # base64 デコード → 最終ファイルに書き込み → 一時ファイル削除
+        exit_code, _ = await self.orchestrator.lifecycle.exec_in_container(
+            container_id,
+            ["sh", "-c", f"base64 -d < '{tmp_path}' > '{dest_path}' && rm -f '{tmp_path}'"],
+        )
+        if exit_code != 0:
+            await self.orchestrator.lifecycle.exec_in_container(
+                container_id, ["rm", "-f", tmp_path]
+            )
+            raise RuntimeError(
+                f"スキルファイルのコンテナ書き込み失敗(decode): {dest_path}"
+            )
 
     def _build_system_prompt(
         self, request: ExecuteRequest, skills_synced: bool
