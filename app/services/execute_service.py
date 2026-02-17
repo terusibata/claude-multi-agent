@@ -198,6 +198,7 @@ class ExecuteService:
             last_lock_extend_time = time.time()
             background_sync_tasks: set[asyncio.Task] = set()
             external_file_paths: list[str] = []  # /workspace外に書かれたファイルパスを収集
+            assistant_events: list[dict] = []  # アシスタントメッセージ永続化用
 
             async for event in self._stream_from_container(
                 request, model, seq_counter, container_info,
@@ -232,6 +233,11 @@ class ExecuteService:
                     )
                     background_sync_tasks.add(task)
                     task.add_done_callback(background_sync_tasks.discard)
+
+                # アシスタントメッセージ永続化用にイベントを蓄積
+                _evt_type = event.get("event")
+                if _evt_type in ("assistant", "thinking", "tool_call", "tool_result"):
+                    assistant_events.append(event)
 
                 yield event
 
@@ -296,6 +302,10 @@ class ExecuteService:
                             )
                         except Exception as e:
                             logger.warning("セッションファイル保存エラー（続行）", error=str(e))
+
+            # アシスタントメッセージをDBに保存（ストリーム完了後に一括）
+            if assistant_events:
+                await self._save_assistant_message(request, assistant_events)
 
             execution_success = True
 
@@ -657,6 +667,32 @@ class ExecuteService:
             message_subtype=None,
             content=content,
         )
+
+    async def _save_assistant_message(
+        self, request: ExecuteRequest, events: list[dict]
+    ) -> None:
+        """ストリーミングイベントをアシスタントメッセージとしてDBに一括保存"""
+        try:
+            message_seq = await self.message_log_service.get_max_message_seq(
+                request.conversation_id
+            ) + 1
+
+            content = {
+                "type": "assistant",
+                "subtype": None,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "events": events,
+            }
+
+            await self.message_log_service.save_message_log(
+                conversation_id=request.conversation_id,
+                message_seq=message_seq,
+                message_type="assistant",
+                message_subtype=None,
+                content=content,
+            )
+        except Exception as e:
+            logger.error("アシスタントメッセージ保存エラー", error=str(e))
 
     async def _record_usage(
         self, request: ExecuteRequest, model: Model, done_data: dict
