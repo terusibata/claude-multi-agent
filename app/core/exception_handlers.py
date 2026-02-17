@@ -3,7 +3,7 @@
 アプリケーション全体の例外処理を定義
 """
 import structlog
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
@@ -138,6 +138,30 @@ def register_exception_handlers(app: FastAPI) -> None:
             content=create_error_response(
                 code=ErrorCodes.VALIDATION_ERROR,
                 message="リクエストデータが不正です",
+                request_id=_get_request_id(request),
+            ),
+        )
+
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(request: Request, exc: HTTPException):
+        """FastAPI HTTPExceptionハンドラー（統一エラーフォーマット変換）"""
+        status_to_code = {
+            400: ErrorCodes.VALIDATION_ERROR,
+            401: ErrorCodes.UNAUTHORIZED,
+            403: ErrorCodes.FORBIDDEN,
+            404: ErrorCodes.NOT_FOUND,
+            409: ErrorCodes.CONFLICT,
+            429: ErrorCodes.RATE_LIMIT_EXCEEDED,
+            503: ErrorCodes.SERVICE_UNAVAILABLE,
+        }
+        error_code = status_to_code.get(exc.status_code, ErrorCodes.INTERNAL_ERROR)
+        get_error_counter().inc(type="http_exception", code=error_code)
+
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=create_error_response(
+                code=error_code,
+                message=str(exc.detail) if exc.detail else "エラーが発生しました",
                 request_id=_get_request_id(request),
             ),
         )

@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 from sse_starlette.sse import EventSourceResponse
 
-from app.api.dependencies import get_active_model, get_active_tenant, get_orchestrator
+from app.api.dependencies import get_active_tenant, get_model_with_fallback, get_orchestrator
 from app.config import get_settings
 from app.database import get_db
 from app.models.model import Model
@@ -245,8 +245,20 @@ async def stream_conversation(
             detail=f"リクエストデータのパースに失敗しました: {str(e)}",
         )
 
-    # モデル定義の取得
-    model = await get_active_model(conversation.model_id, db)
+    # モデル定義の取得（非推奨の場合は自動フォールバック）
+    model = await get_model_with_fallback(conversation.model_id, tenant, db)
+
+    # フォールバックが発生した場合、会話のmodel_idを更新
+    if model.model_id != conversation.model_id:
+        logger.info(
+            "会話のモデルを自動更新",
+            conversation_id=conversation_id,
+            old_model_id=conversation.model_id,
+            new_model_id=model.model_id,
+        )
+        await conversation_service.update_conversation(
+            conversation_id, tenant_id, model_id=model.model_id
+        )
 
     # ファイルがある場合はワークスペースにアップロード
     if files and conversation.workspace_enabled:
