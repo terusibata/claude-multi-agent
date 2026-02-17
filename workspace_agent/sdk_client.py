@@ -5,6 +5,11 @@ Claude Agent SDK クライアントラッパー
 SDK API (claude-agent-sdk >= 0.1.33):
   - query(prompt, options) -> AsyncIterator[Message]
   - Message = UserMessage | AssistantMessage | SystemMessage | ResultMessage
+
+Note: SDK MCP サーバー（create_sdk_mcp_server で作成したカスタムツール）を使用する場合、
+prompt にはストリーミング入力モード（async generator）を使用する必要がある。
+単純な文字列を渡すと MCP ツールが登録されず "No such tool available" エラーになる。
+https://platform.claude.com/docs/en/agent-sdk/custom-tools
 """
 import json
 import logging
@@ -86,10 +91,52 @@ def _build_sdk_options(request: ExecuteRequest):
     if request.session_id:
         options.resume = request.session_id
 
+    # ビルトイン MCP サーバー作成（file-tools, file-presentation）
+    try:
+        from workspace_agent.builtin_mcp import (
+            create_builtin_mcp_servers,
+            create_openapi_mcp_servers,
+        )
+
+        mcp_servers = create_builtin_mcp_servers()
+
+        # OpenAPI MCP サーバー作成（ホストから受け取った設定を使用）
+        if request.mcp_server_configs:
+            openapi_servers = create_openapi_mcp_servers(request.mcp_server_configs)
+            mcp_servers.update(openapi_servers)
+
+        if mcp_servers:
+            options.mcp_servers = mcp_servers
+            logger.info("MCP servers created: %s", list(mcp_servers.keys()))
+    except Exception as e:
+        logger.error("MCP server creation failed: %s", str(e))
+
     if request.allowed_tools:
         options.allowed_tools = request.allowed_tools
 
+    if request.setting_sources:
+        options.setting_sources = request.setting_sources
+
     return options
+
+
+async def _create_streaming_prompt(user_input: str):
+    """
+    SDK MCP サーバー用のストリーミング入力プロンプトを生成
+
+    create_sdk_mcp_server で作成したカスタムツールを使用する場合、
+    query() の prompt パラメータにはストリーミング入力モード（async generator）
+    が必要。単純な文字列では MCP ツールが登録されない。
+
+    See: https://platform.claude.com/docs/en/agent-sdk/custom-tools
+    """
+    yield {
+        "type": "user",
+        "message": {
+            "role": "user",
+            "content": user_input,
+        },
+    }
 
 
 async def execute_streaming(request: ExecuteRequest) -> AsyncIterator[str]:
@@ -119,14 +166,29 @@ async def execute_streaming(request: ExecuteRequest) -> AsyncIterator[str]:
         return
 
     options = _build_sdk_options(request)
-    logger.info("SDK実行開始: model=%s, cwd=%s", request.model, request.cwd)
+    has_mcp_servers = hasattr(options, 'mcp_servers') and options.mcp_servers
+    logger.info(
+        "SDK実行開始: model=%s, cwd=%s, mcp_servers=%s",
+        request.model, request.cwd,
+        list(options.mcp_servers.keys()) if has_mcp_servers else "none",
+    )
 
     try:
         done_emitted = False
         # メッセージ横断で tool_use_id → tool_name のマッピングを蓄積
         # AssistantMessage内のToolUseBlockで登録し、UserMessage内のToolResultBlockで参照
         tool_name_map: dict[str, str] = {}
-        async for message in query(prompt=request.user_input, options=options):
+
+        # SDK MCP サーバー（create_sdk_mcp_server）を使用する場合、
+        # ストリーミング入力モード（async generator）が必要。
+        # 単純な文字列を渡すとカスタム MCP ツールが正しく登録されない。
+        # https://platform.claude.com/docs/en/agent-sdk/custom-tools
+        if has_mcp_servers:
+            prompt_input = _create_streaming_prompt(request.user_input)
+        else:
+            prompt_input = request.user_input
+
+        async for message in query(prompt=prompt_input, options=options):
             sse_events = _message_to_sse_events(message, tool_name_map)
             for event in sse_events:
                 if "event: done\n" in event:

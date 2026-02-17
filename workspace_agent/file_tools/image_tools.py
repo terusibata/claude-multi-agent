@@ -1,5 +1,5 @@
 """
-画像ファイル用ツール
+画像ファイル用ツール（コンテナ側）
 
 inspect_image_file: メタデータ確認（解像度、サイズ）
 ※ read_image_file は registry.py に実装
@@ -10,17 +10,43 @@ from typing import Any
 
 import structlog
 
-from app.services.workspace.file_processors import FileCategory, FileTypeClassifier
-from app.services.workspace.file_tools.utils import (
-    file_tool_handler,
+from workspace_agent.file_tools.utils import (
+    local_file_tool_handler,
     format_tool_error,
     format_tool_success,
 )
 
 logger = structlog.get_logger(__name__)
 
+# 画像としてサポートするMIMEタイプ
+IMAGE_MIME_TYPES = {
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+    "image/bmp",
+    "image/tiff",
+    "image/svg+xml",
+}
 
-@file_tool_handler(log_prefix="画像情報取得")
+
+def _is_image_file(filename: str, content_type: str | None) -> bool:
+    """ファイルが画像かどうかを判定"""
+    if content_type and content_type in IMAGE_MIME_TYPES:
+        return True
+
+    # 拡張子でフォールバック判定
+    lower_name = filename.lower()
+    image_extensions = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif", ".svg"}
+    for ext in image_extensions:
+        if lower_name.endswith(ext):
+            return True
+
+    return False
+
+
+@local_file_tool_handler(log_prefix="画像情報取得")
 async def inspect_image_file_handler(*, content, filename, content_type, args, **_):
     """
     画像ファイルのメタデータを確認
@@ -30,8 +56,7 @@ async def inspect_image_file_handler(*, content, filename, content_type, args, *
             file_path: ファイルパス
     """
     # 画像ファイルかチェック
-    category = FileTypeClassifier.get_category(filename, content_type)
-    if category != FileCategory.IMAGE:
+    if not _is_image_file(filename, content_type):
         return format_tool_error(
             f"このファイルは画像ではありません: {filename} ({content_type})"
         )

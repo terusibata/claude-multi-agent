@@ -15,8 +15,10 @@ Unix Socket経由でSSEイベントを中継する。
 """
 import asyncio
 import json
+import re
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import AsyncGenerator
 
 import structlog
@@ -36,7 +38,9 @@ from app.services.container.orchestrator import ContainerOrchestrator
 from app.services.workspace.file_sync import WorkspaceFileSync
 from app.services.workspace.s3_storage import S3StorageBackend
 from app.services.conversation_service import ConversationService
+from app.services.mcp_server_service import McpServerService
 from app.services.message_log_service import MessageLogService
+from app.services.skill_service import SkillService
 from app.services.usage_service import UsageService
 from app.infrastructure.distributed_lock import (
     ConversationLockError,
@@ -83,6 +87,8 @@ class ExecuteService:
         self.conversation_service = ConversationService(db)
         self.message_log_service = MessageLogService(db)
         self.usage_service = UsageService(db)
+        self.skill_service = SkillService(db)
+        self.mcp_server_service = McpServerService(db)
         self._file_sync = self._create_file_sync()
 
     def _create_file_sync(self) -> WorkspaceFileSync | None:
@@ -322,19 +328,30 @@ class ExecuteService:
         container_info: ContainerInfo,
     ) -> AsyncGenerator[dict, None]:
         """コンテナ内エージェントからSSEストリームを受信・中継"""
+        # MCP サーバー設定の構築（テナントDB → シリアライズ）
+        mcp_server_configs = await self._build_mcp_server_configs(request)
+
+        # スキルファイル同期
+        skills_synced = await self._sync_skills_to_container(
+            request.tenant_id, container_info.id
+        )
+
+        # allowed_tools の計算
+        allowed_tools = self._compute_allowed_tools(request, mcp_server_configs)
+
+        # システムプロンプト構築
+        system_prompt = self._build_system_prompt(request, skills_synced)
+
         container_request = {
             "user_input": request.user_input,
-            "system_prompt": (
-                "あなたのワークスペースは /workspace です。"
-                "ファイルの作成・編集は必ず /workspace ディレクトリ内で行ってください。"
-                "相対パスを使用してください（例: hello.py, docs/readme.md）。"
-                "/tmp や他のディレクトリへの書き込みは禁止です。"
-            ),
+            "system_prompt": system_prompt,
             "model": model.bedrock_model_id,
             "session_id": None,
             "max_turns": None,
-            "allowed_tools": [],
+            "allowed_tools": allowed_tools,
             "cwd": "/workspace",
+            "setting_sources": ["project"] if skills_synced else None,
+            "mcp_server_configs": mcp_server_configs if mcp_server_configs else None,
         }
 
         # 会話のセッションIDを取得
@@ -363,6 +380,202 @@ class ExecuteService:
                     )
                     for evt in translated_events:
                         yield evt
+
+    async def _build_mcp_server_configs(
+        self, request: ExecuteRequest
+    ) -> list[dict]:
+        """テナントのアクティブ MCP サーバー設定をシリアライズしてコンテナに渡す形式に変換"""
+        try:
+            mcp_servers, _ = await self.mcp_server_service.get_all_by_tenant(
+                request.tenant_id, status="active"
+            )
+        except Exception as e:
+            logger.error("MCP サーバー設定取得エラー", error=str(e))
+            return []
+
+        configs = []
+        for server in mcp_servers:
+            if not server.openapi_spec:
+                continue
+            # headers_template のトークン解決
+            headers = self._resolve_headers(
+                server.headers_template, request.tokens
+            )
+            configs.append({
+                "server_name": server.name,
+                "openapi_spec": server.openapi_spec,
+                "base_url": server.openapi_base_url,
+                "headers": headers,
+            })
+        return configs
+
+    @staticmethod
+    def _resolve_headers(
+        template: dict | None, tokens: dict[str, str] | None
+    ) -> dict:
+        """headers_template の ${token} プレースホルダをトークン値で置換"""
+        if not template:
+            return {}
+        resolved = {}
+        for key, value in template.items():
+            if isinstance(value, str) and tokens:
+                resolved[key] = re.sub(
+                    r"\$\{(\w+)\}",
+                    lambda m: tokens.get(m.group(1), m.group(0)),
+                    value,
+                )
+            else:
+                resolved[key] = value
+        return resolved
+
+    def _compute_allowed_tools(
+        self,
+        request: ExecuteRequest,
+        mcp_server_configs: list[dict],
+    ) -> list[str]:
+        """コンテナに渡す allowed_tools リストを計算"""
+        allowed_tools = []
+
+        # ビルトイン MCP サーバー
+        allowed_tools.append("mcp__file-tools__*")
+        allowed_tools.append("mcp__file-presentation__*")
+
+        # OpenAPI MCP サーバー
+        for config in mcp_server_configs:
+            server_name = config["server_name"]
+            allowed_tools.append(f"mcp__{server_name}__*")
+
+        # preferred_skills のツール
+        if request.preferred_skills:
+            allowed_tools.append("Skill")
+
+        return allowed_tools
+
+    async def _sync_skills_to_container(
+        self, tenant_id: str, container_id: str
+    ) -> bool:
+        """テナントのスキルファイルをコンテナの /workspace/.claude/skills/ に同期
+
+        スキルはホストファイルシステム上に保存されているため、
+        S3設定の有無に関わらず exec 経由で直接コンテナに書き込む。
+        """
+        try:
+            settings = get_settings()
+            skills_base = Path(settings.skills_base_path)
+            tenant_skills = skills_base / f"tenant_{tenant_id}" / ".claude" / "skills"
+
+            if not tenant_skills.exists():
+                return False
+
+            synced = False
+            for skill_dir in tenant_skills.iterdir():
+                if not skill_dir.is_dir():
+                    continue
+                for file_path in skill_dir.rglob("*"):
+                    if not file_path.is_file():
+                        continue
+                    relative = file_path.relative_to(
+                        skills_base / f"tenant_{tenant_id}"
+                    )
+                    dest = f"/workspace/{relative}"
+                    data = file_path.read_bytes()
+                    await self._write_skill_to_container(
+                        container_id, dest, data
+                    )
+                    synced = True
+
+            return synced
+        except Exception as e:
+            logger.error("スキル同期エラー", error=str(e), tenant_id=tenant_id)
+            return False
+
+    async def _write_skill_to_container(
+        self, container_id: str, dest_path: str, data: bytes
+    ) -> None:
+        """スキルファイルをコンテナに書き込む（S3設定不要）
+
+        lifecycle.exec_in_container を直接使用し、
+        _file_sync（S3依存）を経由せずにコンテナへ書き込む。
+        """
+        import base64
+
+        # 親ディレクトリを確保
+        parent_dir = "/".join(dest_path.split("/")[:-1])
+        await self.orchestrator.lifecycle.exec_in_container(
+            container_id, ["mkdir", "-p", parent_dir]
+        )
+
+        encoded = base64.b64encode(data).decode("ascii")
+
+        # チャンク分割（shell 引数制限回避: 60KB 以下で分割）
+        chunk_size = 60000
+        filename = dest_path.split("/")[-1]
+        tmp_path = f"/tmp/_skill_xfer_{filename}"
+
+        for i in range(0, len(encoded), chunk_size):
+            chunk = encoded[i:i + chunk_size]
+            op = ">>" if i > 0 else ">"
+            exit_code, _ = await self.orchestrator.lifecycle.exec_in_container(
+                container_id,
+                ["sh", "-c", f"printf '%s' '{chunk}' {op} '{tmp_path}'"],
+            )
+            if exit_code != 0:
+                await self.orchestrator.lifecycle.exec_in_container(
+                    container_id, ["rm", "-f", tmp_path]
+                )
+                raise RuntimeError(
+                    f"スキルファイルのコンテナ書き込み失敗(chunk): {dest_path}"
+                )
+
+        # base64 デコード → 最終ファイルに書き込み → 一時ファイル削除
+        exit_code, _ = await self.orchestrator.lifecycle.exec_in_container(
+            container_id,
+            ["sh", "-c", f"base64 -d < '{tmp_path}' > '{dest_path}' && rm -f '{tmp_path}'"],
+        )
+        if exit_code != 0:
+            await self.orchestrator.lifecycle.exec_in_container(
+                container_id, ["rm", "-f", tmp_path]
+            )
+            raise RuntimeError(
+                f"スキルファイルのコンテナ書き込み失敗(decode): {dest_path}"
+            )
+
+    def _build_system_prompt(
+        self, request: ExecuteRequest, skills_synced: bool
+    ) -> str:
+        """コンテナに渡すシステムプロンプトを構築"""
+        parts = [
+            "あなたのワークスペースは /workspace です。"
+            "ファイルの作成・編集は必ず /workspace ディレクトリ内で行ってください。"
+            "相対パスを使用してください（例: hello.py, docs/readme.md）。"
+            "/tmp や他のディレクトリへの書き込みは禁止です。",
+            "",
+            "## ファイル作成ルール",
+            "- **相対パスのみ使用**（例: `hello.py`）。絶対パス（/tmp/等）は禁止",
+            "- ファイル作成後は `mcp__file-presentation__present_files` で提示",
+            "- file_paths は配列で指定: `[\"hello.py\"]`",
+            "- **サブエージェント（Task）がファイルを作成した場合も、その完了後に必ず `mcp__file-presentation__present_files` を呼び出してください**",
+            "",
+            "## ファイル読み込み",
+            "ワークスペースのファイルは以下の手順で読んでください：",
+            "1. list_workspace_files でファイル一覧を確認",
+            "2. 構造確認（Excel: get_sheet_info, PDF: inspect_pdf_file, Word: get_document_info, PowerPoint: get_presentation_info, 画像: inspect_image_file）",
+            "3. データ取得（Excel: get_sheet_csv, PDF: read_pdf_pages, Word: get_document_content, PowerPoint: get_slides_content）",
+            "4. 検索（Excel: search_workbook, Word: search_document, PowerPoint: search_presentation）",
+            "5. 図表確認が必要な場合のみ convert_pdf_to_images → read_image_file",
+            "※ 画像読み込みはコンテキストを消費するため、必要な場合のみ使用",
+            "※ テキスト/CSV/JSONファイルは従来のReadツールも使用可能",
+        ]
+
+        # preferred_skills 指示
+        if request.preferred_skills:
+            parts.append("")
+            parts.append("## 優先スキル")
+            parts.append("以下のスキルが利用可能です。関連するタスクには優先的に使用してください:")
+            for skill_name in request.preferred_skills:
+                parts.append(f"- {skill_name}")
+
+        return "\n".join(parts)
 
     def _parse_sse_event(self, event_str: str) -> dict | None:
         """SSEイベント文字列をパース"""
@@ -435,8 +648,8 @@ class ExecuteService:
     ) -> None:
         """使用量をDBに記録"""
         try:
-            # SDK ResultMessage 形式またはフォールバック
-            usage = done_data.get("usage", {})
+            # SDK/翻訳済みどちらの形式でも正規化して統一
+            usage = self._normalize_usage(done_data.get("usage", {}))
             input_tokens = usage.get("input_tokens", 0)
             output_tokens = usage.get("output_tokens", 0)
             cache_5m = usage.get("cache_creation_5m_tokens", 0)
@@ -559,10 +772,22 @@ class ExecuteService:
         if event_type == "system" and data.get("subtype") == "init":
             # SDK system(init) → 仕様準拠の init イベントに変換
             init_data = data.get("data", {}) if isinstance(data.get("data"), dict) else data
+            tools = list(init_data.get("tools", []))
+
+            # MCP サーバーのツール名を追加
+            # SDK init メッセージの mcp_servers フィールドから接続済みサーバーの
+            # ツール名を抽出し、mcp__<server>__<tool> 形式で tools リストに追加
+            for mcp_server in init_data.get("mcp_servers", []):
+                server_name = mcp_server.get("name", "")
+                status = mcp_server.get("status", "")
+                if server_name and status == "connected":
+                    for tool_name in mcp_server.get("tools", []):
+                        tools.append(f"mcp__{server_name}__{tool_name}")
+
             return [format_init_event(
                 seq=seq_counter.next(),
                 session_id=init_data.get("session_id", ""),
-                tools=init_data.get("tools", []),
+                tools=tools,
                 model=init_data.get("model", ""),
                 conversation_id=conversation_id,
             )]
@@ -642,7 +867,7 @@ class ExecuteService:
     @staticmethod
     def _normalize_usage(raw_usage: dict) -> dict:
         """
-        SDK usage フォーマットを仕様準拠のフォーマットに正規化
+        SDK usage フォーマットを仕様準拠のフォーマットに正規化（冪等）
 
         SDK形式:
           input_tokens, output_tokens, cache_creation_input_tokens,
@@ -654,20 +879,26 @@ class ExecuteService:
         input_tokens = raw_usage.get("input_tokens", 0)
         output_tokens = raw_usage.get("output_tokens", 0)
 
-        # キャッシュトークンの抽出（cache_creation ネストオブジェクトから取得）
-        cache_creation = raw_usage.get("cache_creation", {})
-        if isinstance(cache_creation, dict):
-            cache_5m = cache_creation.get("ephemeral_5m_input_tokens", 0)
-            cache_1h = cache_creation.get("ephemeral_1h_input_tokens", 0)
+        # 正規化済みキーが存在する場合はそのまま返す（冪等性）
+        if "cache_creation_5m_tokens" in raw_usage:
+            cache_5m = raw_usage["cache_creation_5m_tokens"]
+            cache_1h = raw_usage.get("cache_creation_1h_tokens", 0)
+            cache_read = raw_usage.get("cache_read_tokens", 0)
         else:
-            cache_5m = 0
-            cache_1h = 0
+            # SDK生フォーマットから正規化
+            cache_creation = raw_usage.get("cache_creation", {})
+            if isinstance(cache_creation, dict):
+                cache_5m = cache_creation.get("ephemeral_5m_input_tokens", 0)
+                cache_1h = cache_creation.get("ephemeral_1h_input_tokens", 0)
+            else:
+                cache_5m = 0
+                cache_1h = 0
 
-        # フォールバック: トップレベルの cache_creation_input_tokens を 5m として扱う
-        if cache_5m == 0:
-            cache_5m = raw_usage.get("cache_creation_input_tokens", 0)
+            # フォールバック: トップレベルの cache_creation_input_tokens を 5m として扱う
+            if cache_5m == 0:
+                cache_5m = raw_usage.get("cache_creation_input_tokens", 0)
 
-        cache_read = raw_usage.get("cache_read_input_tokens", 0)
+            cache_read = raw_usage.get("cache_read_input_tokens", 0)
 
         total_tokens = input_tokens + output_tokens + cache_5m + cache_1h + cache_read
 

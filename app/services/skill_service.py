@@ -21,6 +21,7 @@ from app.utils.exceptions import (
     PathTraversalError,
     ValidationError,
 )
+from app.services.skill_s3_backup import SkillS3Backup
 from app.utils.security import (
     sanitize_filename,
     validate_path_traversal,
@@ -44,6 +45,49 @@ class SkillService:
         self.db = db
         self._settings = get_settings()
         self.base_path = Path(self._settings.skills_base_path)
+        self._s3_backup: SkillS3Backup | None = None
+
+    def _get_s3_backup(self) -> SkillS3Backup | None:
+        """S3バックアップインスタンスを遅延初期化で取得"""
+        if not self._settings.s3_skills_backup_enabled:
+            return None
+        if not self._settings.s3_bucket_name:
+            return None
+        if self._s3_backup is None:
+            self._s3_backup = SkillS3Backup()
+        return self._s3_backup
+
+    async def _sync_to_s3(
+        self, tenant_id: str, skill_name: str, files: dict[str, str]
+    ) -> None:
+        """スキルファイルをS3にバックアップ（best-effort）"""
+        backup = self._get_s3_backup()
+        if not backup:
+            return
+        try:
+            await backup.upload_skill_files(tenant_id, skill_name, files)
+        except Exception as e:
+            logger.error(
+                "S3スキルバックアップ失敗（継続）",
+                tenant_id=tenant_id,
+                skill_name=skill_name,
+                error=str(e),
+            )
+
+    async def _delete_from_s3(self, tenant_id: str, skill_name: str) -> None:
+        """スキルファイルをS3から削除（best-effort）"""
+        backup = self._get_s3_backup()
+        if not backup:
+            return
+        try:
+            await backup.delete_skill_files(tenant_id, skill_name)
+        except Exception as e:
+            logger.error(
+                "S3スキル削除失敗（継続）",
+                tenant_id=tenant_id,
+                skill_name=skill_name,
+                error=str(e),
+            )
 
     def _get_tenant_skills_path(self, tenant_id: str) -> Path:
         """
@@ -299,6 +343,10 @@ class SkillService:
         self.db.add(skill)
         await self.db.flush()
         await self.db.refresh(skill)
+
+        # S3バックアップ（best-effort）
+        await self._sync_to_s3(tenant_id, skill_data.name, sanitized_files)
+
         return skill
 
     async def update(
@@ -373,6 +421,10 @@ class SkillService:
         skill.version += 1
         await self.db.flush()
         await self.db.refresh(skill)
+
+        # S3バックアップ（best-effort）
+        await self._sync_to_s3(tenant_id, skill.name, sanitized_files)
+
         return skill
 
     async def delete(
@@ -411,6 +463,10 @@ class SkillService:
 
         # DBから削除
         await self.db.delete(skill)
+
+        # S3バックアップ削除（best-effort）
+        await self._delete_from_s3(tenant_id, skill.name)
+
         return True
 
     async def get_files(

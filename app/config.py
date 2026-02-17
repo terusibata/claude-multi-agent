@@ -92,6 +92,10 @@ class Settings(BaseSettings):
     # S3チャンク設定（メモリ最適化）
     s3_chunk_size: int = 8 * 1024 * 1024  # 8MB
 
+    # S3 Skillsバックアップ設定
+    s3_skills_prefix: str = "skills/"
+    s3_skills_backup_enabled: bool = True
+
     # ============================================
     # ファイルアップロード制限
     # ============================================

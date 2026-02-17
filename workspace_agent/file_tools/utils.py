@@ -1,15 +1,21 @@
 # -*- coding: utf-8 -*-
 """
-ファイルツール共通ユーティリティ
+ファイルツール共通ユーティリティ（コンテナ側）
 
 各Office形式ツール（Word/Excel/PowerPoint）で共有される
 ユーティリティ関数群。テキスト正規化、レスポンス生成、
 旧形式チェック等の重複ロジックを一元管理する。
+
+ホスト側との違い:
+- file_tool_handler -> local_file_tool_handler に変更
+- workspace_service.download_file() の代わりにローカルファイルシステムから読み込み
 """
 
+import mimetypes
 import re
 import unicodedata
 from functools import wraps
+from pathlib import Path
 from typing import Any
 
 import structlog
@@ -159,27 +165,25 @@ def check_library_available(
 
 
 # =============================================================================
-# ハンドラーデコレータ
+# ハンドラーデコレータ（コンテナ側：ローカルファイルシステム版）
 # =============================================================================
 
 
-def file_tool_handler(
+def local_file_tool_handler(
     *,
     old_format: tuple[str, str, str, str, str] | None = None,
     required_library: tuple[str, str] | None = None,
     log_prefix: str = "ファイルツール",
 ):
     """
-    ファイルツールハンドラーの共通処理をデコレータ化。
+    ファイルツールハンドラーの共通処理をデコレータ化（コンテナ側）。
 
-    ファイルダウンロード、旧形式チェック、ライブラリ確認、
-    エラーハンドリングを統一的に処理する。
+    ホスト側の file_tool_handler との違い:
+    - workspace_service.download_file() の代わりにローカルファイルシステムから読み込み
+    - ハンドラーは (args) のみを受け取る（workspace_service, tenant_id, conversation_id 不要）
 
     デコレート対象の関数シグネチャ:
-        async def handler(*, content, filename, content_type, args, **ctx)
-
-    ctx にはワークスペース操作用のパラメータが含まれる:
-        workspace_service, tenant_id, conversation_id
+        async def handler(*, content, filename, content_type, args)
 
     Args:
         old_format: 旧形式チェック用タプル
@@ -189,7 +193,7 @@ def file_tool_handler(
     """
     def decorator(func):
         @wraps(func)
-        async def wrapper(workspace_service, tenant_id, conversation_id, args):
+        async def wrapper(args):
             file_path = args.get("file_path", "")
 
             # 旧形式チェック
@@ -205,19 +209,17 @@ def file_tool_handler(
                     return err
 
             try:
-                content, filename, content_type = (
-                    await workspace_service.download_file(
-                        tenant_id, conversation_id, file_path
-                    )
-                )
+                # ローカルファイルシステムから読み込み
+                full_path = Path("/workspace") / file_path
+                content = full_path.read_bytes()
+                filename = full_path.name
+                content_type, _ = mimetypes.guess_type(str(full_path))
+
                 return await func(
                     content=content,
                     filename=filename,
                     content_type=content_type,
                     args=args,
-                    workspace_service=workspace_service,
-                    tenant_id=tenant_id,
-                    conversation_id=conversation_id,
                 )
             except FileNotFoundError:
                 return format_tool_error(

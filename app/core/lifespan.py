@@ -22,6 +22,86 @@ from app.services.container.warm_pool import WarmPoolManager
 logger = structlog.get_logger(__name__)
 
 
+async def _recover_skills_from_s3(settings) -> None:
+    """
+    起動時にローカルのスキルディレクトリが空の場合、S3から復元する。
+
+    正常な再起動（volume維持）ではスキップされる。
+    volume消失後の再起動でのみ実行される。
+    """
+    if not settings.s3_skills_backup_enabled:
+        logger.info("S3スキルバックアップ無効（復元スキップ）")
+        return
+
+    if not settings.s3_bucket_name:
+        logger.debug("S3バケット未設定（スキル復元スキップ）")
+        return
+
+    from pathlib import Path
+
+    from sqlalchemy import select
+
+    from app.database import async_session_maker
+    from app.models.agent_skill import AgentSkill
+    from app.services.skill_s3_backup import SkillS3Backup
+
+    try:
+        # DBからスキルが存在するテナントIDを取得
+        async with async_session_maker() as db:
+            result = await db.execute(
+                select(AgentSkill.tenant_id).distinct()
+            )
+            tenant_ids = [row[0] for row in result.all()]
+
+        if not tenant_ids:
+            logger.debug("スキルレコードなし（復元スキップ）")
+            return
+
+        base_path = Path(settings.skills_base_path)
+        backup = SkillS3Backup()
+        total_restored = 0
+
+        for tenant_id in tenant_ids:
+            tenant_skills_path = (
+                base_path / f"tenant_{tenant_id}" / ".claude" / "skills"
+            )
+
+            # ローカルにファイルが存在する場合はスキップ
+            has_local_files = (
+                tenant_skills_path.exists()
+                and any(tenant_skills_path.rglob("*"))
+            )
+            if has_local_files:
+                logger.debug(
+                    "ローカルスキルあり（復元スキップ）",
+                    tenant_id=tenant_id,
+                )
+                continue
+
+            # S3から復元
+            logger.info(
+                "S3からスキル復元開始",
+                tenant_id=tenant_id,
+            )
+            restored = await backup.restore_tenant_skills(
+                tenant_id, base_path
+            )
+            total_restored += restored
+
+        if total_restored > 0:
+            logger.info(
+                "S3スキル復元完了",
+                total_restored=total_restored,
+                tenant_count=len(tenant_ids),
+            )
+
+    except Exception as e:
+        logger.error(
+            "S3スキル復元エラー（起動は継続）",
+            error=str(e),
+        )
+
+
 async def _init_container_stack(app: FastAPI, settings) -> tuple:
     """
     コンテナ隔離スタックを初期化
@@ -177,6 +257,9 @@ async def lifespan(app: FastAPI):
     )
 
     _log_security_status(settings)
+
+    # S3からスキル復元（ローカルが空の場合のみ）
+    await _recover_skills_from_s3(settings)
 
     logger.info(
         "アプリケーション起動完了",

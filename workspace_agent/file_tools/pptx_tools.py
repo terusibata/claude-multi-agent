@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-PowerPointファイル用ツール
+PowerPointファイル用ツール（コンテナ側）
 
 AIエージェントがPowerPointファイルを理解するための軽量ツール。
 3つの機能を提供:
@@ -14,10 +14,10 @@ from typing import Any, TypedDict
 
 import structlog
 
-from app.services.workspace.file_tools.utils import (
+from workspace_agent.file_tools.utils import (
     build_search_pattern,
     create_context_snippet,
-    file_tool_handler,
+    local_file_tool_handler,
     format_tool_error,
     format_tool_success,
     normalize_text,
@@ -437,7 +437,7 @@ def search_presentation(
 # Tool Handlers
 # =============================================================================
 
-@file_tool_handler(
+@local_file_tool_handler(
     old_format=(".ppt", "PowerPoint", ".pptx", "python-pptx", "Microsoft PowerPoint"),
     required_library=("pptx", "python-pptx"),
     log_prefix="PowerPoint情報取得",
@@ -488,7 +488,7 @@ async def get_presentation_info_handler(*, content, filename, args, **_):
     return format_tool_success("\n".join(result_lines))
 
 
-@file_tool_handler(
+@local_file_tool_handler(
     old_format=(".ppt", "PowerPoint", ".pptx", "python-pptx", "Microsoft PowerPoint"),
     required_library=("pptx", "python-pptx"),
     log_prefix="PowerPointスライド取得",
@@ -559,7 +559,7 @@ async def get_slides_content_handler(*, content, filename, args, **_):
     return format_tool_success("\n".join(result_lines))
 
 
-@file_tool_handler(
+@local_file_tool_handler(
     old_format=(".ppt", "PowerPoint", ".pptx", "python-pptx", "Microsoft PowerPoint"),
     required_library=("pptx", "python-pptx"),
     log_prefix="PowerPoint検索",
