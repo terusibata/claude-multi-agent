@@ -78,6 +78,7 @@ class ConversationService:
         title: str | None = None,
         status: str | None = None,
         workspace_enabled: bool | None = None,
+        model_id: str | None = None,
     ) -> Conversation | None:
         """会話を更新"""
         conversation = await self.repo.get_by_id(conversation_id, tenant_id)
@@ -92,6 +93,8 @@ class ConversationService:
             conversation.status = status
         if workspace_enabled is not None:
             conversation.workspace_enabled = workspace_enabled
+        if model_id is not None:
+            conversation.model_id = model_id
 
         await self.db.flush()
         await self.db.refresh(conversation)

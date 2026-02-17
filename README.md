@@ -236,18 +236,17 @@ cp .env.example .env
 - `S3_BUCKET_NAME`: ワークスペース用S3バケット名
 - `DB_PASSWORD`: データベースパスワード（未設定時はデフォルト値 `aiagent_password` を使用）
 
-2. Docker GIDを設定（コンテナ内からDocker Socketにアクセスするために必要）
+2. Docker GID設定（通常は不要: entrypoint.shが自動検出します）
 
+自動検出が失敗する場合のみ手動設定:
 ```bash
 echo "DOCKER_GID=$(getent group docker | cut -d: -f3)" >> .env
 ```
 
-3. ワークスペース用ソケットディレクトリを作成
+3. ワークスペース用ソケットディレクトリ（自動作成されます）
 
-```bash
-sudo mkdir -p /var/run/workspace-sockets
-sudo chown 1000:1000 /var/run/workspace-sockets
-```
+entrypoint.shがコンテナ起動時にディレクトリの作成と権限修正を自動で行います。
+手動作成は不要です。
 
 4. ワークスペースコンテナのベースイメージをビルド
 

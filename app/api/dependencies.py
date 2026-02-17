@@ -5,6 +5,7 @@ API共通依存関係
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import structlog
 from app.database import get_db
 from app.models.agent_skill import AgentSkill
 from app.models.conversation import Conversation
@@ -20,6 +21,8 @@ from app.services.simple_chat_service import SimpleChatService
 from app.services.skill_service import SkillService
 from app.services.tenant_service import TenantService
 from app.utils.error_handler import raise_not_found
+
+logger = structlog.get_logger(__name__)
 
 
 def get_orchestrator(request: Request) -> ContainerOrchestrator:
@@ -83,6 +86,41 @@ async def get_active_model(
             detail=f"モデル '{model_id}' は現在利用できません",
         )
     return model
+
+
+async def get_model_with_fallback(
+    model_id: str,
+    tenant: Tenant,
+    db: AsyncSession,
+) -> Model:
+    """
+    モデルを取得。非推奨の場合はテナントデフォルト→任意のアクティブモデルにフォールバック。
+    """
+    model = await get_model_or_404(model_id, db)
+    if model.status == "active":
+        return model
+
+    # 非推奨モデル → フォールバック
+    logger.warning(
+        "モデルが非推奨のためフォールバック",
+        deprecated_model_id=model_id,
+    )
+
+    # 1. テナントデフォルトモデルを試行
+    if tenant.model_id and tenant.model_id != model_id:
+        fallback = await ModelService(db).get_by_id(tenant.model_id)
+        if fallback and fallback.status == "active":
+            return fallback
+
+    # 2. 任意のアクティブモデルを使用
+    active_models = await ModelService(db).get_active_models()
+    if active_models:
+        return active_models[0]
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="利用可能なアクティブモデルがありません",
+    )
 
 
 # --- 会話 ---

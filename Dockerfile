@@ -25,6 +25,7 @@ FROM python:3.11-slim AS production
 # 実行時に必要な最小限のパッケージのみインストール
 RUN apt-get update && apt-get install -y \
     curl \
+    gosu \
     && rm -rf /var/lib/apt/lists/*
 
 # Node.js のインストール（Claude Agent SDKに必要）
@@ -35,10 +36,10 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
 # 非rootユーザーの作成
 RUN useradd -m -u 1000 appuser
 
-# Docker Socket アクセス用グループ設定
-# ホスト側のdocker GIDに合わせてランタイム時にgroup_addで追加
-ARG DOCKER_GID=999
-RUN groupadd -g ${DOCKER_GID} docker 2>/dev/null || true \
+# Docker Socket アクセス用プレースホルダーグループ
+# 実際のホスト側GIDはentrypoint.shでランタイム検出しgroupmodで同期する
+# （PostgreSQL/Redis公式イメージと同じパターン）
+RUN groupadd -g 999 docker 2>/dev/null || true \
     && usermod -aG docker appuser 2>/dev/null || true
 
 # 作業ディレクトリの設定
@@ -66,8 +67,8 @@ RUN mkdir -p /var/lib/aiagent/workspaces && chown -R appuser:appuser /var/lib/ai
 # ワークスペースSocket用ディレクトリの作成
 RUN mkdir -p /var/run/workspace-sockets && chown appuser:appuser /var/run/workspace-sockets
 
-# ユーザー切り替え
-USER appuser
+# NOTE: USER appuserは設定しない。entrypoint.shでrootとしてソケットディレクトリの
+# 権限を修正した後、gosuでappuserに切り替えてアプリケーションを起動する。
 
 # 環境変数の設定
 ENV PYTHONPATH=/app
@@ -92,13 +93,9 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--worker
 # ==========================================
 FROM production AS development
 
-USER root
-
 # 開発用依存パッケージをインストール
 COPY requirements.txt requirements-dev.txt /tmp/
 RUN pip install --no-cache-dir -r /tmp/requirements-dev.txt
-
-USER appuser
 
 # 開発用のコマンド（auto-reload有効）
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
