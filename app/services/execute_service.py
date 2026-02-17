@@ -235,6 +235,21 @@ class ExecuteService:
 
                 yield event
 
+            # ストリーム完了後、コンテナ情報を最新に更新
+            # クラッシュ復旧時は orchestrator.execute() 内で新コンテナに
+            # 切り替わっているため、後続処理が破棄済みコンテナを操作するのを防ぐ
+            try:
+                container_info = await self.orchestrator.get_or_create(
+                    request.conversation_id
+                )
+                container_id = container_info.id
+            except Exception as e:
+                logger.warning(
+                    "コンテナ情報再取得失敗（後続処理は旧情報で続行）",
+                    conversation_id=conversation_id,
+                    error=str(e),
+                )
+
             # バックグラウンド同期タスクの完了待ち（最大5秒）
             if background_sync_tasks:
                 await asyncio.wait(background_sync_tasks, timeout=5.0)
