@@ -40,10 +40,11 @@ class ContainerLifecycleManager:
         socket_base = Path(self._settings.workspace_socket_base_path) / container_id
         socket_base.mkdir(parents=True, exist_ok=True)
 
-        # ソケットディレクトリの権限を設定
-        # コンテナ内appuser (UID 1000) および userns-remap時のremappedユーザーがアクセスできるよう設定
+        # ソケットディレクトリの権限設定
+        # バックエンド (UID 1000) が作成 → ワークスペースコンテナも UID 1000 (config.py L89)
+        # 同一UIDのため 0o755 で十分
         import os
-        os.chmod(socket_base, 0o777)
+        os.chmod(socket_base, 0o755)
 
         # ソケットパス: バックエンドコンテナ内から見たパス
         agent_socket = str(socket_base / "agent.sock")

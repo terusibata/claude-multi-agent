@@ -36,10 +36,10 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
 # 非rootユーザーの作成
 RUN useradd -m -u 1000 appuser
 
-# Docker Socket アクセス用グループ設定
-# ホスト側のdocker GIDに合わせてランタイム時にgroup_addで追加
-ARG DOCKER_GID=999
-RUN groupadd -g ${DOCKER_GID} docker 2>/dev/null || true \
+# Docker Socket アクセス用プレースホルダーグループ
+# 実際のホスト側GIDはentrypoint.shでランタイム検出しgroupmodで同期する
+# （PostgreSQL/Redis公式イメージと同じパターン）
+RUN groupadd -g 999 docker 2>/dev/null || true \
     && usermod -aG docker appuser 2>/dev/null || true
 
 # 作業ディレクトリの設定

@@ -16,7 +16,8 @@ x-backend-base: &backend-base
     redis:
       condition: service_healthy
   restart: unless-stopped
-  # Docker Socketアクセスに必要
+  # Docker Socket GID: entrypoint.shがランタイムで自動検出・同期する。
+  # group_addはPID 1プロセスへの補助的な付与（defense-in-depth）。
   group_add:
     - ${DOCKER_GID:-999}
 
