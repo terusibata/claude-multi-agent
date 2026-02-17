@@ -25,6 +25,7 @@ FROM python:3.11-slim AS production
 # 実行時に必要な最小限のパッケージのみインストール
 RUN apt-get update && apt-get install -y \
     curl \
+    gosu \
     && rm -rf /var/lib/apt/lists/*
 
 # Node.js のインストール（Claude Agent SDKに必要）
@@ -66,8 +67,8 @@ RUN mkdir -p /var/lib/aiagent/workspaces && chown -R appuser:appuser /var/lib/ai
 # ワークスペースSocket用ディレクトリの作成
 RUN mkdir -p /var/run/workspace-sockets && chown appuser:appuser /var/run/workspace-sockets
 
-# ユーザー切り替え
-USER appuser
+# NOTE: USER appuserは設定しない。entrypoint.shでrootとしてソケットディレクトリの
+# 権限を修正した後、gosuでappuserに切り替えてアプリケーションを起動する。
 
 # 環境変数の設定
 ENV PYTHONPATH=/app
@@ -92,13 +93,9 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--worker
 # ==========================================
 FROM production AS development
 
-USER root
-
 # 開発用依存パッケージをインストール
 COPY requirements.txt requirements-dev.txt /tmp/
 RUN pip install --no-cache-dir -r /tmp/requirements-dev.txt
-
-USER appuser
 
 # 開発用のコマンド（auto-reload有効）
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
