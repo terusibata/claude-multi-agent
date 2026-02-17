@@ -225,6 +225,15 @@ class SkillS3Backup:
                 relative = key[len(self.prefix) :].lstrip("/")
                 local_path = base_path / relative
 
+                # パストラバーサル防止: 解決パスがbase_path配下であることを検証
+                resolved = local_path.resolve()
+                if not str(resolved).startswith(str(base_path.resolve()) + "/"):
+                    logger.warning(
+                        "S3キーがパストラバーサルを含むためスキップ",
+                        key=key,
+                    )
+                    continue
+
                 # ダウンロード
                 response = await asyncio.to_thread(
                     self.client.get_object,
