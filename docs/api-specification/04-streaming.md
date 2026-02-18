@@ -407,7 +407,7 @@ interface SubagentEndEvent {
 interface ProgressEvent {
   seq: number;
   timestamp: string;
-  type: "generating" | "tool";               // 進捗タイプ（※thinkingは現在無効）
+  type: "setup" | "generating" | "tool";     // 進捗タイプ（※thinkingは現在無効）
   message: string;                           // 進捗メッセージ
   tool_use_id?: string;                      // ツール使用ID（tool タイプ時）
   tool_name?: string;                        // ツール名
@@ -420,12 +420,26 @@ interface ProgressEvent {
 
 | type | 説明 | 追加フィールド | 備考 |
 |------|------|---------------|------|
+| `setup` | ワークスペース準備中 | なし | ストリーム開始直後〜エージェント起動前に送信 |
 | `generating` | テキスト生成中 | なし | |
 | `tool` | ツール実行中 | `tool_use_id`, `tool_name`, `tool_status` | |
 | `thinking` | AI思考中 | なし | ※Extended Thinking有効時のみ（現在無効） |
 
+> **注**: `type: "setup"` はワークスペースの準備・ファイル同期・エージェント起動の各フェーズで送信されます。
+> クライアントはこのイベントを受信して、ユーザーにセットアップの進捗を表示できます。
+
 > **注**: `type: "thinking"` はExtended Thinkingが有効化された場合のみ送信されます。
-> 現在はExtended Thinkingが無効のため、`generating` と `tool` のみが送信されます。
+> 現在はExtended Thinkingが無効のため、`setup`、`generating`、`tool` のみが送信されます。
+
+**setup タイプの例:**
+```json
+{
+  "seq": 1,
+  "timestamp": "2024-01-15T10:30:00.123Z",
+  "type": "setup",
+  "message": "ワークスペースを準備しています..."
+}
+```
 
 **generating タイプの例:**
 ```json
@@ -935,6 +949,9 @@ function useStreaming(tenantId: string, conversationId: string): UseStreamingRes
 ┌─────────────────────────────────────────────────────────────────┐
 │                    SSEイベント処理フロー                          │
 ├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  progress(setup) ► ワークスペース準備の進捗を表示                │
+│                    (実行開始、コンテナ準備、ファイル同期、起動)   │
 │                                                                 │
 │  init ─────────► セッション情報を保存                            │
 │                  (session_id, tools, model)                     │
