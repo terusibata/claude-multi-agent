@@ -39,11 +39,11 @@ _SENSITIVE_DICT_KEYS = re.compile(
 )
 
 
-def sanitize_headers(headers: dict[str, str]) -> dict[str, str]:
+def sanitize_headers(headers: dict[str, str] | None) -> dict[str, str] | None:
     """認証ヘッダーの値をマスクする
 
     Args:
-        headers: HTTPヘッダー辞書
+        headers: HTTPヘッダー辞書（Noneの場合はそのまま返す）
 
     Returns:
         マスク済みヘッダー辞書（元のdictは変更しない）
@@ -107,12 +107,7 @@ def sanitize_log_data(data: Any, *, _depth: int = 0) -> Any:
         result = {}
         for key, value in data.items():
             if isinstance(key, str) and _SENSITIVE_DICT_KEYS.search(key):
-                if isinstance(value, str):
-                    result[key] = _MASK
-                elif isinstance(value, dict):
-                    result[key] = _MASK
-                else:
-                    result[key] = _MASK
+                result[key] = _MASK
             else:
                 result[key] = sanitize_log_data(value, _depth=_depth + 1)
         return result

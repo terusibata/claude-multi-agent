@@ -569,27 +569,13 @@ class ExecuteService:
             original_base_url = config.get("base_url", "")
             headers = config.get("headers", {})
 
-            if original_base_url and headers:
-                # ヘッダーをプロキシルールに登録
+            if original_base_url:
+                # プロキシルールに登録（ヘッダー有無問わずプロキシ経由に統一）
                 proxy_rules[server_name] = McpHeaderRule(
                     real_base_url=original_base_url,
                     headers=headers,
                 )
                 # コンテナ用設定: base_urlをプロキシローカルに書き換え、ヘッダーなし
-                container_configs.append(
-                    {
-                        "server_name": server_name,
-                        "openapi_spec": config["openapi_spec"],
-                        "base_url": f"http://127.0.0.1:8080/mcp/{server_name}",
-                    }
-                )
-            elif original_base_url:
-                # ヘッダーなしのMCPサーバー（認証不要）
-                # プロキシルールにも登録してドメインホワイトリスト制御を活用
-                proxy_rules[server_name] = McpHeaderRule(
-                    real_base_url=original_base_url,
-                    headers={},
-                )
                 container_configs.append(
                     {
                         "server_name": server_name,

@@ -495,12 +495,13 @@ class CredentialInjectionProxy:
             status_text = "OK" if resp.status_code < 400 else "Error"
             writer.write(f"HTTP/1.1 {resp.status_code} {status_text}\r\n".encode())
 
-            resp_headers = dict(resp.headers)
-            for k, v in resp_headers.items():
-                if k.lower() not in ("transfer-encoding", "connection"):
-                    writer.write(f"{k}: {v}\r\n".encode())
-
             resp_body = resp.content
+            for k, v in resp.headers.multi_items():
+                lower_key = k.lower()
+                if lower_key in ("transfer-encoding", "connection", "content-length"):
+                    continue
+                writer.write(f"{k}: {v}\r\n".encode())
+
             writer.write(f"Content-Length: {len(resp_body)}\r\n".encode())
             writer.write(b"\r\n")
             writer.write(resp_body)
