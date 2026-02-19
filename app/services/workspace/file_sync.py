@@ -124,33 +124,45 @@ class WorkspaceFileSync:
         if not files:
             return 0
 
+        # 並列同期: Semaphoreで同時実行数を制限し、asyncio.gatherで並列実行
+        max_concurrent = 5
+        sem = asyncio.Semaphore(max_concurrent)
         synced = 0
-        for file_record in files:
-            # 防御的チェック: 予約パスがDBに存在していた場合はスキップ
+
+        async def _sync_single_file(file_record: ConversationFile) -> bool:
+            """単一ファイルのS3ダウンロード→コンテナ書き込み"""
             if self._is_reserved_path(file_record.file_path):
                 logger.warning(
                     "予約パスのファイルレコード検出（スキップ）",
                     file_path=file_record.file_path,
                     conversation_id=conversation_id,
                 )
-                continue
-            try:
-                data, _ = await self.s3.download(
-                    tenant_id, conversation_id, file_record.file_path
-                )
-                await self._write_to_container(
-                    container_id,
-                    f"/workspace/{file_record.file_path}",
-                    data,
-                )
-                synced += 1
-            except Exception as e:
-                logger.error(
-                    "ファイル同期エラー（S3→コンテナ）",
-                    file_path=file_record.file_path,
-                    container_id=container_id,
-                    error=str(e),
-                )
+                return False
+            async with sem:
+                try:
+                    data, _ = await self.s3.download(
+                        tenant_id, conversation_id, file_record.file_path
+                    )
+                    await self._write_to_container(
+                        container_id,
+                        f"/workspace/{file_record.file_path}",
+                        data,
+                    )
+                    return True
+                except Exception as e:
+                    logger.error(
+                        "ファイル同期エラー（S3→コンテナ）",
+                        file_path=file_record.file_path,
+                        container_id=container_id,
+                        error=str(e),
+                    )
+                    return False
+
+        results = await asyncio.gather(
+            *[_sync_single_file(f) for f in files],
+            return_exceptions=True,
+        )
+        synced = sum(1 for r in results if r is True)
 
         logger.info(
             "S3→コンテナ同期完了",
@@ -207,25 +219,39 @@ class WorkspaceFileSync:
         if not file_paths:
             return 0
 
+        # 並列同期: Semaphoreで同時実行数を制限し、asyncio.gatherで並列実行
+        max_concurrent = 5
+        sem = asyncio.Semaphore(max_concurrent)
         synced = 0
-        for file_path in file_paths:
-            try:
-                data = await self._read_from_container(
-                    container_id, f"/workspace/{file_path}"
-                )
-                if data is not None:
-                    await self.s3.upload(
-                        tenant_id, conversation_id, file_path, data
+
+        async def _sync_single_file(file_path: str) -> bool:
+            """単一ファイルのコンテナ読み出し→S3アップロード"""
+            async with sem:
+                try:
+                    data = await self._read_from_container(
+                        container_id, f"/workspace/{file_path}"
                     )
-                    await self._upsert_file_record(conversation_id, file_path, len(data))
-                    synced += 1
-            except Exception as e:
-                logger.error(
-                    "ファイル同期エラー（コンテナ→S3）",
-                    file_path=file_path,
-                    container_id=container_id,
-                    error=str(e),
-                )
+                    if data is not None:
+                        await self.s3.upload(
+                            tenant_id, conversation_id, file_path, data
+                        )
+                        await self._upsert_file_record(conversation_id, file_path, len(data))
+                        return True
+                    return False
+                except Exception as e:
+                    logger.error(
+                        "ファイル同期エラー（コンテナ→S3）",
+                        file_path=file_path,
+                        container_id=container_id,
+                        error=str(e),
+                    )
+                    return False
+
+        results = await asyncio.gather(
+            *[_sync_single_file(fp) for fp in file_paths],
+            return_exceptions=True,
+        )
+        synced = sum(1 for r in results if r is True)
 
         logger.info(
             "コンテナ→S3同期完了",
