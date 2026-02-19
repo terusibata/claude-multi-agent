@@ -13,6 +13,7 @@ Unix Socket経由でSSEイベントを中継する。
   6. コンテナ → S3へファイル同期
   7. DB記録（使用量、メッセージログ、タイトル生成）
 """
+
 import asyncio
 import json
 import re
@@ -35,6 +36,7 @@ from app.models.tenant import Tenant
 from app.schemas.execute import ExecuteRequest
 from app.services.container.models import ContainerInfo
 from app.services.container.orchestrator import ContainerOrchestrator
+from app.services.proxy.credential_proxy import McpHeaderRule
 from app.services.workspace.file_sync import WorkspaceFileSync
 from app.services.workspace.s3_storage import S3StorageBackend
 from app.services.conversation_service import ConversationService
@@ -61,15 +63,25 @@ from app.utils.streaming import (
     format_tool_result_event,
 )
 from app.utils.progress_messages import get_initial_message
+from app.utils.sensitive_filter import sanitize_log_data
 
 logger = structlog.get_logger(__name__)
 
 
 # ファイル操作ツール名のセット（tool_result同期トリガー用）
-_FILE_TOOL_NAMES = frozenset({
-    "write_file", "create_file", "edit_file", "replace_file",
-    "Write", "Edit", "write", "create", "save_file",
-})
+_FILE_TOOL_NAMES = frozenset(
+    {
+        "write_file",
+        "create_file",
+        "edit_file",
+        "replace_file",
+        "Write",
+        "Edit",
+        "write",
+        "create",
+        "save_file",
+    }
+)
 
 # 定期同期のデバウンス間隔（秒）
 _SYNC_DEBOUNCE_SECONDS = 10
@@ -150,7 +162,9 @@ class ExecuteService:
         try:
             lock_token = await lock_manager.acquire(conversation_id)
         except ConversationLockError as e:
-            logger.warning("会話ロック取得失敗", conversation_id=conversation_id, error=str(e))
+            logger.warning(
+                "会話ロック取得失敗", conversation_id=conversation_id, error=str(e)
+            )
             yield format_error_event(
                 seq=seq_counter.next(),
                 error_type="conversation_locked",
@@ -181,7 +195,9 @@ class ExecuteService:
             )
 
             # コンテナ取得/作成（1回だけ実行し、以降はこのinfoを使い回す）
-            container_info = await self.orchestrator.get_or_create(request.conversation_id)
+            container_info = await self.orchestrator.get_or_create(
+                request.conversation_id
+            )
             container_id = container_info.id
 
             audit_agent_execution_started(
@@ -207,8 +223,10 @@ class ExecuteService:
             if conversation and conversation.session_id and self._file_sync:
                 try:
                     await self._file_sync.restore_session_file(
-                        request.tenant_id, request.conversation_id,
-                        container_info.id, conversation.session_id,
+                        request.tenant_id,
+                        request.conversation_id,
+                        container_info.id,
+                        conversation.session_id,
                     )
                 except Exception as e:
                     logger.warning("セッションファイル復元エラー（続行）", error=str(e))
@@ -225,11 +243,16 @@ class ExecuteService:
             last_sync_time = 0.0
             last_lock_extend_time = time.time()
             background_sync_tasks: set[asyncio.Task] = set()
-            external_file_paths: list[str] = []  # /workspace外に書かれたファイルパスを収集
+            external_file_paths: list[
+                str
+            ] = []  # /workspace外に書かれたファイルパスを収集
             assistant_events: list[dict] = []  # アシスタントメッセージ永続化用
 
             async for event in self._stream_from_container(
-                request, model, seq_counter, container_info,
+                request,
+                model,
+                seq_counter,
+                container_info,
             ):
                 # done イベントからメタデータ（usage/cost）を抽出
                 # SDK側の "done" イベントを _translate_event() でホスト形式に変換
@@ -238,15 +261,20 @@ class ExecuteService:
 
                     # done前にcontext_statusイベントを送信（仕様準拠）
                     ctx_event = await self._build_context_status_event(
-                        request.conversation_id, request.tenant_id,
-                        model, done_data, seq_counter,
+                        request.conversation_id,
+                        request.tenant_id,
+                        model,
+                        done_data,
+                        seq_counter,
                     )
                     if ctx_event:
                         yield ctx_event
 
                     # done前にtitleイベントを送信（初回メッセージのみ）
                     title_event = await self._generate_title_if_needed(
-                        request, assistant_events, seq_counter,
+                        request,
+                        assistant_events,
+                        seq_counter,
                     )
                     if title_event:
                         yield title_event
@@ -257,9 +285,15 @@ class ExecuteService:
                 # 長時間実行時のロックTTL延長（60秒間隔）
                 if lock_token and (time.time() - last_lock_extend_time) > 60:
                     try:
-                        await lock_manager.extend(conversation_id, lock_token, additional_ttl=600)
+                        await lock_manager.extend(
+                            conversation_id, lock_token, additional_ttl=600
+                        )
                     except Exception as ext_err:
-                        logger.warning("ロック延長失敗", conversation_id=conversation_id, error=str(ext_err))
+                        logger.warning(
+                            "ロック延長失敗",
+                            conversation_id=conversation_id,
+                            error=str(ext_err),
+                        )
                     last_lock_extend_time = time.time()
 
                 # tool_result イベント検出時に非同期ファイル同期をトリガー
@@ -340,11 +374,15 @@ class ExecuteService:
                     if self._file_sync:
                         try:
                             await self._file_sync.save_session_file(
-                                request.tenant_id, request.conversation_id,
-                                container_id, new_session_id,
+                                request.tenant_id,
+                                request.conversation_id,
+                                container_id,
+                                new_session_id,
                             )
                         except Exception as e:
-                            logger.warning("セッションファイル保存エラー（続行）", error=str(e))
+                            logger.warning(
+                                "セッションファイル保存エラー（続行）", error=str(e)
+                            )
 
             # アシスタントメッセージをDBに保存（ストリーム完了後に一括）
             if assistant_events:
@@ -399,6 +437,12 @@ class ExecuteService:
         # MCP サーバー設定の構築（テナントDB → シリアライズ）
         mcp_server_configs = await self._build_mcp_server_configs(request)
 
+        # MCPトークンのプロキシ側注入:
+        # コンテナにトークンを渡さず、プロキシ側で認証ヘッダーを注入する
+        container_mcp_configs = self._extract_mcp_headers_to_proxy(
+            mcp_server_configs, container_info.id
+        )
+
         # スキルファイル同期
         skills_synced = await self._sync_skills_to_container(
             request.tenant_id, container_info.id
@@ -419,7 +463,9 @@ class ExecuteService:
             "allowed_tools": allowed_tools,
             "cwd": "/workspace",
             "setting_sources": ["project"] if skills_synced else None,
-            "mcp_server_configs": mcp_server_configs if mcp_server_configs else None,
+            "mcp_server_configs": container_mcp_configs
+            if container_mcp_configs
+            else None,
         }
 
         # 会話のセッションIDを取得
@@ -431,7 +477,8 @@ class ExecuteService:
 
         buffer = ""
         async for chunk in self.orchestrator.execute(
-            request.conversation_id, container_request,
+            request.conversation_id,
+            container_request,
             container_info=container_info,
         ):
             decoded = chunk.decode("utf-8", errors="replace")
@@ -443,15 +490,14 @@ class ExecuteService:
                 raw_event = self._parse_sse_event(event_str)
                 if raw_event:
                     translated_events = self._translate_event(
-                        raw_event, seq_counter,
+                        raw_event,
+                        seq_counter,
                         conversation_id=request.conversation_id,
                     )
                     for evt in translated_events:
                         yield evt
 
-    async def _build_mcp_server_configs(
-        self, request: ExecuteRequest
-    ) -> list[dict]:
+    async def _build_mcp_server_configs(self, request: ExecuteRequest) -> list[dict]:
         """テナントのアクティブ MCP サーバー設定をシリアライズしてコンテナに渡す形式に変換"""
         try:
             mcp_servers, _ = await self.mcp_server_service.get_all_by_tenant(
@@ -466,21 +512,19 @@ class ExecuteService:
             if not server.openapi_spec:
                 continue
             # headers_template のトークン解決
-            headers = self._resolve_headers(
-                server.headers_template, request.tokens
+            headers = self._resolve_headers(server.headers_template, request.tokens)
+            configs.append(
+                {
+                    "server_name": server.name,
+                    "openapi_spec": server.openapi_spec,
+                    "base_url": server.openapi_base_url,
+                    "headers": headers,
+                }
             )
-            configs.append({
-                "server_name": server.name,
-                "openapi_spec": server.openapi_spec,
-                "base_url": server.openapi_base_url,
-                "headers": headers,
-            })
         return configs
 
     @staticmethod
-    def _resolve_headers(
-        template: dict | None, tokens: dict[str, str] | None
-    ) -> dict:
+    def _resolve_headers(template: dict | None, tokens: dict[str, str] | None) -> dict:
         """headers_template の ${token} プレースホルダをトークン値で置換"""
         if not template:
             return {}
@@ -495,6 +539,79 @@ class ExecuteService:
             else:
                 resolved[key] = value
         return resolved
+
+    def _extract_mcp_headers_to_proxy(
+        self,
+        mcp_server_configs: list[dict],
+        container_id: str,
+    ) -> list[dict]:
+        """MCPサーバー設定からヘッダーを抽出してプロキシに登録し、コンテナ用設定を返す
+
+        トークンを含むヘッダーはプロキシ側に保持し、コンテナには渡さない。
+        コンテナに渡すMCP設定ではbase_urlをプロキシローカルに書き換える。
+
+        Args:
+            mcp_server_configs: ヘッダー解決済みのMCPサーバー設定リスト
+            container_id: コンテナID（プロキシルール登録用）
+
+        Returns:
+            コンテナ用MCPサーバー設定リスト（ヘッダーなし、base_urlはプロキシローカル）
+        """
+        if not mcp_server_configs:
+            return []
+
+        # プロキシに登録するMCPヘッダールールを構築
+        proxy_rules: dict[str, McpHeaderRule] = {}
+        container_configs: list[dict] = []
+
+        for config in mcp_server_configs:
+            server_name = config["server_name"]
+            original_base_url = config.get("base_url", "")
+            headers = config.get("headers", {})
+
+            if original_base_url and headers:
+                # ヘッダーをプロキシルールに登録
+                proxy_rules[server_name] = McpHeaderRule(
+                    real_base_url=original_base_url,
+                    headers=headers,
+                )
+                # コンテナ用設定: base_urlをプロキシローカルに書き換え、ヘッダーなし
+                container_configs.append(
+                    {
+                        "server_name": server_name,
+                        "openapi_spec": config["openapi_spec"],
+                        "base_url": f"http://127.0.0.1:8080/mcp/{server_name}",
+                    }
+                )
+            elif original_base_url:
+                # ヘッダーなしのMCPサーバー（認証不要）
+                # プロキシルールにも登録してドメインホワイトリスト制御を活用
+                proxy_rules[server_name] = McpHeaderRule(
+                    real_base_url=original_base_url,
+                    headers={},
+                )
+                container_configs.append(
+                    {
+                        "server_name": server_name,
+                        "openapi_spec": config["openapi_spec"],
+                        "base_url": f"http://127.0.0.1:8080/mcp/{server_name}",
+                    }
+                )
+            else:
+                # base_url なし（無効な設定）→ そのまま渡す
+                container_configs.append(
+                    {
+                        "server_name": server_name,
+                        "openapi_spec": config["openapi_spec"],
+                        "base_url": "",
+                    }
+                )
+
+        # プロキシにMCPヘッダールールを登録
+        if proxy_rules:
+            self.orchestrator.update_mcp_header_rules(container_id, proxy_rules)
+
+        return container_configs
 
     def _compute_allowed_tools(
         self,
@@ -547,9 +664,7 @@ class ExecuteService:
                     )
                     dest = f"/workspace/{relative}"
                     data = file_path.read_bytes()
-                    await self._write_skill_to_container(
-                        container_id, dest, data
-                    )
+                    await self._write_skill_to_container(container_id, dest, data)
                     synced = True
 
             return synced
@@ -581,7 +696,7 @@ class ExecuteService:
         tmp_path = f"/tmp/_skill_xfer_{filename}"
 
         for i in range(0, len(encoded), chunk_size):
-            chunk = encoded[i:i + chunk_size]
+            chunk = encoded[i : i + chunk_size]
             op = ">>" if i > 0 else ">"
             exit_code, _ = await self.orchestrator.lifecycle.exec_in_container(
                 container_id,
@@ -598,7 +713,11 @@ class ExecuteService:
         # base64 デコード → 最終ファイルに書き込み → 一時ファイル削除
         exit_code, _ = await self.orchestrator.lifecycle.exec_in_container(
             container_id,
-            ["sh", "-c", f"base64 -d < '{tmp_path}' > '{dest_path}' && rm -f '{tmp_path}'"],
+            [
+                "sh",
+                "-c",
+                f"base64 -d < '{tmp_path}' > '{dest_path}' && rm -f '{tmp_path}'",
+            ],
         )
         if exit_code != 0:
             await self.orchestrator.lifecycle.exec_in_container(
@@ -608,9 +727,7 @@ class ExecuteService:
                 f"スキルファイルのコンテナ書き込み失敗(decode): {dest_path}"
             )
 
-    def _build_system_prompt(
-        self, request: ExecuteRequest, skills_synced: bool
-    ) -> str:
+    def _build_system_prompt(self, request: ExecuteRequest, skills_synced: bool) -> str:
         """コンテナに渡すシステムプロンプトを構築"""
         parts = [
             "あなたのワークスペースは /workspace です。"
@@ -621,7 +738,7 @@ class ExecuteService:
             "## ファイル作成ルール",
             "- **相対パスのみ使用**（例: `hello.py`）。絶対パス（/tmp/等）は禁止",
             "- ファイル作成後は `mcp__file-presentation__present_files` で提示",
-            "- file_paths は配列で指定: `[\"hello.py\"]`",
+            '- file_paths は配列で指定: `["hello.py"]`',
             "- **サブエージェント（Task）がファイルを作成した場合も、その完了後に必ず `mcp__file-presentation__present_files` を呼び出してください**",
             "",
             "## ファイル読み込み",
@@ -635,13 +752,25 @@ class ExecuteService:
             "※ テキスト/CSV/JSONファイルは従来のReadツールも使用可能",
         ]
 
-        # preferred_skills 指示
+        # preferred_skills 指示（インジェクション防止のためバリデーション付き）
         if request.preferred_skills:
-            parts.append("")
-            parts.append("## 優先スキル")
-            parts.append("以下のスキルが利用可能です。関連するタスクには優先的に使用してください:")
+            valid_skills = []
             for skill_name in request.preferred_skills:
-                parts.append(f"- {skill_name}")
+                if re.match(r"^[a-zA-Z0-9_\-\u3040-\u9FFF]+$", skill_name):
+                    valid_skills.append(skill_name)
+                else:
+                    logger.warning(
+                        "不正なスキル名を除外",
+                        skill_name=skill_name[:50],
+                    )
+            if valid_skills:
+                parts.append("")
+                parts.append("## 優先スキル")
+                parts.append(
+                    "以下のスキルが利用可能です。関連するタスクには優先的に使用してください:"
+                )
+                for skill_name in valid_skills:
+                    parts.append(f"- {skill_name}")
 
         return "\n".join(parts)
 
@@ -666,7 +795,9 @@ class ExecuteService:
 
         return {"event": event_type, "data": data}
 
-    async def _sync_files_to_container(self, request: ExecuteRequest, container_info) -> None:
+    async def _sync_files_to_container(
+        self, request: ExecuteRequest, container_info
+    ) -> None:
         """S3からコンテナへファイルを同期"""
         if not self._file_sync:
             logger.debug("S3未設定のためファイル同期スキップ（to_container）")
@@ -678,7 +809,9 @@ class ExecuteService:
         except Exception as e:
             logger.error("S3→コンテナ同期エラー", error=str(e))
 
-    async def _sync_files_from_container(self, request: ExecuteRequest, container_info) -> None:
+    async def _sync_files_from_container(
+        self, request: ExecuteRequest, container_info
+    ) -> None:
         """コンテナからS3へファイルを同期"""
         if not self._file_sync:
             logger.debug("S3未設定のためファイル同期スキップ（from_container）")
@@ -692,9 +825,10 @@ class ExecuteService:
 
     async def _save_user_message(self, request: ExecuteRequest) -> None:
         """ユーザーメッセージをDBに保存"""
-        message_seq = await self.message_log_service.get_max_message_seq(
-            request.conversation_id
-        ) + 1
+        message_seq = (
+            await self.message_log_service.get_max_message_seq(request.conversation_id)
+            + 1
+        )
 
         content = {
             "type": "user",
@@ -716,15 +850,21 @@ class ExecuteService:
     ) -> None:
         """ストリーミングイベントをアシスタントメッセージとしてDBに一括保存"""
         try:
-            message_seq = await self.message_log_service.get_max_message_seq(
-                request.conversation_id
-            ) + 1
+            message_seq = (
+                await self.message_log_service.get_max_message_seq(
+                    request.conversation_id
+                )
+                + 1
+            )
+
+            # センシティブ情報をマスクしてからDB保存（多層防御）
+            sanitized_events = sanitize_log_data(events)
 
             content = {
                 "type": "assistant",
                 "subtype": None,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                "events": events,
+                "events": sanitized_events,
             }
 
             await self.message_log_service.save_message_log(
@@ -769,8 +909,11 @@ class ExecuteService:
 
             # コンテキスト状況を更新
             await self._update_context_status(
-                request.conversation_id, request.tenant_id,
-                model, input_tokens, output_tokens,
+                request.conversation_id,
+                request.tenant_id,
+                model,
+                input_tokens,
+                output_tokens,
             )
         except Exception as e:
             logger.error("使用量記録エラー", error=str(e))
@@ -828,9 +971,12 @@ class ExecuteService:
         )
         accumulated_after = (
             (conversation.estimated_context_tokens or 0) + estimated
-            if conversation else estimated
+            if conversation
+            else estimated
         )
-        usage_percent = (accumulated_after / max_context) * 100 if max_context > 0 else 0
+        usage_percent = (
+            (accumulated_after / max_context) * 100 if max_context > 0 else 0
+        )
         limit_reached = usage_percent >= 95
 
         await self.conversation_service.update_conversation_context_status(
@@ -862,7 +1008,8 @@ class ExecuteService:
             )
             accumulated = (
                 (conversation.estimated_context_tokens or 0) + new_tokens
-                if conversation else new_tokens
+                if conversation
+                else new_tokens
             )
             max_context = model.context_window
             if max_context <= 0:
@@ -873,12 +1020,16 @@ class ExecuteService:
             if usage_percent >= 95:
                 warning_level = "blocked"
                 can_continue = False
-                message = "コンテキスト制限に達しました。新しいチャットを開始してください。"
+                message = (
+                    "コンテキスト制限に達しました。新しいチャットを開始してください。"
+                )
                 recommended_action = "new_chat"
             elif usage_percent >= 85:
                 warning_level = "critical"
                 can_continue = True
-                message = "コンテキストが残りわずかです。次の返信でエラーの可能性があります。"
+                message = (
+                    "コンテキストが残りわずかです。次の返信でエラーの可能性があります。"
+                )
                 recommended_action = "new_chat"
             elif usage_percent >= 70:
                 warning_level = "warning"
@@ -932,7 +1083,10 @@ class ExecuteService:
 
             # Haikuでタイトル生成（同期メソッドをスレッドプールで実行）
             from app.services.aws_config import AWSConfig
-            from app.services.bedrock_client import BedrockChatClient, SimpleChatTitleGenerator
+            from app.services.bedrock_client import (
+                BedrockChatClient,
+                SimpleChatTitleGenerator,
+            )
 
             aws_config = AWSConfig()
             bedrock_client = BedrockChatClient(aws_config)
@@ -981,7 +1135,9 @@ class ExecuteService:
 
         if event_type == "system" and data.get("subtype") == "init":
             # SDK system(init) → 仕様準拠の init イベントに変換
-            init_data = data.get("data", {}) if isinstance(data.get("data"), dict) else data
+            init_data = (
+                data.get("data", {}) if isinstance(data.get("data"), dict) else data
+            )
             tools = list(init_data.get("tools", []))
 
             # MCP サーバーのツール名を追加
@@ -994,13 +1150,15 @@ class ExecuteService:
                     for tool_name in mcp_server.get("tools", []):
                         tools.append(f"mcp__{server_name}__{tool_name}")
 
-            return [format_init_event(
-                seq=seq_counter.next(),
-                session_id=init_data.get("session_id", ""),
-                tools=tools,
-                model=init_data.get("model", ""),
-                conversation_id=conversation_id,
-            )]
+            return [
+                format_init_event(
+                    seq=seq_counter.next(),
+                    session_id=init_data.get("session_id", ""),
+                    tools=tools,
+                    model=init_data.get("model", ""),
+                    conversation_id=conversation_id,
+                )
+            ]
         elif event_type == "text_delta":
             # progress(generating) + assistant
             return [
@@ -1050,26 +1208,32 @@ class ExecuteService:
             ]
         elif event_type == "tool_result":
             # tool_result のみ（結果自体がステータスを示す）
-            return [format_tool_result_event(
-                seq=seq_counter.next(),
-                tool_use_id=data.get("tool_use_id", ""),
-                tool_name=data.get("tool_name", ""),
-                status="error" if data.get("is_error") else "completed",
-                content=data.get("content", ""),
-                is_error=data.get("is_error", False),
-            )]
+            return [
+                format_tool_result_event(
+                    seq=seq_counter.next(),
+                    tool_use_id=data.get("tool_use_id", ""),
+                    tool_name=data.get("tool_name", ""),
+                    status="error" if data.get("is_error") else "completed",
+                    content=data.get("content", ""),
+                    is_error=data.get("is_error", False),
+                )
+            ]
         elif event_type == "done":
-            return [format_done_event(
-                seq=seq_counter.next(),
-                status="error" if data.get("subtype") == "error_during_execution" else "success",
-                result=data.get("result"),
-                errors=None,
-                usage=self._normalize_usage(data.get("usage", {})),
-                cost_usd=str(data.get("cost_usd", "0")),
-                turn_count=data.get("num_turns", 0),
-                duration_ms=data.get("duration_ms", 0),
-                session_id=data.get("session_id"),
-            )]
+            return [
+                format_done_event(
+                    seq=seq_counter.next(),
+                    status="error"
+                    if data.get("subtype") == "error_during_execution"
+                    else "success",
+                    result=data.get("result"),
+                    errors=None,
+                    usage=self._normalize_usage(data.get("usage", {})),
+                    cost_usd=str(data.get("cost_usd", "0")),
+                    turn_count=data.get("num_turns", 0),
+                    duration_ms=data.get("duration_ms", 0),
+                    session_id=data.get("session_id"),
+                )
+            ]
         else:
             # error 等: seq/timestamp を付与してそのまま中継
             return [create_event(event_type, seq_counter.next(), data)]

@@ -45,7 +45,11 @@ from app.services.container.config import (
 from app.services.container.lifecycle import ContainerLifecycleManager
 from app.services.container.models import ContainerInfo, ContainerStatus
 from app.services.container.warm_pool import WarmPoolManager
-from app.services.proxy.credential_proxy import CredentialInjectionProxy, ProxyConfig
+from app.services.proxy.credential_proxy import (
+    CredentialInjectionProxy,
+    McpHeaderRule,
+    ProxyConfig,
+)
 from app.services.proxy.sigv4 import AWSCredentials
 
 logger = structlog.get_logger(__name__)
@@ -355,6 +359,29 @@ class ContainerOrchestrator:
         logger.warning("Proxy再起動", container_id=info.id)
         await self._stop_proxy(info.id)
         await self._start_proxy(info)
+
+    def update_mcp_header_rules(
+        self,
+        container_id: str,
+        rules: dict[str, McpHeaderRule],
+    ) -> None:
+        """コンテナのプロキシにMCPヘッダー注入ルールを設定
+
+        エージェント実行リクエスト毎に呼ばれ、MCPサーバーの認証ヘッダーを
+        プロキシ側に保持する。コンテナにはトークンを渡さない。
+
+        Args:
+            container_id: コンテナID
+            rules: {server_name: McpHeaderRule} のマッピング
+        """
+        proxy = self._proxies.get(container_id)
+        if proxy:
+            proxy.update_mcp_header_rules(rules)
+        else:
+            logger.warning(
+                "MCP ルール設定対象のプロキシが未起動",
+                container_id=container_id,
+            )
 
     async def _get_container_from_redis(self, conversation_id: str) -> ContainerInfo | None:
         """Redisからコンテナ情報を取得"""

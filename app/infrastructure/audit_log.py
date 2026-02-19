@@ -9,7 +9,10 @@
    "event":"container_created","conversation_id":"conv-123","tenant_id":"tenant-456",
    "container_id":"ws-abc","source":"warm_pool","network_mode":"none","duration_ms":1200}
 """
+
 import structlog
+
+from app.utils.sensitive_filter import sanitize_url
 
 audit_logger = structlog.get_logger("audit")
 
@@ -86,7 +89,7 @@ def audit_proxy_request_allowed(
         service=SERVICE_PROXY,
         container_id=container_id,
         method=method,
-        url=url,
+        url=sanitize_url(url),
         status=status,
         duration_ms=duration_ms,
     )
@@ -104,8 +107,29 @@ def audit_proxy_request_blocked(
         service=SERVICE_PROXY,
         container_id=container_id,
         method=method,
-        url=url,
+        url=sanitize_url(url),
         reason=reason,
+    )
+
+
+def audit_mcp_proxy_request(
+    *,
+    server_name: str,
+    method: str,
+    path: str,
+    container_id: str = "",
+    status: int = 0,
+    duration_ms: int = 0,
+) -> None:
+    audit_logger.info(
+        "mcp_proxy_request",
+        service=SERVICE_PROXY,
+        container_id=container_id,
+        server_name=server_name,
+        method=method,
+        path=path,
+        status=status,
+        duration_ms=duration_ms,
     )
 
 
