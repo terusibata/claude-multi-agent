@@ -52,6 +52,17 @@ interface McpServerResponse {
 }
 ```
 
+### McpServerListResponse
+
+```typescript
+interface McpServerListResponse {
+  items: McpServerResponse[];               // MCPサーバーリスト
+  total: number;                            // 総件数
+  limit: number;                            // 取得件数
+  offset: number;                           // オフセット
+}
+```
+
 ---
 
 ## GET /api/tenants/{tenant_id}/mcp-servers
