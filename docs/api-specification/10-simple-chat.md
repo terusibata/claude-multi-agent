@@ -171,7 +171,7 @@ AI応答のテキストが増分で送信されます。
 | `event_type` | string | `"done"` |
 | `title` | string \| null | 自動生成されたタイトル（初回のみ） |
 | `usage` | object | トークン使用情報 |
-| `cost_usd` | string | コスト（USD） |
+| `cost_usd` | number | コスト（USD、Decimal） |
 
 #### error（エラー）
 

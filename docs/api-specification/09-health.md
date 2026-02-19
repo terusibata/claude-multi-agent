@@ -62,6 +62,7 @@ interface ComponentHealth {
 | `database` | **重要** | PostgreSQLデータベース |
 | `redis` | 非重要 | Redisキャッシュ |
 | `s3` | 非重要 | AWS S3ストレージ |
+| `container_system` | 非重要 | コンテナオーケストレーション（Docker） |
 
 重要コンポーネントが`unhealthy`の場合、全体ステータスも`unhealthy`になります。
 

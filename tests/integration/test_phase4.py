@@ -91,15 +91,15 @@ class TestContainerEnvVars:
 class TestDefaultSettings:
     """デフォルト設定のテスト"""
 
-    def test_userns_remap_enabled_by_default(self):
-        """userns_remap_enabled がデフォルトで True であること"""
+    def test_userns_remap_disabled_by_default(self):
+        """userns_remap_enabled がデフォルトで False であること（有効化にはDocker daemon設定が必要）"""
         with patch.dict("os.environ", {}, clear=False):
             from app.config import Settings
             s = Settings(
                 _env_file=None,
                 database_url="postgresql+asyncpg://test:test@localhost/test",
             )
-            assert s.userns_remap_enabled is True
+            assert s.userns_remap_enabled is False
 
     def test_seccomp_profile_path_has_default(self):
         """seccomp_profile_path にデフォルト値が設定されていること"""

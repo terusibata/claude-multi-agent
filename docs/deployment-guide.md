@@ -56,7 +56,7 @@ deployment/
 # app/config.py の関連設定（デフォルト値）
 seccomp_profile_path: str = "deployment/seccomp/workspace-seccomp.json"
 apparmor_profile_name: str = ""  # 本番環境では APPARMOR_PROFILE_NAME=workspace-container を設定
-userns_remap_enabled: bool = True
+userns_remap_enabled: bool = False  # 本番環境では USERNS_REMAP_ENABLED=true を設定
 ```
 
 ---

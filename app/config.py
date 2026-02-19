@@ -163,7 +163,7 @@ class Settings(BaseSettings):
     # セキュリティ強化設定 (Phase 2/5)
     # ============================================
     seccomp_profile_path: str = "deployment/seccomp/workspace-seccomp.json"
-    userns_remap_enabled: bool = True  # userns-remap有効化（Docker daemon設定と連動）
+    userns_remap_enabled: bool = False  # userns-remap有効化（Docker daemon設定と連動）
     apparmor_profile_name: str = ""  # AppArmorプロファイル名（本番: "workspace-container"、要ホスト側ロード）
 
     # ============================================

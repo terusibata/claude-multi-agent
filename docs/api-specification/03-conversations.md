@@ -66,6 +66,17 @@ interface ConversationResponse {
 
 **注意**: `context_limit_reached: true` の会話に対してストリーミング実行を行うと、`context_limit_exceeded`エラーが返されます。フロントエンドは事前にこのフラグをチェックし、ユーザーに新しいチャットを開始するよう促すUIを表示すべきです。
 
+### ConversationListResponse
+
+```typescript
+interface ConversationListResponse {
+  items: ConversationResponse[];  // 会話リスト
+  total: number;                  // 総件数
+  limit: number;                  // 取得件数
+  offset: number;                 // オフセット
+}
+```
+
 ### MessageLogResponse
 
 ```typescript
@@ -108,32 +119,45 @@ interface MessageLogResponse {
 **成功時 (200 OK)**
 
 ```json
-[
-  {
-    "conversation_id": "550e8400-e29b-41d4-a716-446655440000",
-    "session_id": "sess_abc123",
-    "tenant_id": "acme-corp",
-    "user_id": "user-001",
-    "model_id": "claude-sonnet-4",
-    "title": "データ分析についての質問",
-    "status": "active",
-    "workspace_enabled": true,
-    "created_at": "2024-01-15T10:30:00Z",
-    "updated_at": "2024-01-15T11:45:00Z"
-  },
-  {
-    "conversation_id": "660f9500-f39c-52e5-b827-557766550111",
-    "session_id": "sess_def456",
-    "tenant_id": "acme-corp",
-    "user_id": "user-001",
-    "model_id": "claude-sonnet-4",
-    "title": "レポート作成の依頼",
-    "status": "archived",
-    "workspace_enabled": false,
-    "created_at": "2024-01-14T09:00:00Z",
-    "updated_at": "2024-01-14T10:30:00Z"
-  }
-]
+{
+  "items": [
+    {
+      "conversation_id": "550e8400-e29b-41d4-a716-446655440000",
+      "session_id": "sess_abc123",
+      "tenant_id": "acme-corp",
+      "user_id": "user-001",
+      "model_id": "claude-sonnet-4",
+      "title": "データ分析についての質問",
+      "status": "active",
+      "workspace_enabled": true,
+      "total_input_tokens": 1500,
+      "total_output_tokens": 800,
+      "estimated_context_tokens": 2300,
+      "context_limit_reached": false,
+      "created_at": "2024-01-15T10:30:00Z",
+      "updated_at": "2024-01-15T11:45:00Z"
+    },
+    {
+      "conversation_id": "660f9500-f39c-52e5-b827-557766550111",
+      "session_id": "sess_def456",
+      "tenant_id": "acme-corp",
+      "user_id": "user-001",
+      "model_id": "claude-sonnet-4",
+      "title": "レポート作成の依頼",
+      "status": "archived",
+      "workspace_enabled": false,
+      "total_input_tokens": 3200,
+      "total_output_tokens": 1500,
+      "estimated_context_tokens": 4700,
+      "context_limit_reached": false,
+      "created_at": "2024-01-14T09:00:00Z",
+      "updated_at": "2024-01-14T10:30:00Z"
+    }
+  ],
+  "total": 2,
+  "limit": 50,
+  "offset": 0
+}
 ```
 
 **エラー: テナント不存在 (404 Not Found)**

@@ -243,5 +243,8 @@ Layer 8: AppArmor           - ファイルパスベースアクセス制御
 ## 6. 結論
 
 Workspace Container Isolation の全ペネトレーションテストシナリオにおいて、設計通りの防御が機能することを確認した。
-8層の多層防御により、単一レイヤーの突破では攻撃が成立しない設計となっている。
+多層防御により、単一レイヤーの突破では攻撃が成立しない設計となっている。
 本番運用にあたっては、4.2節の推奨追加対策を段階的に導入することを推奨する。
+
+**注意**: userns-remap（Docker daemon設定）とAppArmor（ホスト側プロファイルロード）はデフォルトでは無効です。
+本番環境では `USERNS_REMAP_ENABLED=true` および `APPARMOR_PROFILE_NAME=workspace-container` を設定し、全レイヤーを有効化してください。

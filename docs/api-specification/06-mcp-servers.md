@@ -69,35 +69,42 @@ interface McpServerResponse {
 | パラメータ | 型 | 必須 | デフォルト | 説明 |
 |-----------|-----|------|-----------|------|
 | `status` | string | No | - | ステータスフィルター (`active` / `inactive`) |
+| `limit` | integer | No | 50 | 取得件数（1-100） |
+| `offset` | integer | No | 0 | オフセット |
 
 ### レスポンス
 
 **成功時 (200 OK)**
 
 ```json
-[
-  {
-    "mcp_server_id": "mcp-001",
-    "tenant_id": "acme-corp",
-    "name": "petstore",
-    "display_name": "Pet Store API",
-    "env": null,
-    "headers_template": {
-      "Authorization": "Bearer ${petstoreToken}"
-    },
-    "allowed_tools": ["mcp__petstore__listPets", "mcp__petstore__createPet"],
-    "description": "ペットストアAPIとの連携",
-    "openapi_spec": {
-      "openapi": "3.0.0",
-      "info": { "title": "Petstore", "version": "1.0" },
-      "paths": { ... }
-    },
-    "openapi_base_url": "https://petstore.example.com/api",
-    "status": "active",
-    "created_at": "2024-01-15T10:30:00Z",
-    "updated_at": "2024-01-15T10:30:00Z"
-  }
-]
+{
+  "items": [
+    {
+      "mcp_server_id": "mcp-001",
+      "tenant_id": "acme-corp",
+      "name": "petstore",
+      "display_name": "Pet Store API",
+      "env": null,
+      "headers_template": {
+        "Authorization": "Bearer ${petstoreToken}"
+      },
+      "allowed_tools": ["mcp__petstore__listPets", "mcp__petstore__createPet"],
+      "description": "ペットストアAPIとの連携",
+      "openapi_spec": {
+        "openapi": "3.0.0",
+        "info": { "title": "Petstore", "version": "1.0" },
+        "paths": { ... }
+      },
+      "openapi_base_url": "https://petstore.example.com/api",
+      "status": "active",
+      "created_at": "2024-01-15T10:30:00Z",
+      "updated_at": "2024-01-15T10:30:00Z"
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0
+}
 ```
 
 ### curlの例
