@@ -69,10 +69,10 @@ AWS Bedrock + Claude Agent SDKを利用したマルチテナント対応AIエー
         │          │  │  ├── Skills/MCPツール   │    │
         │          │  │  └── /workspace (作業)  │    │
         │          │  │                       │    │
-        │          │  │  セキュリティ: 8層防御    │    │
+        │          │  │  セキュリティ: 多層防御    │    │
         │          │  │  (network:none,         │    │
-        │          │  │   seccomp, AppArmor,   │    │
-        │          │  │   cap-drop ALL, etc.)   │    │
+        │          │  │   seccomp, cap-drop ALL,│    │
+        │          │  │   readonly rootfs, etc.) │    │
         │          │  └───────────────────────┘    │
         ▼          ▼                               ▼
 ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐
@@ -358,7 +358,9 @@ AI実行系API（一般ユーザー向け）のみにレート制限が適用さ
 | GET | `/api/tenants/{tenant_id}/conversations` | 会話一覧取得 |
 | POST | `/api/tenants/{tenant_id}/conversations` | 会話作成 |
 | GET | `/api/tenants/{tenant_id}/conversations/{id}` | 会話詳細取得 |
+| PUT | `/api/tenants/{tenant_id}/conversations/{id}` | 会話更新 |
 | POST | `/api/tenants/{tenant_id}/conversations/{id}/stream` | ストリーミング実行 |
+| POST | `/api/tenants/{tenant_id}/conversations/{id}/archive` | アーカイブ |
 | GET | `/api/tenants/{tenant_id}/conversations/{id}/messages` | メッセージログ取得 |
 | DELETE | `/api/tenants/{tenant_id}/conversations/{id}` | 会話削除 |
 
@@ -388,10 +390,13 @@ AI実行系API（一般ユーザー向け）のみにレート制限が適用さ
 | メソッド | パス | 説明 |
 |---------|------|------|
 | GET | `/api/tenants/{tenant_id}/skills` | Skills一覧取得 |
+| GET | `/api/tenants/{tenant_id}/skills/slash-commands` | スラッシュコマンド一覧 |
 | GET | `/api/tenants/{tenant_id}/skills/{skill_id}` | Skill詳細取得 |
-| POST | `/api/tenants/{tenant_id}/skills` | Skill作成 |
+| POST | `/api/tenants/{tenant_id}/skills` | Skillアップロード |
 | PUT | `/api/tenants/{tenant_id}/skills/{skill_id}` | Skillメタデータ更新 |
 | PUT | `/api/tenants/{tenant_id}/skills/{skill_id}/files` | Skillファイル更新 |
+| GET | `/api/tenants/{tenant_id}/skills/{skill_id}/files` | Skillファイル一覧 |
+| GET | `/api/tenants/{tenant_id}/skills/{skill_id}/files/{path}` | Skillファイル内容取得 |
 | DELETE | `/api/tenants/{tenant_id}/skills/{skill_id}` | Skill削除 |
 
 ### MCPサーバー管理
@@ -399,7 +404,6 @@ AI実行系API（一般ユーザー向け）のみにレート制限が適用さ
 | メソッド | パス | 説明 |
 |---------|------|------|
 | GET | `/api/tenants/{tenant_id}/mcp-servers` | MCPサーバー一覧取得 |
-| GET | `/api/tenants/{tenant_id}/mcp-servers/builtin` | ビルトインサーバー一覧 |
 | GET | `/api/tenants/{tenant_id}/mcp-servers/{server_id}` | MCPサーバー詳細取得 |
 | POST | `/api/tenants/{tenant_id}/mcp-servers` | MCPサーバー登録 |
 | PUT | `/api/tenants/{tenant_id}/mcp-servers/{server_id}` | MCPサーバー更新 |
@@ -487,7 +491,7 @@ AI実行系API（一般ユーザー向け）のみにレート制限が適用さ
 | RATE_LIMIT_REQUESTS | ウィンドウあたりのリクエスト数 | 100 |
 | RATE_LIMIT_PERIOD | ウィンドウサイズ（秒） | 60 |
 | CORS_ORIGINS | CORS許可オリジン（カンマ区切り） | http://localhost:3000,http://localhost:3001 |
-| HSTS_ENABLED | HSTSの有効化 | true |
+| HSTS_ENABLED | HSTSの有効化（HTTPS終端がある環境で有効化） | false |
 
 ### 本番環境の必須設定
 

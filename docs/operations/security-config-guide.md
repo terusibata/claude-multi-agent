@@ -10,15 +10,18 @@ Phase 2 で導入されたセキュリティ強化機能の設定・運用ガイ
 ## セキュリティレイヤー
 
 ```
-L1: --network none（Phase 1）
-L2: Custom seccomp profile（Phase 2）
-L3: --read-only + tmpfs（Phase 1）
-L4: --cap-drop ALL（Phase 1）
-L5: --pids-limit 256（Phase 1）
-L6: --memory / --cpus（Phase 1）
-L7: userns-remap（Phase 2）
-L8: no-new-privileges（Phase 1）
+L1: --network none（Phase 1）          ← デフォルト有効
+L2: Custom seccomp profile（Phase 2）   ← デフォルト有効
+L3: --read-only + tmpfs（Phase 1）      ← デフォルト有効
+L4: --cap-drop ALL（Phase 1）           ← デフォルト有効
+L5: --pids-limit 256（Phase 1）         ← デフォルト有効
+L6: --memory / --cpus（Phase 1）        ← デフォルト有効
+L7: userns-remap（Phase 2）             ← 要Docker daemon設定（デフォルト無効）
+L8: no-new-privileges（Phase 1）        ← デフォルト有効
 ```
+
+**注意**: L7 (userns-remap) はDocker daemonの設定が必要で、デフォルトでは無効です。
+また、AppArmorプロファイルはホスト側でのロードが必要で、デフォルトでは無効（`APPARMOR_PROFILE_NAME=""`）です。
 
 ## userns-remap 設定
 
@@ -70,7 +73,7 @@ ps aux | grep "containerd-shim"
 
 ### 注意事項
 - 有効化すると既存のボリュームへのアクセス権が変わる
-- Socket ディレクトリは `0o777` パーミッションが自動設定される（lifecycle.py）
+- Socket ディレクトリは `0o755` パーミッションが自動設定される（lifecycle.py）
 - `UsernsMode: "host"` の場合はリマップが無効（デフォルト動作）
 
 ## Custom seccomp プロファイル

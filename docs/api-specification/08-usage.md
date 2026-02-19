@@ -42,7 +42,7 @@ interface UsageLogResponse {
   cache_creation_1h_tokens: number;      // 1時間キャッシュ作成トークン数
   cache_read_tokens: number;             // キャッシュ読込トークン数
   total_tokens: number;                  // 合計トークン数
-  cost_usd: string;                      // コスト（USD）
+  cost_usd: string;                      // コスト（USD）※Decimal値を文字列でシリアライズ
   executed_at: string;                   // 実行日時
 }
 ```
@@ -58,7 +58,7 @@ interface UsageSummary {
   cache_creation_5m_tokens: number;      // 5分キャッシュ作成トークン数
   cache_creation_1h_tokens: number;      // 1時間キャッシュ作成トークン数
   cache_read_tokens: number;             // キャッシュ読込トークン数
-  total_cost_usd: string;                // 合計コスト（USD）
+  total_cost_usd: string;                // 合計コスト（USD）※Decimal値を文字列でシリアライズ
   execution_count: number;               // 実行回数
 }
 ```
@@ -70,7 +70,7 @@ interface CostReportResponse {
   tenant_id: string;                     // テナントID
   from_date: string;                     // 開始日時
   to_date: string;                       // 終了日時
-  total_cost_usd: string;                // 合計コスト（USD）
+  total_cost_usd: string;                // 合計コスト（USD）※Decimal値を文字列でシリアライズ
   total_tokens: number;                  // 合計トークン数
   total_executions: number;              // 合計実行回数
   by_model: CostReportItem[];            // モデル別内訳
@@ -86,14 +86,14 @@ interface CostReportItem {
   cache_creation_5m_tokens: number;      // 5分キャッシュ作成トークン数
   cache_creation_1h_tokens: number;      // 1時間キャッシュ作成トークン数
   cache_read_tokens: number;             // キャッシュ読込トークン数
-  cost_usd: string;                      // コスト（USD）
+  cost_usd: string;                      // コスト（USD）※Decimal値を文字列でシリアライズ
   execution_count: number;               // 実行回数
 }
 
 interface UserCostItem {
   user_id: string;                       // ユーザーID
   total_tokens: number;                  // 合計トークン数
-  cost_usd: string;                      // コスト（USD）
+  cost_usd: string;                      // コスト（USD）※Decimal値を文字列でシリアライズ
   execution_count: number;               // 実行回数
 }
 ```

@@ -53,10 +53,10 @@ deployment/
 各セキュリティ層の設定値は `app/config.py` で管理され、`app/services/container/config.py` でコンテナ作成時に適用されます。
 
 ```python
-# app/config.py の関連設定
+# app/config.py の関連設定（デフォルト値）
 seccomp_profile_path: str = "deployment/seccomp/workspace-seccomp.json"
-apparmor_profile_name: str = "workspace-container"
-userns_remap_enabled: bool = True
+apparmor_profile_name: str = ""  # 本番環境では APPARMOR_PROFILE_NAME=workspace-container を設定
+userns_remap_enabled: bool = False  # 本番環境では USERNS_REMAP_ENABLED=true を設定
 ```
 
 ---
