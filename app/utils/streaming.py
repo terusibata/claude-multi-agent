@@ -16,6 +16,7 @@ Server-Sent Events形式でのストリーミング送信
 - context_status: コンテキスト使用状況（警告レベル・継続可否）
 - done: 完了
 - error: エラー
+- container_recovered: コンテナ復旧通知
 
 全てのイベントにシーケンス番号（seq）を付与し、順序保証を提供
 """
@@ -519,6 +520,51 @@ def format_error_event(
         "message": message,
         "recoverable": recoverable,
     })
+
+
+def format_container_recovered_event(
+    seq: int,
+    message: str = "Container recovered",
+    recovered: bool = True,
+    retry_recommended: bool = True,
+) -> dict:
+    """
+    コンテナ復旧通知イベントをフォーマット
+
+    コンテナクラッシュ後の自動復旧が完了したときに送信される。
+    クライアントはこのイベントを受信した場合、リクエストの再送を推奨される。
+
+    Args:
+        seq: シーケンス番号
+        message: 復旧メッセージ
+        recovered: 復旧成功フラグ
+        retry_recommended: リトライ推奨フラグ
+
+    Returns:
+        イベントデータ
+    """
+    return create_event("container_recovered", seq, {
+        "message": message,
+        "recovered": recovered,
+        "retry_recommended": retry_recommended,
+    })
+
+
+def event_to_sse_bytes(event: dict) -> bytes:
+    """
+    内部イベント辞書をSSE形式のバイト列に変換
+
+    orchestrator等、raw bytesでSSEイベントを送信する箇所で使用する。
+
+    Args:
+        event: {"event": <type>, "data": {...}} 形式のイベント
+
+    Returns:
+        b'event: <type>\\ndata: <json>\\n\\n' 形式のバイト列
+    """
+    event_type = event["event"]
+    data_json = json.dumps(event["data"], ensure_ascii=False, default=str)
+    return f"event: {event_type}\ndata: {data_json}\n\n".encode("utf-8")
 
 
 def to_sse_payload(event: dict) -> dict:

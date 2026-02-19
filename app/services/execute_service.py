@@ -52,6 +52,7 @@ from app.utils.streaming import (
     SequenceCounter,
     create_event,
     format_assistant_event,
+    format_container_recovered_event,
     format_context_status_event,
     format_done_event,
     format_error_event,
@@ -1218,6 +1219,15 @@ class ExecuteService:
                     turn_count=data.get("num_turns", 0),
                     duration_ms=data.get("duration_ms", 0),
                     session_id=data.get("session_id"),
+                )
+            ]
+        elif event_type == "container_recovered":
+            return [
+                format_container_recovered_event(
+                    seq=seq_counter.next(),
+                    message=data.get("message", "Container recovered"),
+                    recovered=data.get("recovered", True),
+                    retry_recommended=data.get("retry_recommended", True),
                 )
             ]
         else:

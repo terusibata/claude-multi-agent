@@ -51,6 +51,10 @@ from app.services.proxy.credential_proxy import (
     ProxyConfig,
 )
 from app.services.proxy.sigv4 import AWSCredentials
+from app.utils.streaming import (
+    event_to_sse_bytes,
+    format_container_recovered_event,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -214,7 +218,7 @@ class ContainerOrchestrator:
             yield b"event: error\ndata: {\"message\": \"Container execution failed\"}\n\n"
             try:
                 await self._restart_proxy(info)
-                yield b'event: container_recovered\ndata: {"message": "Container recovered", "recovered": true, "retry_recommended": true}\n\n'
+                yield event_to_sse_bytes(format_container_recovered_event(seq=0))
             except Exception as proxy_err:
                 logger.error("Proxy再起動失敗、コンテナ全体復旧へ", error=str(proxy_err))
                 get_workspace_container_crashes().inc()
@@ -235,7 +239,7 @@ class ContainerOrchestrator:
                         new_container_id=new_info.id,
                         conversation_id=conversation_id,
                     )
-                    yield b'event: container_recovered\ndata: {"message": "Container recovered", "recovered": true, "retry_recommended": true}\n\n'
+                    yield event_to_sse_bytes(format_container_recovered_event(seq=0))
                 except Exception as recovery_err:
                     logger.error("コンテナ復旧失敗", error=str(recovery_err))
 
@@ -272,7 +276,7 @@ class ContainerOrchestrator:
                     new_container_id=new_info.id,
                     conversation_id=conversation_id,
                 )
-                yield b'event: container_recovered\ndata: {"message": "Container recovered", "recovered": true, "retry_recommended": true}\n\n'
+                yield event_to_sse_bytes(format_container_recovered_event(seq=0))
             except Exception as recovery_err:
                 logger.error("コンテナ復旧失敗", error=str(recovery_err))
         else:
