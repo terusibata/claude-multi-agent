@@ -25,7 +25,8 @@
 3. [コスト効率の良い代替技術](#3-コスト効率の良い代替技術)
 4. [AWS上の各選択肢の詳細比較](#4-aws上の各選択肢の詳細比較)
 5. [推奨アーキテクチャ（段階別）](#5-推奨アーキテクチャ段階別)
-6. [参考資料](#6-参考資料)
+6. [本プロジェクトへの適用: ベストプラクティス構成](#6-本プロジェクトへの適用-ベストプラクティス構成)
+7. [参考資料](#7-参考資料)
 
 ---
 
@@ -311,7 +312,201 @@ Spotインスタンスやコンピュートセービングスプラン併用で 
 
 ---
 
-## 6. 参考資料
+## 6. 本プロジェクトへの適用: ベストプラクティス構成
+
+### 6.1 現在のアーキテクチャ評価
+
+本プロジェクトの既存設計を分析した結果、**移行しやすい良い設計になっている**。
+
+```
+ContainerOrchestrator (orchestrator.py)     ← Docker非依存
+  ├── ContainerLifecycleManager (lifecycle.py) ← Docker依存（唯一の結合点）
+  ├── WarmPoolManager (warm_pool.py)           ← lifecycle経由で間接依存
+  ├── Redis (セッション管理)                    ← 実装非依存
+  ├── Unix Socket + httpx (実行通信)            ← 実装非依存
+  └── CredentialInjectionProxy (proxy/)         ← 実装非依存
+```
+
+**Docker固有の結合点はわずか2箇所**:
+- `lifecycle.py` — `aiodocker` API呼出（コンテナの作成/起動/停止/破棄/ヘルスチェック）
+- `config.py:get_container_create_config()` — Docker API設定フォーマット生成
+
+**Unix Socket + HTTP** という通信パターンはDockerにもFirecrackerにもE2Bにも依存しないため、実行層（`orchestrator.py`の`execute()`メソッド）はバックエンド変更時もほぼそのまま使える。
+
+### 6.2 段階的移行が「簡単な」理由
+
+| 移行ステップ | 変更量 | 内容 |
+|-------------|--------|------|
+| **Step 1: gVisor追加** | config.py 2行追加 | `"Runtime": "runsc"` をHostConfigに追加 |
+| **Step 2: SandboxProvider抽出** | 新規Protocol + 既存コード整理 | lifecycle.pyの公開メソッドをProtocol化 |
+| **Step 3: E2B/Firecracker実装** | 新規Provider実装 | Protocol準拠の別実装を追加 |
+
+**Step 1 → Step 2** はリファクタリングのみ（動作変更なし）。
+**Step 2 → Step 3** は新規実装の追加（既存コードの変更なし）。
+
+つまり **既存の動作を壊さずに段階的に移行できる**。
+
+### 6.3 Step 1: gVisor追加（推奨: 今すぐ実施）
+
+**変更箇所: `app/config.py`**
+```python
+# コンテナ隔離設定セクションに追加
+container_runtime: str = ""  # 空文字=デフォルト(runc), "runsc"=gVisor
+```
+
+**変更箇所: `app/services/container/config.py`**
+```python
+def get_container_create_config(container_id: str) -> dict:
+    settings = get_settings()
+    # ... 既存コード ...
+    host_config = {
+        "NetworkMode": "none",
+        # ... 既存設定 ...
+    }
+    # gVisor runtime設定
+    if settings.container_runtime:
+        host_config["Runtime"] = settings.container_runtime
+    return {
+        # ...
+        "HostConfig": host_config,
+    }
+```
+
+**環境変数の設定:**
+```bash
+# .env
+CONTAINER_RUNTIME=runsc
+```
+
+**前提条件**: ホスト（またはDocker-in-Docker環境）にgVisorがインストールされ、
+Dockerデーモンに`runsc`ランタイムが登録されていること。
+
+**効果**:
+- 既存のseccomp + cap drop + network:none + readonly rootfsの上にgVisorが追加
+- syscallレベルの分離が加わり、カーネル脆弱性による脱出リスクを大幅低減
+- パフォーマンスへの影響: CPU演算はゼロ、syscall 2-3倍遅い、ファイルI/O中程度のオーバーヘッド
+- コスト影響: ゼロ（同じEC2インスタンスで動作）
+
+### 6.4 Step 2: SandboxProvider抽象化（推奨: プロダクション前に実施）
+
+lifecycle.pyの公開メソッドをProtocolとして抽出する:
+
+```python
+# app/services/container/provider.py (新規)
+from typing import Protocol, runtime_checkable
+from collections.abc import AsyncIterator
+from app.services.container.models import ContainerInfo
+
+@runtime_checkable
+class SandboxProvider(Protocol):
+    """サンドボックス実行環境の抽象インターフェース"""
+
+    async def create_sandbox(self, sandbox_id: str, conversation_id: str = "") -> ContainerInfo:
+        """サンドボックスを作成・起動"""
+        ...
+
+    async def destroy_sandbox(self, sandbox_id: str, grace_period: int = 30) -> None:
+        """サンドボックスを破棄"""
+        ...
+
+    async def is_healthy(self, sandbox_id: str, check_agent: bool = False) -> bool:
+        """サンドボックスの健全性を確認"""
+        ...
+
+    async def list_sandboxes(self) -> list[dict]:
+        """管理中の全サンドボックスを取得"""
+        ...
+
+    async def wait_for_ready(
+        self, agent_socket: str, timeout: float = 30.0, sandbox_id: str | None = None
+    ) -> bool:
+        """サンドボックス内エージェントの準備完了を待機"""
+        ...
+
+    async def exec_command(self, sandbox_id: str, cmd: list[str]) -> tuple[int, str]:
+        """サンドボックス内でコマンドを実行"""
+        ...
+```
+
+既存の`ContainerLifecycleManager`はこのProtocolを満たすように型アノテーションを追加するだけ（メソッド名のリネームは任意）。`ContainerOrchestrator`の型ヒントを`ContainerLifecycleManager`から`SandboxProvider`に変更。
+
+### 6.5 Step 3: 代替プロバイダー追加（スケール時）
+
+**選択肢A: E2BSandboxProvider**
+```python
+# app/services/container/providers/e2b_provider.py (将来)
+from e2b_code_interpreter import Sandbox
+from app.services.container.provider import SandboxProvider
+
+class E2BSandboxProvider:
+    """E2Bマネージドサンドボックス"""
+
+    async def create_sandbox(self, sandbox_id: str, conversation_id: str = "") -> ContainerInfo:
+        sandbox = Sandbox(template="workspace-base")
+        return ContainerInfo(
+            id=sandbox.id,
+            conversation_id=conversation_id,
+            # E2Bの場合、通信はE2B SDKのWebSocket経由
+            agent_socket="",  # 不使用
+            proxy_socket="",  # 不使用
+        )
+    # ...
+```
+
+**選択肢B: FirecrackerSandboxProvider**（C8i + ネスト仮想化利用時）
+```python
+# app/services/container/providers/firecracker_provider.py (将来)
+class FirecrackerSandboxProvider:
+    """セルフホストFirecracker microVM"""
+    # Firecracker REST API (Unix Socket) を直接使用
+    # rootfsイメージの管理、VMライフサイクル、virtio-netの設定等
+    # ...
+```
+
+**選択肢C: ハイブリッド**
+```python
+# 通常はDocker+gVisor、高セキュリティ要件はE2B/Firecrackerを使い分け
+class HybridSandboxProvider:
+    def __init__(self, default: SandboxProvider, secure: SandboxProvider):
+        self.default = default
+        self.secure = secure
+
+    async def create_sandbox(self, sandbox_id: str, conversation_id: str = "",
+                             isolation_level: str = "standard") -> ContainerInfo:
+        provider = self.secure if isolation_level == "high" else self.default
+        return await provider.create_sandbox(sandbox_id, conversation_id)
+```
+
+### 6.6 ゼロから構築するなら: 最終推奨構成
+
+```
+今すぐ                     3-6ヶ月後                  スケール時
+────────────────────      ────────────────────      ────────────────────
+Docker + gVisor           Docker + gVisor           Firecracker (C8i)
++ 既存セキュリティ設定       + SandboxProvider         + SandboxProvider
++ seccomp/cap drop         抽象化完了                 or E2B Enterprise
++ network:none                                      or ハイブリッド
++ readonly rootfs
+
+コスト: ~$36-60/月          コスト: 同上              コスト: $200-3,000/月
+分離: syscall sandbox      分離: 同上               分離: hardware VM
+変更量: config 2行         変更量: Protocol抽出      変更量: 新Provider実装
+```
+
+**「最初からFirecracker」は不要な理由**:
+1. 現在のDocker+seccomp+cap drop+network:none は既にかなり強い分離
+2. gVisor追加で syscall レベルの分離が加わり、大多数の攻撃ベクトルをカバー
+3. Firecrackerの運用負荷（rootfs管理、カーネル更新、KVM設定）はソロ開発者には過大
+4. SandboxProvider を入れておけば、必要になった時点で Provider を差し替えるだけ
+
+**「最初からE2B」が合理的なケース**:
+1. 信頼できない第三者のコードを本番で実行する場合（マーケットプレイス等）
+2. インフラ管理を完全に外部化したい場合
+3. 150ms起動が必須要件の場合
+
+---
+
+## 7. 参考資料
 
 ### 公式ドキュメント
 - [gVisor ドキュメント](https://gvisor.dev/docs/)
