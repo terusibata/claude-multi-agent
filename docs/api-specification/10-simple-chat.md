@@ -109,9 +109,12 @@ curl -X POST "https://api.example.com/api/tenants/acme-corp/simple-chats/stream"
 
 #### 共通構造
 
+会話ストリーミングAPIと同じ形式です。イベントタイプは SSE の `event:` 行で識別します。
+`data` の中には `event_type` フィールドは含まれません。
+
 ```
 event: <event_type>
-data: {"seq": <number>, "timestamp": "<ISO8601>", "event_type": "<type>", ...}
+data: {"seq": <number>, "timestamp": "<ISO8601>", ...}
 
 ```
 
@@ -133,7 +136,6 @@ AI応答のテキストが増分で送信されます。
 {
   "seq": 1,
   "timestamp": "2024-01-15T10:30:00.123Z",
-  "event_type": "text_delta",
   "content": "こんにちは"
 }
 ```
@@ -142,7 +144,6 @@ AI応答のテキストが増分で送信されます。
 |-----------|-----|------|
 | `seq` | number | シーケンス番号 |
 | `timestamp` | string | イベント発生時刻 |
-| `event_type` | string | `"text_delta"` |
 | `content` | string | テキスト増分 |
 
 #### done（完了）
@@ -153,7 +154,7 @@ AI応答のテキストが増分で送信されます。
 {
   "seq": 10,
   "timestamp": "2024-01-15T10:30:02.456Z",
-  "event_type": "done",
+  "status": "success",
   "title": "挨拶の翻訳",
   "usage": {
     "input_tokens": 50,
@@ -168,7 +169,7 @@ AI応答のテキストが増分で送信されます。
 |-----------|-----|------|
 | `seq` | number | シーケンス番号 |
 | `timestamp` | string | イベント発生時刻 |
-| `event_type` | string | `"done"` |
+| `status` | string | ステータス（`"success"`） |
 | `title` | string \| null | 自動生成されたタイトル（初回のみ） |
 | `usage` | object | トークン使用情報 |
 | `cost_usd` | string | コスト（USD）※Decimal値を文字列でシリアライズ |
@@ -181,9 +182,8 @@ AI応答のテキストが増分で送信されます。
 {
   "seq": 99,
   "timestamp": "2024-01-15T10:30:03.789Z",
-  "event_type": "error",
-  "message": "モデルからの応答がタイムアウトしました",
   "error_type": "TimeoutError",
+  "message": "モデルからの応答がタイムアウトしました",
   "recoverable": false
 }
 ```
@@ -192,9 +192,8 @@ AI応答のテキストが増分で送信されます。
 |-----------|-----|------|
 | `seq` | number | シーケンス番号 |
 | `timestamp` | string | イベント発生時刻 |
-| `event_type` | string | `"error"` |
-| `message` | string | エラーメッセージ |
 | `error_type` | string | エラータイプ |
+| `message` | string | エラーメッセージ |
 | `recoverable` | boolean | 復旧可能かどうか |
 
 ### フロントエンド実装例
@@ -225,22 +224,32 @@ if (chatId) {
 }
 
 // SSEを処理
+// イベントタイプは SSE の "event:" 行で識別する（data内には含まれない）
 const reader = response.body.getReader();
 const decoder = new TextDecoder();
 let fullText = '';
+let buffer = '';
 
 while (true) {
   const { done, value } = await reader.read();
   if (done) break;
 
-  const chunk = decoder.decode(value);
-  const lines = chunk.split('\n');
+  buffer += decoder.decode(value, { stream: true });
+  const parts = buffer.split('\n');
+  buffer = parts.pop() || '';
 
-  for (const line of lines) {
-    if (line.startsWith('data: ')) {
-      const data = JSON.parse(line.slice(6));
+  let currentEvent = '';
+  let currentData = '';
 
-      switch (data.event_type) {
+  for (const line of parts) {
+    if (line.startsWith('event: ')) {
+      currentEvent = line.slice(7);
+    } else if (line.startsWith('data: ')) {
+      currentData = line.slice(6);
+    } else if (line === '' && currentEvent && currentData) {
+      const data = JSON.parse(currentData);
+
+      switch (currentEvent) {
         case 'text_delta':
           fullText += data.content;
           updateUI(fullText);
@@ -255,6 +264,9 @@ while (true) {
           showError(data.message);
           break;
       }
+
+      currentEvent = '';
+      currentData = '';
     }
   }
 }
