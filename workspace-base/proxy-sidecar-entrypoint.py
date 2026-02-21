@@ -10,6 +10,7 @@ import os
 import signal
 import sys
 
+import httpx
 import structlog
 
 structlog.configure(
@@ -58,9 +59,9 @@ async def main() -> None:
     proxy = CredentialInjectionProxy(proxy_config, socket_path)
 
     # TCP リスン版の start
-    proxy._http_client = __import__("httpx").AsyncClient(
-        timeout=__import__("httpx").Timeout(60.0, connect=10.0),
-        limits=__import__("httpx").Limits(
+    proxy._http_client = httpx.AsyncClient(
+        timeout=httpx.Timeout(60.0, connect=10.0),
+        limits=httpx.Limits(
             max_connections=100,
             max_keepalive_connections=20,
             keepalive_expiry=30.0,

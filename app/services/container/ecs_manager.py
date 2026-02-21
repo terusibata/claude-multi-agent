@@ -19,6 +19,7 @@ from redis.asyncio import Redis
 from app.config import get_settings
 from app.services.container.base import ContainerManagerBase
 from app.services.container.config import (
+    REDIS_KEY_CONTAINER,
     REDIS_KEY_CONTAINER_REVERSE,
 )
 from app.services.container.models import ContainerInfo, ContainerStatus
@@ -266,13 +267,14 @@ class EcsContainerManager(ContainerManagerBase):
         task_arns = []
         paginator_token = None
 
+        # task_definition からfamily名を抽出
+        # "workspace-agent" → "workspace-agent"
+        # "workspace-agent:3" → "workspace-agent"
+        # "arn:aws:ecs:...:task-definition/workspace-agent:3" → "workspace-agent"
+        td = self._settings.ecs_task_definition
+        family = td.split("/")[-1].split(":")[0]
+
         while True:
-            # task_definition からfamily名を抽出
-            # "workspace-agent" → "workspace-agent"
-            # "workspace-agent:3" → "workspace-agent"
-            # "arn:aws:ecs:...:task-definition/workspace-agent:3" → "workspace-agent"
-            td = self._settings.ecs_task_definition
-            family = td.split("/")[-1].split(":")[0]
             kwargs: dict = {
                 "cluster": self._settings.ecs_cluster,
                 "family": family,
@@ -441,9 +443,15 @@ class EcsContainerManager(ContainerManagerBase):
 
         try:
             logs_client = await self._get_logs_client()
-            # ECSのデフォルトロググループ名パターン
-            log_group = f"/ecs/{self._settings.ecs_task_definition.split(':')[0].split('/')[-1]}"
-            log_stream = f"workspace-agent/{container_id}/{task_id}"
+            # ECS awslogsドライバーのロググループ/ストリーム命名規則:
+            #   log_group: /ecs/{family}  (awslogs-group で設定)
+            #   log_stream: {prefix}/{container-name}/{task-id}
+            #     - prefix: タスク定義の awslogs-stream-prefix（通常 "ecs"）
+            #     - container-name: タスク定義内のコンテナ名（"workspace-agent"）
+            #     - task-id: ECSタスクUUID
+            family = self._settings.ecs_task_definition.split("/")[-1].split(":")[0]
+            log_group = f"/ecs/{family}"
+            log_stream = f"ecs/workspace-agent/{task_id}"
 
             response = await logs_client.get_log_events(
                 logGroupName=log_group,
@@ -516,7 +524,6 @@ class EcsContainerManager(ContainerManagerBase):
             f"{REDIS_KEY_CONTAINER_REVERSE}:{container_id}"
         )
         if conversation_id:
-            from app.services.container.config import REDIS_KEY_CONTAINER
             data = await self._redis.hgetall(
                 f"{REDIS_KEY_CONTAINER}:{conversation_id}"
             )
