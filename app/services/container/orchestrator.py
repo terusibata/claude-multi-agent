@@ -232,7 +232,7 @@ class ContainerOrchestrator:
             get_workspace_requests_total().inc(status="error")
             container_logs = await self._capture_container_logs(info.id)
             logger.warning(
-                "Proxy接続エラー検出、Proxy再起動試行",
+                "Proxy接続エラー検出、復旧試行",
                 container_id=info.id,
                 conversation_id=conversation_id,
                 agent_socket=agent_socket,
@@ -241,11 +241,10 @@ class ContainerOrchestrator:
                 container_logs=container_logs,
             )
             yield b"event: error\ndata: {\"message\": \"Container execution failed\"}\n\n"
-            try:
-                await self._restart_proxy(info)
-                yield event_to_sse_bytes(format_container_recovered_event(seq=0))
-            except Exception as proxy_err:
-                logger.error("Proxy再起動失敗、コンテナ全体復旧へ", error=str(proxy_err))
+
+            if info.manager_type == "ecs":
+                # ECSモード: ProxyはサイドカーのためProxy単体再起動は不可。
+                # コンテナ全体の復旧に直接進む。
                 get_workspace_container_crashes().inc()
                 audit_container_crashed(
                     container_id=info.id,
@@ -267,6 +266,34 @@ class ContainerOrchestrator:
                     yield event_to_sse_bytes(format_container_recovered_event(seq=0))
                 except Exception as recovery_err:
                     logger.error("コンテナ復旧失敗", error=str(recovery_err))
+            else:
+                # Dockerモード: Proxy単体の再起動を試行
+                try:
+                    await self._restart_proxy(info)
+                    yield event_to_sse_bytes(format_container_recovered_event(seq=0))
+                except Exception as proxy_err:
+                    logger.error("Proxy再起動失敗、コンテナ全体復旧へ", error=str(proxy_err))
+                    get_workspace_container_crashes().inc()
+                    audit_container_crashed(
+                        container_id=info.id,
+                        conversation_id=conversation_id,
+                        error=str(e),
+                    )
+                    try:
+                        old_container_id = info.id
+                        await self._cleanup_container(info)
+                        new_info = await self.get_or_create(conversation_id)
+                        info = new_info
+                        recovered = True
+                        logger.info(
+                            "コンテナ復旧完了",
+                            old_container_id=old_container_id,
+                            new_container_id=new_info.id,
+                            conversation_id=conversation_id,
+                        )
+                        yield event_to_sse_bytes(format_container_recovered_event(seq=0))
+                    except Exception as recovery_err:
+                        logger.error("コンテナ復旧失敗", error=str(recovery_err))
 
         except Exception as e:
             get_workspace_requests_total().inc(status="error")
@@ -334,7 +361,10 @@ class ContainerOrchestrator:
             except Exception as e:
                 logger.warning("Proxy停止エラー", container_id=proxy_id, error=str(e))
 
-        # 全コンテナを破棄
+        # WarmPoolを先にドレイン（list_workspace_containersとの二重破棄を防止）
+        await self.warm_pool.drain()
+
+        # 残存コンテナ（会話に割り当て済みのもの）を破棄
         containers = await self.lifecycle.list_workspace_containers()
         tasks = []
         for c in containers:
@@ -345,8 +375,6 @@ class ContainerOrchestrator:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
-        # WarmPoolもドレイン
-        await self.warm_pool.drain()
         logger.info("全コンテナ破棄完了", count=len(tasks))
 
     # ---- Private methods ----

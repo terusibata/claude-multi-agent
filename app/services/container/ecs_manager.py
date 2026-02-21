@@ -259,8 +259,8 @@ class EcsContainerManager(ContainerManagerBase):
         if not check_agent:
             return True
 
-        # エージェントHTTPヘルスチェック
-        task_ip = await self._get_task_ip(task_arn)
+        # エージェントHTTPヘルスチェック（既に取得済みのtaskからIPを抽出）
+        task_ip = self._extract_task_ip(task)
         if not task_ip:
             return False
 
