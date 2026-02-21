@@ -447,8 +447,7 @@ class ContainerOrchestrator:
         # container_idからtask_ipを取得
         info = None
         # Redisから逆引き
-        from app.services.container.config import REDIS_KEY_CONTAINER_REVERSE as RKR
-        conv_id = await self.redis.get(f"{RKR}:{container_id}")
+        conv_id = await self.redis.get(f"{REDIS_KEY_CONTAINER_REVERSE}:{container_id}")
         if conv_id:
             info = await self._get_container_from_redis(conv_id)
 
@@ -524,6 +523,9 @@ class ContainerOrchestrator:
             logger.error("コンテナ破棄エラー", container_id=info.id, error=str(e))
         await self.redis.delete(f"{REDIS_KEY_CONTAINER}:{info.conversation_id}")
         await self.redis.delete(f"{REDIS_KEY_CONTAINER_REVERSE}:{info.id}")
+        # ECSタスクマッピングキーも削除（ECSモードのみ存在）
+        if info.manager_type == "ecs":
+            await self.redis.delete(f"workspace:ecs_task:{info.id}")
         get_workspace_active_containers().dec()
         audit_container_destroyed(
             container_id=info.id,

@@ -12,11 +12,14 @@ RUN pip install --no-cache-dir httpx structlog pydantic pydantic-settings boto3 
 
 # Proxy関連コード
 COPY app/services/proxy/ /opt/app/services/proxy/
+COPY app/services/__init__.py /opt/app/services/__init__.py
 COPY app/infrastructure/audit_log.py /opt/app/infrastructure/audit_log.py
 COPY app/infrastructure/metrics.py /opt/app/infrastructure/metrics.py
+COPY app/infrastructure/__init__.py /opt/app/infrastructure/__init__.py
+COPY app/utils/sensitive_filter.py /opt/app/utils/sensitive_filter.py
+COPY app/utils/__init__.py /opt/app/utils/__init__.py
 COPY app/config.py /opt/app/config.py
 COPY app/__init__.py /opt/app/__init__.py
-COPY app/infrastructure/__init__.py /opt/app/infrastructure/__init__.py
 
 ENV PYTHONPATH="/opt:$PYTHONPATH"
 

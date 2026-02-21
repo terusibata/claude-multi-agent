@@ -267,11 +267,15 @@ class EcsContainerManager(ContainerManagerBase):
         paginator_token = None
 
         while True:
+            # task_definition からfamily名を抽出
+            # "workspace-agent" → "workspace-agent"
+            # "workspace-agent:3" → "workspace-agent"
+            # "arn:aws:ecs:...:task-definition/workspace-agent:3" → "workspace-agent"
+            td = self._settings.ecs_task_definition
+            family = td.split("/")[-1].split(":")[0]
             kwargs: dict = {
                 "cluster": self._settings.ecs_cluster,
-                "family": self._settings.ecs_task_definition.split("/")[0]
-                if "/" in self._settings.ecs_task_definition
-                else self._settings.ecs_task_definition,
+                "family": family,
                 "desiredStatus": "RUNNING",
             }
             if paginator_token:
