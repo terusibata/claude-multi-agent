@@ -25,8 +25,13 @@ from app.services.container.config import (
     REDIS_KEY_WARM_POOL_INFO,
     WARM_POOL_TTL_SECONDS,
 )
-from app.services.container.lifecycle import ContainerLifecycleManager
 from app.services.container.models import ContainerInfo
+
+# TYPE_CHECKING で循環importを回避しつつ型ヒントを使う
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.services.container.base import ContainerManagerBase
 
 logger = structlog.get_logger(__name__)
 
@@ -41,7 +46,7 @@ class WarmPoolManager:
 
     def __init__(
         self,
-        lifecycle: ContainerLifecycleManager,
+        lifecycle: "ContainerManagerBase",
         redis: Redis,
         min_size: int | None = None,
         max_size: int | None = None,
@@ -49,9 +54,29 @@ class WarmPoolManager:
         self.lifecycle = lifecycle
         self.redis = redis
         _settings = get_settings()
-        self.min_size = min_size or _settings.warm_pool_min_size
-        self.max_size = max_size or _settings.warm_pool_max_size
+
+        # manager_type に応じたデフォルトサイズ
+        if min_size is not None:
+            self.min_size = min_size
+        elif _settings.container_manager_type == "ecs":
+            self.min_size = _settings.ecs_warm_pool_min_size
+        else:
+            self.min_size = _settings.warm_pool_min_size
+
+        if max_size is not None:
+            self.max_size = max_size
+        elif _settings.container_manager_type == "ecs":
+            self.max_size = _settings.ecs_warm_pool_max_size
+        else:
+            self.max_size = _settings.warm_pool_max_size
+
         self._background_tasks: set[asyncio.Task] = set()
+        # ECS RunTask API同時呼び出し制限用Semaphore
+        self._create_semaphore = asyncio.Semaphore(
+            _settings.ecs_run_task_concurrency
+            if _settings.container_manager_type == "ecs"
+            else 100  # Docker は実質無制限
+        )
 
     async def preheat(self) -> int:
         """
@@ -122,9 +147,7 @@ class WarmPoolManager:
 
         # 新規作成時はエージェントの起動完了を待つ
         # WarmPoolからの取得時はプリヒート中に起動済みのため不要
-        ready = await self.lifecycle.wait_for_agent_ready(
-            info.agent_socket, container_id=info.id,
-        )
+        ready = await self.lifecycle.wait_for_agent_ready(info)
         if not ready:
             logger.error("WarmPool: フォールバック作成のエージェント起動タイムアウト", container_id=info.id)
 
@@ -160,12 +183,11 @@ class WarmPoolManager:
                 if current_size >= self.max_size:
                     return False
 
-                info = await self.lifecycle.create_container()
+                async with self._create_semaphore:
+                    info = await self.lifecycle.create_container()
                 # エージェントソケットの起動完了を待つ
                 # プールに追加する前に確認することで、取得直後のConnectionErrorを防止
-                ready = await self.lifecycle.wait_for_agent_ready(
-                    info.agent_socket, container_id=info.id,
-                )
+                ready = await self.lifecycle.wait_for_agent_ready(info)
                 if not ready:
                     # wait_for_agent_ready がコンテナログを含むエラーログを出力済み
                     logger.warning(

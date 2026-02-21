@@ -1,0 +1,34 @@
+FROM python:3.11-slim AS proxy-sidecar
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl && rm -rf /var/lib/apt/lists/*
+
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH" PIP_REQUIRE_VIRTUALENV=true
+
+# ProxyおよびAdmin HTTP に必要な依存のみ
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir httpx structlog pydantic pydantic-settings boto3 botocore
+
+# Proxy関連コード
+COPY app/services/proxy/ /opt/app/services/proxy/
+COPY app/infrastructure/audit_log.py /opt/app/infrastructure/audit_log.py
+COPY app/infrastructure/metrics.py /opt/app/infrastructure/metrics.py
+COPY app/config.py /opt/app/config.py
+COPY app/__init__.py /opt/app/__init__.py
+COPY app/infrastructure/__init__.py /opt/app/infrastructure/__init__.py
+
+ENV PYTHONPATH="/opt:$PYTHONPATH"
+
+# サイドカー起動スクリプト
+COPY workspace-base/proxy-sidecar-entrypoint.py /opt/proxy-sidecar-entrypoint.py
+
+RUN useradd -m -u 1000 appuser
+USER appuser
+
+EXPOSE 8080 8081
+
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+  CMD curl -sf http://localhost:8081/health || exit 1
+
+ENTRYPOINT ["python", "/opt/proxy-sidecar-entrypoint.py"]

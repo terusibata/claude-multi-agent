@@ -16,7 +16,7 @@ from app.services.container.config import (
     REDIS_KEY_CONTAINER_REVERSE,
     REDIS_KEY_WARM_POOL_INFO,
 )
-from app.services.container.lifecycle import ContainerLifecycleManager
+from app.services.container.base import ContainerManagerBase
 from app.services.container.models import ContainerInfo, ContainerStatus
 
 logger = structlog.get_logger(__name__)
@@ -30,7 +30,7 @@ class ContainerGarbageCollector:
 
     def __init__(
         self,
-        lifecycle: ContainerLifecycleManager,
+        lifecycle: ContainerManagerBase,
         redis: Redis,
         proxy_stop_callback: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
@@ -73,10 +73,21 @@ class ContainerGarbageCollector:
                 logger.error("GCサイクルエラー", error=str(e))
 
     async def _collect(self) -> None:
-        """1サイクルのGC実行"""
+        """1サイクルのGC実行
+
+        Dockerモード: Docker APIからコンテナ一覧を取得してGC。
+        ECSモード: Redis SCANでコンテナ一覧を取得してGC。
+                  + N回に1回、ListTasksと照合して孤立タスクを検出。
+        """
+        if self._settings.container_manager_type == "ecs":
+            await self._collect_ecs()
+        else:
+            await self._collect_docker()
+
+    async def _collect_docker(self) -> None:
+        """Dockerモード: Docker APIベースのGC"""
         destroyed_count = 0
 
-        # Docker APIからワークスペースコンテナ一覧を取得
         containers = await self.lifecycle.list_workspace_containers()
 
         for container_info in containers:
@@ -87,16 +98,12 @@ class ContainerGarbageCollector:
             if not container_id:
                 continue
 
-            # WarmPoolが管理するコンテナはGC対象外
-            # WarmPool Redis infoが存在する = まだプール内で待機中
             pool_info_exists = await self.redis.exists(
                 f"{REDIS_KEY_WARM_POOL_INFO}:{container_id}"
             )
             if pool_info_exists:
                 continue
 
-            # Docker labelのconversation_idが空の場合、逆引きマッピングから正しいIDを取得
-            # （WarmPoolから取得後のコンテナはDockerラベルが更新されないため）
             if not conversation_id:
                 mapped_id = await self.redis.get(
                     f"{REDIS_KEY_CONTAINER_REVERSE}:{container_id}"
@@ -104,7 +111,6 @@ class ContainerGarbageCollector:
                 if mapped_id:
                     conversation_id = mapped_id
 
-            # Redis からコンテナメタデータ取得
             redis_data = await self.redis.hgetall(
                 f"{REDIS_KEY_CONTAINER}:{conversation_id}"
             )
@@ -122,13 +128,10 @@ class ContainerGarbageCollector:
                     await self._graceful_destroy(info)
                     destroyed_count += 1
             else:
-                # Redisにメタデータがないコンテナ（孤立コンテナ）
-                # 作成から一定時間経過したものは状態に関わらず回収
                 created_str = container_info.get("Created", "")
                 is_old_enough = True
                 if created_str:
                     try:
-                        # Docker APIのCreatedはUnixタイムスタンプ（int/float）
                         created_ts = float(created_str) if isinstance(created_str, (int, float, str)) else 0
                         created_at = datetime.fromtimestamp(created_ts, tz=timezone.utc)
                         age = (datetime.now(timezone.utc) - created_at).total_seconds()
@@ -149,6 +152,97 @@ class ContainerGarbageCollector:
 
         if destroyed_count > 0:
             logger.info("GCサイクル完了", destroyed=destroyed_count)
+
+    _ecs_gc_cycle_count: int = 0
+
+    async def _collect_ecs(self) -> None:
+        """ECSモード: Redis SCANベースのGC"""
+        self._ecs_gc_cycle_count += 1
+        destroyed_count = 0
+
+        # Redis SCANでワークスペースコンテナ一覧を取得
+        cursor = 0
+        container_keys: list[str] = []
+        while True:
+            cursor, keys = await self.redis.scan(
+                cursor, match=f"{REDIS_KEY_CONTAINER}:*", count=100,
+            )
+            container_keys.extend(keys)
+            if cursor == 0:
+                break
+
+        for key in container_keys:
+            redis_data = await self.redis.hgetall(key)
+            if not redis_data:
+                continue
+
+            info = ContainerInfo.from_redis_hash(redis_data)
+
+            # WarmPool管理のコンテナはスキップ
+            pool_info_exists = await self.redis.exists(
+                f"{REDIS_KEY_WARM_POOL_INFO}:{info.id}"
+            )
+            if pool_info_exists:
+                continue
+
+            if self._should_destroy(info):
+                logger.info(
+                    "GC(ECS): コンテナ破棄対象",
+                    container_id=info.id,
+                    conversation_id=info.conversation_id,
+                    status=info.status.value,
+                )
+                await self._graceful_destroy(info)
+                destroyed_count += 1
+
+        # 5サイクルに1回: ECSタスクとRedisを照合して孤立タスクを検出
+        if self._ecs_gc_cycle_count % 5 == 0:
+            orphan_count = await self._detect_orphan_ecs_tasks()
+            destroyed_count += orphan_count
+
+        if destroyed_count > 0:
+            logger.info("GCサイクル完了(ECS)", destroyed=destroyed_count)
+
+    async def _detect_orphan_ecs_tasks(self) -> int:
+        """ECSタスクのうちRedisに記録がないものを検出・停止"""
+        destroyed = 0
+        try:
+            containers = await self.lifecycle.list_workspace_containers()
+            for c in containers:
+                container_id = c.get("Name", "")
+                if not container_id:
+                    continue
+
+                # Redisに逆引きキーがあるか確認
+                has_reverse = await self.redis.exists(
+                    f"{REDIS_KEY_CONTAINER_REVERSE}:{container_id}"
+                )
+                has_pool = await self.redis.exists(
+                    f"{REDIS_KEY_WARM_POOL_INFO}:{container_id}"
+                )
+                has_ecs_task = await self.redis.exists(
+                    f"workspace:ecs_task:{container_id}"
+                )
+
+                if not has_reverse and not has_pool and not has_ecs_task:
+                    logger.warning(
+                        "GC(ECS): 孤立タスク検出",
+                        container_id=container_id,
+                    )
+                    try:
+                        await self.lifecycle.destroy_container(container_id, grace_period=5)
+                        get_workspace_active_containers().dec()
+                        destroyed += 1
+                    except Exception as e:
+                        logger.error(
+                            "GC(ECS): 孤立タスク破棄失敗",
+                            container_id=container_id,
+                            error=str(e),
+                        )
+        except Exception as e:
+            logger.error("GC(ECS): 孤立タスク検出エラー", error=str(e))
+
+        return destroyed
 
     def _should_destroy(self, info: ContainerInfo) -> bool:
         """コンテナを破棄すべきかどうか判定"""
@@ -192,9 +286,11 @@ class ContainerGarbageCollector:
                 info.id, grace_period=self._settings.container_grace_period
             )
 
-            # Redis メタデータ削除（正引き + 逆引き）
+            # Redis メタデータ削除（正引き + 逆引き + ECSタスクマッピング）
             await self.redis.delete(f"{REDIS_KEY_CONTAINER}:{info.conversation_id}")
             await self.redis.delete(f"{REDIS_KEY_CONTAINER_REVERSE}:{info.id}")
+            if info.manager_type == "ecs":
+                await self.redis.delete(f"workspace:ecs_task:{info.id}")
 
             # BUG-13修正: アクティブコンテナメトリクスをデクリメント
             get_workspace_active_containers().dec()

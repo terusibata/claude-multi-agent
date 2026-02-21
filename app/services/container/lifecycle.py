@@ -1,23 +1,27 @@
 """
-コンテナライフサイクル管理
+Docker コンテナマネージャー
 Docker APIを使ったコンテナの作成・起動・停止・破棄を担当
 """
 import asyncio
+import os
+import shutil
 from pathlib import Path
 from uuid import uuid4
 
 import aiodocker
+import httpx
 import structlog
 
 from app.config import get_settings
+from app.services.container.base import ContainerManagerBase
 from app.services.container.config import get_container_create_config
 from app.services.container.models import ContainerInfo, ContainerStatus
 
 logger = structlog.get_logger(__name__)
 
 
-class ContainerLifecycleManager:
-    """コンテナの作成から破棄までを管理"""
+class DockerContainerManager(ContainerManagerBase):
+    """Docker APIベースのコンテナマネージャー"""
 
     def __init__(self, docker: aiodocker.Docker) -> None:
         self.docker = docker
@@ -43,7 +47,6 @@ class ContainerLifecycleManager:
         # ソケットディレクトリの権限設定
         # バックエンド (UID 1000) が作成 → ワークスペースコンテナも UID 1000 (config.py L89)
         # 同一UIDのため 0o755 で十分
-        import os
         os.chmod(socket_base, 0o755)
 
         # ソケットパス: バックエンドコンテナ内から見たパス
@@ -74,6 +77,7 @@ class ContainerLifecycleManager:
             agent_socket=agent_socket,
             proxy_socket=proxy_socket,
             status=ContainerStatus.WARM if not conversation_id else ContainerStatus.READY,
+            manager_type="docker",
         )
 
         logger.info(
@@ -107,7 +111,6 @@ class ContainerLifecycleManager:
         # ソケットディレクトリをクリーンアップ
         socket_dir = Path(self._settings.workspace_socket_base_path) / container_id
         if socket_dir.exists():
-            import shutil
             shutil.rmtree(socket_dir, ignore_errors=True)
 
         logger.info("コンテナ破棄完了", container_id=container_id)
@@ -122,8 +125,6 @@ class ContainerLifecycleManager:
             container_id: コンテナID
             check_agent: Trueの場合、Docker状態に加えてagent.sock経由で
                          workspace_agentプロセスの死活も確認する。
-                         WarmPoolからの取得時に使用し、プロセスレベルの
-                         クラッシュを検出する。
 
         Returns:
             True: 健全, False: 不健全
@@ -145,7 +146,6 @@ class ContainerLifecycleManager:
             Path(self._settings.workspace_socket_base_path) / container_id / "agent.sock"
         )
         try:
-            import httpx
             transport = httpx.AsyncHTTPTransport(uds=agent_socket)
             async with httpx.AsyncClient(transport=transport, timeout=3.0) as client:
                 resp = await client.get("http://localhost/health")
@@ -170,31 +170,25 @@ class ContainerLifecycleManager:
         return result
 
     async def wait_for_agent_ready(
-        self, agent_socket: str, timeout: float = 30.0,
-        container_id: str | None = None,
+        self, container_info: ContainerInfo, timeout: float = 30.0,
     ) -> bool:
         """
         agent.sock がリスン状態になるまでポーリング
 
-        WarmPool枯渇時の新規作成パスで使用。
-        コンテナ起動後、entrypoint.sh 内で socat + workspace_agent が
-        起動するまでの待ち時間を吸収する。
-
         Args:
-            agent_socket: agent.sock のパス
+            container_info: コンテナ情報
             timeout: タイムアウト（秒）
-            container_id: コンテナID（早期終了検出・ログ取得用）
 
         Returns:
             True: 準備完了, False: タイムアウト
         """
-        import httpx
+        agent_socket = container_info.agent_socket
+        container_id = container_info.id
 
         deadline = asyncio.get_event_loop().time() + timeout
         poll_count = 0
         while asyncio.get_event_loop().time() < deadline:
             # コンテナの生存確認（5回に1回、即ち約2.5秒ごと）
-            # コンテナが既に終了していたら、30秒待つ必要はない
             if container_id and poll_count % 5 == 0 and poll_count > 0:
                 try:
                     container = await self.docker.containers.get(container_id)
@@ -202,8 +196,7 @@ class ContainerLifecycleManager:
                     state = info.get("State", {})
                     if not state.get("Running", False):
                         exit_code = state.get("ExitCode", -1)
-                        # コンテナが終了していた場合、ログを取得して即座にリターン
-                        container_logs = await self._get_container_logs(container_id)
+                        container_logs = await self.get_container_logs(container_id)
                         logger.error(
                             "エージェントコンテナが早期終了",
                             container_id=container_id,
@@ -235,7 +228,7 @@ class ContainerLifecycleManager:
         # タイムアウト時にもコンテナログを取得
         container_logs = ""
         if container_id:
-            container_logs = await self._get_container_logs(container_id)
+            container_logs = await self.get_container_logs(container_id)
         logger.error(
             "エージェント起動タイムアウト",
             agent_socket=agent_socket,
@@ -245,7 +238,7 @@ class ContainerLifecycleManager:
         )
         return False
 
-    async def _get_container_logs(self, container_id: str, tail: int = 80) -> str:
+    async def get_container_logs(self, container_id: str, tail: int = 80) -> str:
         """コンテナのログ末尾を取得（デバッグ用）"""
         try:
             container = await self.docker.containers.get(container_id)
@@ -297,3 +290,7 @@ class ContainerLifecycleManager:
         inspect = await exec_instance.inspect()
         exit_code = inspect.get("ExitCode", -1)
         return exit_code, b"".join(stdout_chunks)
+
+
+# 後方互換エイリアス
+ContainerLifecycleManager = DockerContainerManager

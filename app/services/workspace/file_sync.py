@@ -17,7 +17,7 @@ from app.infrastructure.audit_log import (
     audit_file_sync_to_container,
 )
 from app.models.conversation_file import ConversationFile
-from app.services.container.lifecycle import ContainerLifecycleManager
+from app.services.container.base import ContainerManagerBase
 from app.services.workspace.s3_storage import S3StorageBackend
 
 logger = structlog.get_logger(__name__)
@@ -57,7 +57,7 @@ class WorkspaceFileSync:
     def __init__(
         self,
         s3: S3StorageBackend,
-        lifecycle: ContainerLifecycleManager,
+        lifecycle: ContainerManagerBase,
         db: AsyncSession,
     ) -> None:
         self.s3 = s3

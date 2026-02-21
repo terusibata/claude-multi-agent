@@ -48,3 +48,4 @@ httpx==0.28.1
 
 # コンテナオーケストレーション
 aiodocker==0.23.0
+aiobotocore>=2.12.0

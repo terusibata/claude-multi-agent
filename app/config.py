@@ -147,11 +147,42 @@ class Settings(BaseSettings):
     container_gc_interval: int = 60  # GCループ間隔（秒）
 
     # ============================================
+    # コンテナマネージャー設定
+    # ============================================
+    container_manager_type: str = "docker"  # "docker" or "ecs"
+
+    # ============================================
     # WarmPool設定
     # ============================================
     warm_pool_min_size: int = 2
     warm_pool_max_size: int = 10
     warm_pool_ttl: int = 1800  # 30分
+
+    # ECS用WarmPool設定（container_manager_type=ecsの場合に使用）
+    ecs_warm_pool_min_size: int = 50
+    ecs_warm_pool_max_size: int = 120
+
+    # ============================================
+    # ECS設定（container_manager_type=ecsの場合に使用）
+    # ============================================
+    ecs_cluster: str = ""
+    ecs_task_definition: str = ""
+    ecs_subnets: str = ""  # カンマ区切り
+    ecs_security_groups: str = ""  # カンマ区切り
+    ecs_capacity_provider: str = ""
+    ecs_agent_port: int = 9000
+    ecs_proxy_admin_port: int = 8081
+    ecs_run_task_concurrency: int = 10  # RunTask API同時呼び出し上限
+
+    @property
+    def ecs_subnets_list(self) -> list[str]:
+        """ECSサブネットをリストとして取得"""
+        return [s.strip() for s in self.ecs_subnets.split(",") if s.strip()]
+
+    @property
+    def ecs_security_groups_list(self) -> list[str]:
+        """ECSセキュリティグループをリストとして取得"""
+        return [s.strip() for s in self.ecs_security_groups.split(",") if s.strip()]
 
     # ============================================
     # Proxy設定

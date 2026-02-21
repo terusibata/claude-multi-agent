@@ -9,6 +9,7 @@ Unix Socket上で動作し、コンテナからの全外部通信を中継する
 """
 
 import asyncio
+import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -650,3 +651,127 @@ class CredentialInjectionProxy:
         except Exception as e:
             logger.error("Proxy: 転送エラー", method=method, url=url, error=str(e))
             return 502, {}, b"Bad Gateway"
+
+
+class ProxyAdminServer:
+    """ECSサイドカー用 Proxy管理HTTPサーバー
+
+    Backend → サイドカーProxy間の制御チャネル。
+    MCPヘッダールール更新、設定更新、ヘルスチェックを提供する。
+    """
+
+    def __init__(
+        self,
+        proxy: CredentialInjectionProxy,
+        port: int = 8081,
+    ) -> None:
+        self._proxy = proxy
+        self._port = port
+        self._server: asyncio.AbstractServer | None = None
+
+    async def start(self) -> None:
+        """Admin HTTPサーバーを起動"""
+        self._server = await asyncio.start_server(
+            self._handle_request,
+            host="0.0.0.0",
+            port=self._port,
+        )
+        logger.info("Proxy Admin起動", port=self._port)
+
+    async def stop(self) -> None:
+        """Admin HTTPサーバーを停止"""
+        if self._server:
+            self._server.close()
+            await self._server.wait_closed()
+        logger.info("Proxy Admin停止")
+
+    async def _handle_request(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        """HTTPリクエストを処理"""
+        try:
+            request_line = await reader.readline()
+            if not request_line:
+                return
+
+            request_str = request_line.decode("utf-8", errors="replace").strip()
+            parts = request_str.split(" ")
+            if len(parts) < 3:
+                writer.close()
+                return
+
+            method = parts[0]
+            path = parts[1]
+
+            # ヘッダー読み取り
+            content_length = 0
+            while True:
+                line = await reader.readline()
+                if line in (b"\r\n", b"\n", b""):
+                    break
+                header_str = line.decode("utf-8", errors="replace").strip()
+                if ":" in header_str:
+                    key, value = header_str.split(":", 1)
+                    if key.strip().lower() == "content-length":
+                        content_length = int(value.strip())
+
+            body = b""
+            if content_length > 0:
+                body = await reader.readexactly(content_length)
+
+            # ルーティング
+            if method == "GET" and path == "/health":
+                await self._respond(writer, 200, {"status": "ok"})
+            elif method == "POST" and path == "/admin/update-rules":
+                await self._handle_update_rules(body, writer)
+            elif method == "POST" and path == "/admin/config":
+                await self._handle_update_config(body, writer)
+            else:
+                await self._respond(writer, 404, {"error": "Not found"})
+
+        except Exception as e:
+            logger.error("Admin接続エラー", error=str(e))
+        finally:
+            try:
+                writer.close()
+            except Exception:
+                pass
+
+    async def _handle_update_rules(
+        self, body: bytes, writer: asyncio.StreamWriter
+    ) -> None:
+        """MCPヘッダールール更新"""
+        try:
+            data = json.loads(body)
+            rules = {}
+            for name, rule_data in data.items():
+                rules[name] = McpHeaderRule(
+                    real_base_url=rule_data["real_base_url"],
+                    headers=rule_data.get("headers", {}),
+                )
+            self._proxy.update_mcp_header_rules(rules)
+            await self._respond(writer, 200, {"updated": len(rules)})
+        except Exception as e:
+            await self._respond(writer, 400, {"error": str(e)})
+
+    async def _handle_update_config(
+        self, body: bytes, writer: asyncio.StreamWriter
+    ) -> None:
+        """設定更新（将来拡張用）"""
+        await self._respond(writer, 200, {"status": "ok"})
+
+    @staticmethod
+    async def _respond(
+        writer: asyncio.StreamWriter,
+        status: int,
+        body_dict: dict,
+    ) -> None:
+        """JSONレスポンスを送信"""
+        body_bytes = json.dumps(body_dict).encode()
+        status_text = "OK" if status < 400 else "Error"
+        writer.write(f"HTTP/1.1 {status} {status_text}\r\n".encode())
+        writer.write(b"Content-Type: application/json\r\n")
+        writer.write(f"Content-Length: {len(body_bytes)}\r\n".encode())
+        writer.write(b"\r\n")
+        writer.write(body_bytes)
+        await writer.drain()

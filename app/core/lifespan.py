@@ -1,11 +1,12 @@
 """
 アプリケーションライフサイクル管理
 起動時・終了時の処理を定義
+
+CONTAINER_MANAGER_TYPE 環境変数で docker / ecs を切替。
 """
 import asyncio
 from contextlib import asynccontextmanager
 
-import aiodocker
 import structlog
 from fastapi import FastAPI
 from redis.asyncio import Redis
@@ -14,8 +15,8 @@ from app.config import get_settings
 from app.database import close_db
 from app.infrastructure.redis import close_redis_pool, get_redis_pool
 from app.infrastructure.shutdown import get_shutdown_manager
+from app.services.container.base import ContainerManagerBase
 from app.services.container.gc import ContainerGarbageCollector
-from app.services.container.lifecycle import ContainerLifecycleManager
 from app.services.container.orchestrator import ContainerOrchestrator
 from app.services.container.warm_pool import WarmPoolManager
 
@@ -102,20 +103,43 @@ async def _recover_skills_from_s3(settings) -> None:
         )
 
 
+def _create_container_manager(settings, redis: Redis) -> tuple[ContainerManagerBase, object | None]:
+    """container_manager_type に応じたマネージャーを生成
+
+    Returns:
+        (lifecycle, docker_client) — ECSモードでは docker_client=None
+    """
+    if settings.container_manager_type == "ecs":
+        from app.services.container.ecs_manager import EcsContainerManager
+        lifecycle = EcsContainerManager(redis)
+        logger.info(
+            "ECSコンテナマネージャー初期化完了",
+            cluster=settings.ecs_cluster,
+            task_definition=settings.ecs_task_definition,
+        )
+        return lifecycle, None
+    else:
+        import aiodocker
+        from app.services.container.lifecycle import DockerContainerManager
+        docker_client = aiodocker.Docker(url=settings.docker_socket_path)
+        lifecycle = DockerContainerManager(docker_client)
+        logger.info("Dockerコンテナマネージャー初期化完了", socket=settings.docker_socket_path)
+        return lifecycle, docker_client
+
+
 async def _init_container_stack(app: FastAPI, settings) -> tuple:
     """
     コンテナ隔離スタックを初期化
 
     Returns:
         (docker_client, redis, orchestrator, gc)
+        ※ ECSモードでは docker_client=None
     """
-    docker_client = aiodocker.Docker(url=settings.docker_socket_path)
-    logger.info("Dockerクライアント初期化完了", socket=settings.docker_socket_path)
-
     redis_pool = await get_redis_pool()
     redis = Redis(connection_pool=redis_pool)
 
-    lifecycle = ContainerLifecycleManager(docker_client)
+    lifecycle, docker_client = _create_container_manager(settings, redis)
+
     warm_pool = WarmPoolManager(lifecycle, redis)
     orchestrator = ContainerOrchestrator(lifecycle, warm_pool, redis)
 
@@ -146,10 +170,12 @@ async def _init_container_stack(app: FastAPI, settings) -> tuple:
     except Exception as e:
         logger.error("GC開始エラー", error=str(e))
 
+    manager_type = settings.container_manager_type
     logger.info(
         "コンテナ隔離スタック初期化完了",
-        warm_pool_min=settings.warm_pool_min_size,
-        warm_pool_max=settings.warm_pool_max_size,
+        manager_type=manager_type,
+        warm_pool_min=settings.ecs_warm_pool_min_size if manager_type == "ecs" else settings.warm_pool_min_size,
+        warm_pool_max=settings.ecs_warm_pool_max_size if manager_type == "ecs" else settings.warm_pool_max_size,
         container_image=settings.container_image,
     )
 
@@ -195,12 +221,22 @@ async def _shutdown_container_stack(
     except Exception as e:
         logger.error("コンテナ破棄エラー", error=str(e))
 
-    # Dockerクライアントクローズ
-    try:
-        await docker_client.close()
-        logger.info("Dockerクライアントクローズ完了")
-    except Exception as e:
-        logger.error("Dockerクライアントクローズエラー", error=str(e))
+    # Dockerクライアントクローズ（Docker モードのみ）
+    if docker_client is not None:
+        try:
+            await docker_client.close()
+            logger.info("Dockerクライアントクローズ完了")
+        except Exception as e:
+            logger.error("Dockerクライアントクローズエラー", error=str(e))
+
+    # ECSクライアントクローズ
+    lifecycle = orchestrator.lifecycle
+    if hasattr(lifecycle, "close"):
+        try:
+            await lifecycle.close()
+            logger.info("ECSクライアントクローズ完了")
+        except Exception as e:
+            logger.error("ECSクライアントクローズエラー", error=str(e))
 
     # Redisクライアントクローズ
     try:
@@ -228,7 +264,8 @@ async def lifespan(app: FastAPI):
     アプリケーションのライフサイクル管理
 
     コンテナ隔離アーキテクチャ:
-      - aiodocker → ContainerLifecycleManager
+      - CONTAINER_MANAGER_TYPE=docker → aiodocker + DockerContainerManager
+      - CONTAINER_MANAGER_TYPE=ecs → aiobotocore + EcsContainerManager
       - WarmPoolManager（プレウォーム済みコンテナプール）
       - ContainerOrchestrator（会話→コンテナマッピング）
       - ContainerGarbageCollector（TTL超過コンテナ回収）
@@ -242,6 +279,7 @@ async def lifespan(app: FastAPI):
         "アプリケーション起動中...",
         version=__version__,
         environment=settings.app_env,
+        container_manager_type=settings.container_manager_type,
     )
 
     # シグナルハンドラーを設定

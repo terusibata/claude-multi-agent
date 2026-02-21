@@ -42,7 +42,7 @@ from app.services.container.config import (
     REDIS_KEY_CONTAINER,
     REDIS_KEY_CONTAINER_REVERSE,
 )
-from app.services.container.lifecycle import ContainerLifecycleManager
+from app.services.container.base import ContainerManagerBase
 from app.services.container.models import ContainerInfo, ContainerStatus
 from app.services.container.warm_pool import WarmPoolManager
 from app.services.proxy.credential_proxy import (
@@ -64,7 +64,7 @@ class ContainerOrchestrator:
 
     def __init__(
         self,
-        lifecycle: ContainerLifecycleManager,
+        lifecycle: ContainerManagerBase,
         warm_pool: WarmPoolManager,
         redis: Redis,
     ) -> None:
@@ -73,6 +73,31 @@ class ContainerOrchestrator:
         self.redis = redis
         self._proxies: dict[str, CredentialInjectionProxy] = {}
         self._settings = get_settings()
+
+    def _make_agent_client(
+        self, info: ContainerInfo, timeout: httpx.Timeout | None = None,
+    ) -> tuple[httpx.AsyncClient, str]:
+        """コンテナ情報に基づいてhttpxクライアントとURLを生成
+
+        Returns:
+            (client, base_url) のタプル。clientは呼び出し元で async with で管理。
+        """
+        if timeout is None:
+            timeout = httpx.Timeout(
+                self._settings.container_execution_timeout, connect=30.0,
+            )
+
+        if info.manager_type == "ecs":
+            # ECS: TCP HTTP直接接続
+            client = httpx.AsyncClient(timeout=timeout)
+            base_url = info.agent_socket  # http://{task_ip}:9000
+        else:
+            # Docker: UDS経由
+            transport = httpx.AsyncHTTPTransport(uds=info.agent_socket)
+            client = httpx.AsyncClient(transport=transport, timeout=timeout)
+            base_url = "http://localhost"
+
+        return client, base_url
 
     async def get_or_create(self, conversation_id: str) -> ContainerInfo:
         """
@@ -167,11 +192,11 @@ class ContainerOrchestrator:
         agent_socket = info.agent_socket
 
         try:
-            transport = httpx.AsyncHTTPTransport(uds=agent_socket)
-            async with httpx.AsyncClient(transport=transport, timeout=httpx.Timeout(self._settings.container_execution_timeout, connect=30.0)) as client:
+            client, base_url = self._make_agent_client(info)
+            async with client:
                 async with client.stream(
                     "POST",
-                    "http://localhost/execute",
+                    f"{base_url}/execute",
                     json=request_body,
                     headers={"Content-Type": "application/json"},
                 ) as response:
@@ -328,15 +353,22 @@ class ContainerOrchestrator:
 
     async def _capture_container_logs(self, container_id: str, tail: int = 50) -> str:
         """コンテナのログ末尾を取得（デバッグ用、破棄前に呼ぶ）"""
-        try:
-            container = await self.lifecycle.docker.containers.get(container_id)
-            logs = await container.log(stdout=True, stderr=True, tail=tail)
-            return "".join(logs) if logs else "<empty>"
-        except Exception as e:
-            return f"<log capture failed: {e}>"
+        return await self.lifecycle.get_container_logs(container_id, tail=tail)
 
     async def _start_proxy(self, info: ContainerInfo) -> None:
-        """コンテナ用Proxyを起動"""
+        """コンテナ用Proxyを起動
+
+        ECSモード: Proxyはサイドカーコンテナとして起動済み。
+        初期設定のプッシュのみ行う。
+        """
+        if info.manager_type == "ecs":
+            # サイドカーは既に起動済み。no-op。
+            logger.info(
+                "ECSモード: Proxyサイドカー起動済み（no-op）",
+                container_id=info.id,
+            )
+            return
+
         aws_creds = AWSCredentials(
             access_key_id=self._settings.aws_access_key_id or "",
             secret_access_key=self._settings.aws_secret_access_key or "",
@@ -353,38 +385,104 @@ class ContainerOrchestrator:
         self._proxies[info.id] = proxy
 
     async def _stop_proxy(self, container_id: str) -> None:
-        """コンテナ用Proxyを停止"""
+        """コンテナ用Proxyを停止
+
+        ECSモード: Proxyはサイドカー。タスク停止時に自動停止するためno-op。
+        """
         proxy = self._proxies.pop(container_id, None)
         if proxy:
             await proxy.stop()
+        # ECSモードの場合、proxy辞書にエントリがないのは正常
 
     async def _restart_proxy(self, info: ContainerInfo) -> None:
         """Proxyクラッシュ時の自動再起動"""
+        if info.manager_type == "ecs":
+            # ECSサイドカーの再起動はECSに任せる
+            logger.warning(
+                "ECSモード: Proxy再起動はECS側で管理",
+                container_id=info.id,
+            )
+            return
+
         logger.warning("Proxy再起動", container_id=info.id)
         await self._stop_proxy(info.id)
         await self._start_proxy(info)
 
-    def update_mcp_header_rules(
+    async def update_mcp_header_rules(
         self,
         container_id: str,
         rules: dict[str, McpHeaderRule],
     ) -> None:
         """コンテナのプロキシにMCPヘッダー注入ルールを設定
 
-        エージェント実行リクエスト毎に呼ばれ、MCPサーバーの認証ヘッダーを
-        プロキシ側に保持する。コンテナにはトークンを渡さない。
+        Dockerモード: ローカルProxyインスタンスに直接設定。
+        ECSモード: サイドカーのadmin HTTPエンドポイントにPOST。
 
         Args:
             container_id: コンテナID
             rules: {server_name: McpHeaderRule} のマッピング
         """
+        # Dockerモード: ローカルProxyインスタンス
         proxy = self._proxies.get(container_id)
         if proxy:
             proxy.update_mcp_header_rules(rules)
-        else:
+            return
+
+        # ECSモード: admin HTTPエンドポイント経由
+        if self._settings.container_manager_type == "ecs":
+            await self._update_mcp_rules_via_http(container_id, rules)
+            return
+
+        logger.warning(
+            "MCP ルール設定対象のプロキシが未起動",
+            container_id=container_id,
+        )
+
+    async def _update_mcp_rules_via_http(
+        self,
+        container_id: str,
+        rules: dict[str, McpHeaderRule],
+    ) -> None:
+        """ECSサイドカーProxy admin HTTPへMCPルールをPOST"""
+        # container_idからtask_ipを取得
+        info = None
+        # Redisから逆引き
+        from app.services.container.config import REDIS_KEY_CONTAINER_REVERSE as RKR
+        conv_id = await self.redis.get(f"{RKR}:{container_id}")
+        if conv_id:
+            info = await self._get_container_from_redis(conv_id)
+
+        if not info or not info.task_ip:
             logger.warning(
-                "MCP ルール設定対象のプロキシが未起動",
+                "ECS MCPルール更新: タスクIP未検出",
                 container_id=container_id,
+            )
+            return
+
+        admin_url = f"http://{info.task_ip}:{self._settings.ecs_proxy_admin_port}"
+        # McpHeaderRuleをシリアライズ
+        rules_payload = {
+            name: {"real_base_url": rule.real_base_url, "headers": rule.headers}
+            for name, rule in rules.items()
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.post(
+                    f"{admin_url}/admin/update-rules",
+                    json=rules_payload,
+                )
+                if resp.status_code != 200:
+                    logger.error(
+                        "ECS MCPルール更新失敗",
+                        container_id=container_id,
+                        status=resp.status_code,
+                    )
+        except Exception as e:
+            logger.error(
+                "ECS MCPルール更新エラー",
+                container_id=container_id,
+                error=str(e),
             )
 
     async def _get_container_from_redis(self, conversation_id: str) -> ContainerInfo | None:
