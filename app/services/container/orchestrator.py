@@ -511,6 +511,11 @@ class ContainerOrchestrator:
         # 逆引きマッピングのTTLもリセット
         reverse_key = f"{REDIS_KEY_CONTAINER_REVERSE}:{info.id}"
         await self.redis.expire(reverse_key, CONTAINER_TTL_SECONDS)
+        # ECSタスクマッピングキーのTTLもリセット（ECSモードのみ存在）
+        if info.manager_type == "ecs":
+            await self.redis.expire(
+                f"workspace:ecs_task:{info.id}", CONTAINER_TTL_SECONDS
+            )
 
     async def _cleanup_container(self, info: ContainerInfo) -> None:
         """コンテナとProxy、Redisメタデータをクリーンアップ"""

@@ -8,7 +8,6 @@ ECSサイドカー Proxy + Admin HTTPサーバー起動スクリプト
 import asyncio
 import os
 import signal
-import sys
 
 import httpx
 import structlog
