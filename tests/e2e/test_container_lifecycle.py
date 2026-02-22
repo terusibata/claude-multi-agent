@@ -35,8 +35,8 @@ class TestContainerCreateConfig:
 
     def test_config_has_network_none(self):
         """コンテナが --network none で作成されること"""
-        with patch("app.services.container.config.get_settings") as mock_settings, \
-             patch("app.services.container.config._load_seccomp_profile", return_value='{}'):
+        with patch("app.services.container.docker_config.get_settings") as mock_settings, \
+             patch("app.services.container.docker_config._load_seccomp_profile", return_value='{}'):
             mock_settings.return_value = MagicMock(
                 container_image="workspace-base:latest",
                 container_cpu_quota=200000,
@@ -55,7 +55,7 @@ class TestContainerCreateConfig:
 
     def test_config_has_readonly_rootfs(self):
         """ReadonlyRootfs が有効であること"""
-        with patch("app.services.container.config.get_settings") as mock_settings:
+        with patch("app.services.container.docker_config.get_settings") as mock_settings:
             mock_settings.return_value = MagicMock(
                 container_image="workspace-base:latest",
                 container_cpu_quota=200000,
@@ -74,7 +74,7 @@ class TestContainerCreateConfig:
 
     def test_config_has_pids_limit(self):
         """PidsLimit が設定されていること"""
-        with patch("app.services.container.config.get_settings") as mock_settings:
+        with patch("app.services.container.docker_config.get_settings") as mock_settings:
             mock_settings.return_value = MagicMock(
                 container_image="workspace-base:latest",
                 container_cpu_quota=200000,
@@ -93,7 +93,7 @@ class TestContainerCreateConfig:
 
     def test_config_drops_all_capabilities(self):
         """全 capability が DROP されていること"""
-        with patch("app.services.container.config.get_settings") as mock_settings:
+        with patch("app.services.container.docker_config.get_settings") as mock_settings:
             mock_settings.return_value = MagicMock(
                 container_image="workspace-base:latest",
                 container_cpu_quota=200000,
@@ -113,8 +113,8 @@ class TestContainerCreateConfig:
     def test_config_has_seccomp_and_apparmor(self):
         """seccomp と AppArmor が SecurityOpt に含まれること"""
         fake_seccomp = '{"defaultAction":"SCMP_ACT_ERRNO"}'
-        with patch("app.services.container.config.get_settings") as mock_settings, \
-             patch("app.services.container.config._load_seccomp_profile", return_value=fake_seccomp):
+        with patch("app.services.container.docker_config.get_settings") as mock_settings, \
+             patch("app.services.container.docker_config._load_seccomp_profile", return_value=fake_seccomp):
             mock_settings.return_value = MagicMock(
                 container_image="workspace-base:latest",
                 container_cpu_quota=200000,
@@ -405,8 +405,8 @@ class TestAppArmorProfile:
 
     def test_config_includes_apparmor(self):
         """コンテナ設定に AppArmor プロファイルが含まれること"""
-        with patch("app.services.container.config.get_settings") as mock_settings, \
-             patch("app.services.container.config._load_seccomp_profile", return_value='{}'):
+        with patch("app.services.container.docker_config.get_settings") as mock_settings, \
+             patch("app.services.container.docker_config._load_seccomp_profile", return_value='{}'):
             mock_settings.return_value = MagicMock(
                 container_image="workspace-base:latest",
                 container_cpu_quota=200000,
