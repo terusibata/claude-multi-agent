@@ -501,12 +501,12 @@ class EcsContainerManager(ContainerManagerBase):
 
             task = tasks[0]
 
-            # タスクが停止していないか確認
+            # タスクが停止・終了中でないか確認
             last_status = task.get("lastStatus", "")
-            if last_status == "STOPPED":
+            if last_status in ("STOPPED", "DEPROVISIONING"):
                 stop_reason = task.get("stoppedReason", "unknown")
                 raise RuntimeError(
-                    f"ECS task stopped before IP assignment: {stop_reason}"
+                    f"ECS task stopped before IP assignment: {stop_reason} (status={last_status})"
                 )
 
             # ENIからプライベートIPを抽出
