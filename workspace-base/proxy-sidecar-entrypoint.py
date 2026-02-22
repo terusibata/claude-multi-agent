@@ -31,8 +31,8 @@ async def main() -> None:
     from app.services.proxy.sigv4 import AWSCredentials
 
     settings = get_settings()
-    proxy_port = int(os.environ.get("PROXY_PORT", "8080"))
-    admin_port = int(os.environ.get("PROXY_ADMIN_PORT", "8081"))
+    proxy_port = int(os.environ.get("PROXY_PORT", str(settings.proxy_port)))
+    admin_port = int(os.environ.get("PROXY_ADMIN_PORT", str(settings.ecs_proxy_admin_port)))
 
     aws_creds = AWSCredentials(
         access_key_id=settings.aws_access_key_id or "",

@@ -173,6 +173,7 @@ class Settings(BaseSettings):
     ecs_capacity_provider: str = ""
     ecs_agent_port: int = 9000
     ecs_proxy_admin_port: int = 8081
+    proxy_port: int = 8080  # コンテナ内→Proxy通信ポート (Docker: socat / ECS: サイドカー)
     ecs_run_task_concurrency: int = 10  # RunTask API同時呼び出し上限
 
     @property

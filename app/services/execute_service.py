@@ -313,8 +313,11 @@ class ExecuteService:
                 )
 
             # バックグラウンド同期タスクの完了待ち（最大5秒）
+            # タイムアウト後の未完了タスクはキャンセルしてリソースリークを防止
             if background_sync_tasks:
-                await asyncio.wait(background_sync_tasks, timeout=5.0)
+                _done, pending = await asyncio.wait(background_sync_tasks, timeout=5.0)
+                for task in pending:
+                    task.cancel()
 
             # /workspace外に書かれたファイルをコンテナ内で/workspaceにコピー
             if external_file_paths:

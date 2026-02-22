@@ -68,6 +68,8 @@ def get_container_create_config(container_id: str) -> dict:
     # Docker-in-Docker環境ではresolved_socket_host_pathを使用
     host_socket_dir = f"{settings.resolved_socket_host_path}/{container_id}"
 
+    proxy_url = f"http://127.0.0.1:{settings.proxy_port}"
+
     return {
         "Image": image,
         "Env": [
@@ -76,10 +78,10 @@ def get_container_create_config(container_id: str) -> dict:
             "CLAUDE_CODE_SKIP_BEDROCK_AUTH=1",
             f"AWS_REGION={settings.aws_region}",
             # Bedrock APIベースURL: socat TCP→UDS経由でホスト側Reverse Proxyに到達
-            "ANTHROPIC_BEDROCK_BASE_URL=http://127.0.0.1:8080",
+            f"ANTHROPIC_BEDROCK_BASE_URL={proxy_url}",
             # pip/npm/curl等の外部通信用Forward Proxy
-            "HTTP_PROXY=http://127.0.0.1:8080",
-            "HTTPS_PROXY=http://127.0.0.1:8080",
+            f"HTTP_PROXY={proxy_url}",
+            f"HTTPS_PROXY={proxy_url}",
             "NO_PROXY=localhost,127.0.0.1",
             "PIP_REQUIRE_VIRTUALENV=true",
             # CLIバイナリ (standalone ELF) の基本環境変数

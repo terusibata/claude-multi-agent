@@ -8,6 +8,7 @@ import re
 
 import structlog
 
+from app.config import get_settings
 from app.services.container.orchestrator import ContainerOrchestrator
 from app.services.mcp_server_service import McpServerService
 from app.services.proxy.credential_proxy import McpHeaderRule
@@ -26,6 +27,7 @@ class McpConfigBuilder:
     ):
         self._mcp_server_service = mcp_server_service
         self._orchestrator = orchestrator
+        self._proxy_port = get_settings().proxy_port
 
     async def build_mcp_server_configs(self, request: ExecuteRequest) -> list[dict]:
         """テナントのアクティブ MCP サーバー設定をシリアライズしてコンテナに渡す形式に変換"""
@@ -110,7 +112,7 @@ class McpConfigBuilder:
                     {
                         "server_name": server_name,
                         "openapi_spec": config["openapi_spec"],
-                        "base_url": f"http://127.0.0.1:8080/mcp/{server_name}",
+                        "base_url": f"http://127.0.0.1:{self._proxy_port}/mcp/{server_name}",
                     }
                 )
             else:

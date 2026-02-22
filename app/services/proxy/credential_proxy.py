@@ -170,7 +170,10 @@ class CredentialInjectionProxy:
                     key, value = header_str.split(":", 1)
                     headers[key.strip()] = value.strip()
                     if key.strip().lower() == "content-length":
-                        content_length = int(value.strip())
+                        try:
+                            content_length = int(value.strip())
+                        except ValueError:
+                            content_length = 0
 
             # ボディ読み取り（サイズ上限チェック付き）
             body = b""
@@ -737,7 +740,10 @@ class ProxyAdminServer:
                 if ":" in header_str:
                     key, value = header_str.split(":", 1)
                     if key.strip().lower() == "content-length":
-                        content_length = int(value.strip())
+                        try:
+                            content_length = int(value.strip())
+                        except ValueError:
+                            content_length = 0
 
             # Admin APIのボディサイズ制限（1MB: MCPルール更新程度のペイロード想定）
             _admin_max_body = 1 * 1024 * 1024

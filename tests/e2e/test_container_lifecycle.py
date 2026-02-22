@@ -147,6 +147,7 @@ class TestContainerCreateConfig:
                 seccomp_profile_path="",
                 apparmor_profile_name="",
                 aws_region="us-west-2",
+                proxy_port=8080,
             )
 
             from app.services.container.docker_config import get_container_create_config

@@ -64,6 +64,10 @@ from app.utils.streaming import (
 logger = structlog.get_logger(__name__)
 
 
+_MAX_RECOVERY_ATTEMPTS = 2  # 同一会話あたりの復旧試行上限
+_RECOVERY_WINDOW_SECONDS = 300  # 復旧試行回数をカウントする時間窓（秒）
+
+
 class ContainerOrchestrator:
     """コンテナオーケストレーター"""
 
@@ -80,6 +84,8 @@ class ContainerOrchestrator:
         self._settings = get_settings()
         # ECSモード用: admin HTTPクライアント（リクエスト間で再利用）
         self._admin_http_client: httpx.AsyncClient | None = None
+        # 復旧試行記録: {conversation_id: [timestamp, ...]}
+        self._recovery_attempts: dict[str, list[float]] = {}
 
     def _make_agent_client(
         self, info: ContainerInfo, timeout: httpx.Timeout | None = None,
@@ -341,6 +347,9 @@ class ContainerOrchestrator:
     ) -> tuple[ContainerInfo, bool]:
         """不健全コンテナを破棄し新コンテナを準備
 
+        同一会話で短期間に繰り返しクラッシュが発生した場合は復旧を打ち切る
+        （無限復旧ループの防止）。
+
         Args:
             info: 不健全なコンテナ情報
             conversation_id: 会話ID
@@ -355,6 +364,24 @@ class ContainerOrchestrator:
             conversation_id=conversation_id,
             error=error_detail,
         )
+
+        # 復旧試行回数チェック（無限ループ防止）
+        now = time.time()
+        attempts = self._recovery_attempts.get(conversation_id, [])
+        # 時間窓外の古い記録を除去
+        attempts = [t for t in attempts if now - t < _RECOVERY_WINDOW_SECONDS]
+        if len(attempts) >= _MAX_RECOVERY_ATTEMPTS:
+            logger.error(
+                "コンテナ復旧上限到達",
+                conversation_id=conversation_id,
+                attempts=len(attempts),
+                window_seconds=_RECOVERY_WINDOW_SECONDS,
+            )
+            self._recovery_attempts[conversation_id] = attempts
+            return info, False
+        attempts.append(now)
+        self._recovery_attempts[conversation_id] = attempts
+
         try:
             old_container_id = info.id
             await self._cleanup_container(info)
