@@ -23,29 +23,35 @@ logger = logging.getLogger(__name__)
 
 
 def _check_proxy_chain() -> str | None:
-    """proxy.sock 疎通確認。問題なければ None、エラー時はメッセージを返す"""
-    # 1. proxy.sock の存在確認
-    proxy_path = "/var/run/ws/proxy.sock"
-    if not os.path.exists(proxy_path):
-        return f"proxy.sock not found at {proxy_path}"
+    """プロキシチェーン疎通確認。問題なければ None、エラー時はメッセージを返す。
 
-    # 2. proxy.sock への接続確認
-    try:
-        s = sock.socket(sock.AF_UNIX, sock.SOCK_STREAM)
-        s.settimeout(3)
-        s.connect(proxy_path)
-        s.close()
-    except Exception as e:
-        return f"proxy.sock connection failed: {e}"
+    UDS モード (Docker): proxy.sock → socat → TCP 8080 の全チェーン確認
+    HTTP モード (ECS):   TCP 8080 のみ確認（サイドカーが直接リスン）
+    """
+    listen_mode = os.environ.get("AGENT_LISTEN_MODE", "uds")
 
-    # 3. socat TCP 8080 経由の確認
+    if listen_mode == "uds":
+        # UDS モード: proxy.sock の存在・接続確認
+        proxy_path = "/var/run/ws/proxy.sock"
+        if not os.path.exists(proxy_path):
+            return f"proxy.sock not found at {proxy_path}"
+
+        try:
+            s = sock.socket(sock.AF_UNIX, sock.SOCK_STREAM)
+            s.settimeout(3)
+            s.connect(proxy_path)
+            s.close()
+        except Exception as e:
+            return f"proxy.sock connection failed: {e}"
+
+    # TCP 8080 チェック（両モード共通: UDS→socat経由 or サイドカー直接）
     try:
         s = sock.socket(sock.AF_INET, sock.SOCK_STREAM)
         s.settimeout(3)
         s.connect(("127.0.0.1", 8080))
         s.close()
     except Exception as e:
-        return f"socat TCP 8080 connection failed: {e}"
+        return f"TCP 8080 proxy connection failed: {e}"
 
     return None
 
@@ -156,6 +162,15 @@ async def execute_streaming(request: ExecuteRequest) -> AsyncIterator[str]:
     if preflight_error:
         logger.error("プリフライトチェック失敗: %s", preflight_error)
         yield _format_sse("error", {"message": f"Proxy chain check failed: {preflight_error}"})
+        yield _format_sse("done", {
+            "subtype": "error_during_execution",
+            "result": None,
+            "session_id": None,
+            "num_turns": 0,
+            "duration_ms": 0,
+            "cost_usd": 0,
+            "usage": {},
+        })
         return
 
     try:
@@ -163,6 +178,15 @@ async def execute_streaming(request: ExecuteRequest) -> AsyncIterator[str]:
     except ImportError:
         logger.error("claude-agent-sdk がインストールされていません")
         yield _format_sse("error", {"message": "SDK not available"})
+        yield _format_sse("done", {
+            "subtype": "error_during_execution",
+            "result": None,
+            "session_id": None,
+            "num_turns": 0,
+            "duration_ms": 0,
+            "cost_usd": 0,
+            "usage": {},
+        })
         return
 
     options = _build_sdk_options(request)

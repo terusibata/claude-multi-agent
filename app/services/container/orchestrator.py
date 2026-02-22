@@ -336,9 +336,12 @@ class ContainerOrchestrator:
         finally:
             # 復旧済みの場合はget_or_createが既にRedisを更新済みなのでスキップ
             if not recovered:
-                info.status = ContainerStatus.IDLE
-                info.touch()
-                await self._update_redis(info)
+                # Redisキーが存在する場合のみ更新（cleanup後の孤立書き込みを防止）
+                key = f"{REDIS_KEY_CONTAINER}:{info.conversation_id}"
+                if await self.redis.exists(key):
+                    info.status = ContainerStatus.IDLE
+                    info.touch()
+                    await self._update_redis(info)
 
     async def destroy(self, conversation_id: str) -> None:
         """会話に紐づくコンテナを破棄"""

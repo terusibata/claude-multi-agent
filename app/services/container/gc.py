@@ -41,6 +41,7 @@ class ContainerGarbageCollector:
         self._proxy_stop_callback = proxy_stop_callback
         self._running = False
         self._task: asyncio.Task | None = None
+        self._ecs_gc_cycle_count: int = 0
 
     async def start(self, interval: int = 60) -> None:
         """GCループを開始"""
@@ -152,8 +153,6 @@ class ContainerGarbageCollector:
 
         if destroyed_count > 0:
             logger.info("GCサイクル完了", destroyed=destroyed_count)
-
-    _ecs_gc_cycle_count: int = 0
 
     async def _collect_ecs(self) -> None:
         """ECSモード: Redis SCANベースのGC"""
