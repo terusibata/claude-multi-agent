@@ -22,6 +22,10 @@ AWS Bedrock + Claude Agent SDKを利用したマルチテナント対応AIエー
 
 ## アーキテクチャ
 
+本システムは **Docker モード**（ローカル開発）と **ECS モード**（本番AWS環境）の2つのコンテナ実行基盤を切り替えて動作します。
+
+### Docker モード（ローカル開発）
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │  クライアント (フロントエンド)                                            │
@@ -39,15 +43,10 @@ AWS Bedrock + Claude Agent SDKを利用したマルチテナント対応AIエー
 │  │ └── セキュリティヘッダー                                           │  │
 │  └───────────────────────────────────────────────────────────────────┘  │
 │  ┌───────────────────────────────────────────────────────────────────┐  │
-│  │ APIエンドポイント                                                  │  │
-│  │ /tenants, /models, /conversations, /simple-chats,                 │  │
-│  │ /skills, /mcp-servers, /usage, /files                             │  │
-│  └───────────────────────────────────────────────────────────────────┘  │
-│  ┌───────────────────────────────────────────────────────────────────┐  │
 │  │ コンテナオーケストレーション                                        │  │
 │  │ ├── Orchestrator  (コンテナ割当・再利用)                           │  │
-│  │ ├── WarmPool      (事前起動プール: min 2, max 10)                 │  │
-│  │ ├── Lifecycle     (作成・ヘルスチェック・破棄)                      │  │
+│  │ ├── WarmPool      (事前起動プール)                                │  │
+│  │ ├── ContainerManager (Docker / ECS)                               │  │
 │  │ └── GC            (TTL/絶対期限による自動回収)                      │  │
 │  └───────────────────────────────────────────────────────────────────┘  │
 │  ┌───────────────────────────────────────────────────────────────────┐  │
@@ -56,30 +55,58 @@ AWS Bedrock + Claude Agent SDKを利用したマルチテナント対応AIエー
 │  │ └── Forward Proxy → 外部通信 (ドメインホワイトリスト)               │  │
 │  └───────────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────┘
-        │          │          │                    │
-        │          │          │  Unix Socket       │  S3ファイル同期
-        │          │          │  (SSE中継)          │  (実行前後)
+        │          │          │  Unix Socket       │
+        │          │          │  (SSE中継)          │  S3ファイル同期
         │          │          ▼                    │
         │          │  ┌───────────────────────┐    │
         │          │  │ ワークスペースコンテナ   │    │
         │          │  │ (会話ごとに1つ)         │    │
-        │          │  │                       │    │
         │          │  │  workspace_agent      │    │
         │          │  │  ├── Claude Agent SDK  │    │
-        │          │  │  ├── Skills/MCPツール   │    │
         │          │  │  └── /workspace (作業)  │    │
         │          │  │                       │    │
         │          │  │  セキュリティ: 多層防御    │    │
         │          │  │  (network:none,         │    │
-        │          │  │   seccomp, cap-drop ALL,│    │
-        │          │  │   readonly rootfs, etc.) │    │
+        │          │  │   seccomp, cap-drop ALL)│    │
         │          │  └───────────────────────┘    │
         ▼          ▼                               ▼
 ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐
 │PostgreSQL│  │  Redis   │  │AWS Bedrock│  │ Amazon S3│
-│(メタデータ)│  │(ロック等) │  │  (LLM)    │  │(ワークスペース)│
 └──────────┘  └──────────┘  └──────────┘  └──────────┘
 ```
+
+### ECS モード（本番環境）
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│  FastAPI Backend (ECS Service / EC2)                                    │
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │ コンテナオーケストレーション                                        │  │
+│  │ ├── Orchestrator (統括)                                           │  │
+│  │ ├── EcsContainerManager (ECS RunTask API)                         │  │
+│  │ ├── WarmPool (min 50, max 120)                                    │  │
+│  │ └── GC (Redis SCAN + 孤立タスク検出)                               │  │
+│  └───────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────┘
+        │                     │ HTTP (task_ip:9000)
+        │ ECS RunTask API     │
+        ▼                     ▼
+┌─────────────────────────────────────────────────────────┐
+│  ECS Task (awsvpc)                                      │
+│  ┌─────────────────────┐  ┌──────────────────────────┐  │
+│  │ workspace-agent      │  │ proxy-sidecar            │  │
+│  │ (メインコンテナ)       │  │ (サイドカー)              │  │
+│  │                     │  │                          │  │
+│  │ :9000 HTTP          │  │ :8080 Forward Proxy      │  │
+│  │ ├── /health         │  │ :8081 Admin HTTP         │  │
+│  │ ├── /execute        │  │ ├── SigV4署名注入         │  │
+│  │ ├── /exec           │  │ └── ドメインホワイトリスト  │  │
+│  │ └── /exec/binary    │  │                          │  │
+│  └─────────────────────┘  └──────────────────────────┘  │
+└─────────────────────────────────────────────────────────┘
+```
+
+> 詳細は [ECSアーキテクチャ設計書](docs/ecs-architecture.md) を参照してください。
 
 ## 技術スタック
 
@@ -139,8 +166,10 @@ app/
 │   ├── aws_config.py            # AWS設定
 │   ├── workspace_service.py     # ワークスペース操作
 │   ├── container/               # コンテナ管理
+│   │   ├── base.py              # 抽象基底クラス (Docker/ECS共通IF)
 │   │   ├── orchestrator.py      # コンテナオーケストレーター
-│   │   ├── lifecycle.py         # コンテナライフサイクル
+│   │   ├── lifecycle.py         # Dockerコンテナライフサイクル
+│   │   ├── ecs_manager.py       # ECS RunTaskベースのコンテナ管理
 │   │   ├── warm_pool.py         # WarmPoolマネージャー
 │   │   ├── gc.py                # コンテナGC (TTL/絶対期限)
 │   │   ├── config.py            # コンテナ作成設定 (セキュリティ制御)
@@ -186,11 +215,13 @@ app/
 ├── database.py            # データベース接続
 └── main.py                # エントリーポイント (create_app呼び出し)
 workspace-base/            # コンテナベースイメージ
-├── Dockerfile             # Python 3.11 + Node.js 20
-├── entrypoint.sh          # エントリーポイント (socat起動等)
+├── Dockerfile             # workspace-agent イメージ (Python 3.11 + Node.js 20)
+├── Dockerfile.proxy-sidecar # ECS Proxyサイドカーイメージ
+├── entrypoint.sh          # エントリーポイント (UDS: socat起動 / HTTP: 直接起動)
+├── proxy-sidecar-entrypoint.py # サイドカー起動スクリプト
 └── workspace-requirements.txt
 workspace_agent/           # コンテナ内エージェントサーバー
-├── main.py                # FastAPI (Unix Socket) エントリーポイント
+├── main.py                # FastAPI (Unix Socket / HTTP) エントリーポイント
 ├── sdk_client.py          # Claude Agent SDK クライアント
 └── models.py              # リクエスト/レスポンスモデル
 deployment/                # デプロイメント設定
@@ -211,7 +242,8 @@ tests/                     # テスト
 - **Application Factory**: `app/core/app_factory.py` の `create_app()` でアプリケーションを生成
 - **Repository パターン**: `app/repositories/` でデータアクセスを抽象化し、サービス層から SQLAlchemy の直接操作を排除
 - **依存性注入**: `app/api/dependencies.py` でテナント/モデル検証等の共通ロジックを FastAPI の `Depends()` で注入
-- **コンテナ隔離実行**: 会話ごとに Docker コンテナを割り当て、Unix Socket 経由で SSE イベントを中継
+- **Strategy パターン**: `ContainerManagerBase` 抽象基底クラスで Docker/ECS 実装を統一的に切り替え
+- **コンテナ隔離実行**: 会話ごとにコンテナを割り当て、Docker では Unix Socket、ECS では HTTP 経由で SSE イベントを中継
 
 ## セットアップ
 
@@ -482,6 +514,29 @@ AI実行系API（一般ユーザー向け）のみにレート制限が適用さ
 | ANTHROPIC_HAIKU_MODEL | Haikuモデル（サブエージェント用） | global.anthropic.claude-haiku-4-5-20251001-v1:0 |
 | S3_BUCKET_NAME | ワークスペース用S3バケット名 | - |
 
+### コンテナ実行基盤設定
+
+| 変数名 | 説明 | デフォルト |
+|--------|------|----------|
+| CONTAINER_MANAGER_TYPE | コンテナ実行基盤（`docker` / `ecs`） | docker |
+| WARM_POOL_MIN_SIZE | WarmPool最小サイズ（Docker用） | 2 |
+| WARM_POOL_MAX_SIZE | WarmPool最大サイズ（Docker用） | 10 |
+
+### ECS設定（`CONTAINER_MANAGER_TYPE=ecs` 時のみ使用）
+
+| 変数名 | 説明 | デフォルト |
+|--------|------|----------|
+| ECS_CLUSTER | ECSクラスター名 | - |
+| ECS_TASK_DEFINITION | タスク定義名（family名、ARN、family:revision） | - |
+| ECS_SUBNETS | サブネットID（カンマ区切り） | - |
+| ECS_SECURITY_GROUPS | セキュリティグループID（カンマ区切り） | - |
+| ECS_CAPACITY_PROVIDER | キャパシティプロバイダー（EC2モード用、省略でFargate） | - |
+| ECS_AGENT_PORT | workspace-agentのHTTPポート | 9000 |
+| ECS_PROXY_ADMIN_PORT | Proxyサイドカーのadminポート | 8081 |
+| ECS_RUN_TASK_CONCURRENCY | RunTask API同時呼び出し上限 | 10 |
+| ECS_WARM_POOL_MIN_SIZE | WarmPool最小サイズ（ECS用） | 50 |
+| ECS_WARM_POOL_MAX_SIZE | WarmPool最大サイズ（ECS用） | 120 |
+
 ### セキュリティ設定
 
 | 変数名 | 説明 | デフォルト |
@@ -503,7 +558,7 @@ AI実行系API（一般ユーザー向け）のみにレート制限が適用さ
 
 ### AWS IAMポリシー要件
 
-AWS認証情報には **Bedrock** と **S3** の両方の権限が必要です：
+AWS認証情報には **Bedrock**、**S3**、および ECS モード時は **ECS / CloudWatch Logs** の権限が必要です：
 
 ```json
 {
@@ -530,6 +585,19 @@ AWS認証情報には **Bedrock** と **S3** の両方の権限が必要です�
         "arn:aws:s3:::your-bucket-name",
         "arn:aws:s3:::your-bucket-name/*"
       ]
+    },
+    {
+      "Sid": "ECSMode",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:RunTask",
+        "ecs:StopTask",
+        "ecs:DescribeTasks",
+        "ecs:ListTasks",
+        "iam:PassRole",
+        "logs:GetLogEvents"
+      ],
+      "Resource": "*"
     }
   ]
 }
@@ -541,6 +609,7 @@ AWS認証情報には **Bedrock** と **S3** の両方の権限が必要です�
 
 - [API仕様書](docs/api-specification/) - エンドポイントの詳細仕様
 - [使い方ガイド](docs/usage-guide.md) - 基本的な使い方
+- [ECSアーキテクチャ設計書](docs/ecs-architecture.md) - AWS ECS移行の設計・構成・運用
 - [デプロイメント設定](docs/deployment-guide.md) - コンテナセキュリティ、S3ライフサイクル
 - [セキュリティ設定](docs/operations/security-config-guide.md) - 認証、レート制限、セキュリティヘッダー
 - [監視ガイド](docs/operations/monitoring-guide.md) - メトリクス、アラート
