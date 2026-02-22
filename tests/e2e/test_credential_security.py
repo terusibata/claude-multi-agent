@@ -23,13 +23,11 @@ class TestMcpTokenIsolation:
     @pytest.mark.asyncio
     async def test_mcp_configs_sent_to_container_without_headers(self):
         """コンテナに送信されるMCP設定にヘッダーが含まれないこと"""
-        from app.services.execute_service import ExecuteService
+        from app.services.mcp_config_builder import McpConfigBuilder
 
-        # ExecuteServiceの最小限のモックを作成
-        service = MagicMock(spec=ExecuteService)
-        service.orchestrator = AsyncMock()
-        service._extract_mcp_headers_to_proxy = (
-            ExecuteService._extract_mcp_headers_to_proxy.__get__(service)
+        mock_orchestrator = AsyncMock()
+        builder = McpConfigBuilder(
+            mcp_server_service=MagicMock(), orchestrator=mock_orchestrator
         )
 
         mcp_configs = [
@@ -47,7 +45,7 @@ class TestMcpTokenIsolation:
             },
         ]
 
-        result = await service._extract_mcp_headers_to_proxy(mcp_configs, "ws-test-container")
+        result = await builder.extract_mcp_headers_to_proxy(mcp_configs, "ws-test-container")
 
         # コンテナ用設定にヘッダーが含まれないこと
         for config in result:
@@ -64,12 +62,11 @@ class TestMcpTokenIsolation:
     @pytest.mark.asyncio
     async def test_proxy_receives_mcp_header_rules(self):
         """プロキシにMCPヘッダールールが正しく設定されること"""
-        from app.services.execute_service import ExecuteService
+        from app.services.mcp_config_builder import McpConfigBuilder
 
-        service = MagicMock(spec=ExecuteService)
-        service.orchestrator = AsyncMock()
-        service._extract_mcp_headers_to_proxy = (
-            ExecuteService._extract_mcp_headers_to_proxy.__get__(service)
+        mock_orchestrator = AsyncMock()
+        builder = McpConfigBuilder(
+            mcp_server_service=MagicMock(), orchestrator=mock_orchestrator
         )
 
         mcp_configs = [
@@ -81,11 +78,11 @@ class TestMcpTokenIsolation:
             },
         ]
 
-        await service._extract_mcp_headers_to_proxy(mcp_configs, "ws-test-container")
+        await builder.extract_mcp_headers_to_proxy(mcp_configs, "ws-test-container")
 
         # orchestrator.update_mcp_header_rules が呼ばれたこと
-        service.orchestrator.update_mcp_header_rules.assert_called_once()
-        call_args = service.orchestrator.update_mcp_header_rules.call_args
+        mock_orchestrator.update_mcp_header_rules.assert_called_once()
+        call_args = mock_orchestrator.update_mcp_header_rules.call_args
         container_id = call_args[0][0]
         rules = call_args[0][1]
 
@@ -101,12 +98,11 @@ class TestMcpTokenIsolation:
     @pytest.mark.asyncio
     async def test_mcp_config_without_headers_still_proxied(self):
         """ヘッダーなしのMCPサーバーもプロキシ経由にルーティングされること"""
-        from app.services.execute_service import ExecuteService
+        from app.services.mcp_config_builder import McpConfigBuilder
 
-        service = MagicMock(spec=ExecuteService)
-        service.orchestrator = AsyncMock()
-        service._extract_mcp_headers_to_proxy = (
-            ExecuteService._extract_mcp_headers_to_proxy.__get__(service)
+        mock_orchestrator = AsyncMock()
+        builder = McpConfigBuilder(
+            mcp_server_service=MagicMock(), orchestrator=mock_orchestrator
         )
 
         mcp_configs = [
@@ -118,7 +114,7 @@ class TestMcpTokenIsolation:
             },
         ]
 
-        result = await service._extract_mcp_headers_to_proxy(mcp_configs, "ws-test")
+        result = await builder.extract_mcp_headers_to_proxy(mcp_configs, "ws-test")
 
         assert result[0]["base_url"] == "http://127.0.0.1:8080/mcp/public-api"
         assert "headers" not in result[0]
@@ -126,17 +122,16 @@ class TestMcpTokenIsolation:
     @pytest.mark.asyncio
     async def test_empty_mcp_configs(self):
         """MCP設定が空の場合、空リストを返すこと"""
-        from app.services.execute_service import ExecuteService
+        from app.services.mcp_config_builder import McpConfigBuilder
 
-        service = MagicMock(spec=ExecuteService)
-        service.orchestrator = AsyncMock()
-        service._extract_mcp_headers_to_proxy = (
-            ExecuteService._extract_mcp_headers_to_proxy.__get__(service)
+        mock_orchestrator = AsyncMock()
+        builder = McpConfigBuilder(
+            mcp_server_service=MagicMock(), orchestrator=mock_orchestrator
         )
 
-        result = await service._extract_mcp_headers_to_proxy([], "ws-test")
+        result = await builder.extract_mcp_headers_to_proxy([], "ws-test")
         assert result == []
-        service.orchestrator.update_mcp_header_rules.assert_not_called()
+        mock_orchestrator.update_mcp_header_rules.assert_not_called()
 
 
 class TestMcpReverseProxy:

@@ -159,8 +159,9 @@ class Settings(BaseSettings):
     warm_pool_ttl: int = 1800  # 30分
 
     # ECS用WarmPool設定（container_manager_type=ecsの場合に使用）
-    ecs_warm_pool_min_size: int = 50
-    ecs_warm_pool_max_size: int = 120
+    # 本番環境では環境変数で適切な値にオーバーライドすること
+    ecs_warm_pool_min_size: int = 2
+    ecs_warm_pool_max_size: int = 20
 
     # ============================================
     # ECS設定（container_manager_type=ecsの場合に使用）

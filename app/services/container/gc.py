@@ -203,14 +203,37 @@ class ContainerGarbageCollector:
             logger.info("GCサイクル完了(ECS)", destroyed=destroyed_count)
 
     async def _detect_orphan_ecs_tasks(self) -> int:
-        """ECSタスクのうちRedisに記録がないものを検出・停止"""
+        """ECSタスクのうちRedisに記録がないものを検出・停止
+
+        作成直後のタスク（Redis登録前）を誤破棄しないよう、
+        _ORPHAN_MIN_AGE_SECONDS 未満のタスクはスキップする。
+        """
         destroyed = 0
+        now = datetime.now(timezone.utc)
         try:
             containers = await self.lifecycle.list_workspace_containers()
             for c in containers:
                 container_id = c.get("Name", "")
                 if not container_id:
                     continue
+
+                # 作成直後のタスクはスキップ（Redis登録前の正常タスクを保護）
+                created_str = c.get("Created", "")
+                if created_str:
+                    try:
+                        if isinstance(created_str, datetime):
+                            created_at = created_str
+                        else:
+                            created_at = datetime.fromisoformat(
+                                str(created_str).replace("Z", "+00:00")
+                            )
+                        if created_at.tzinfo is None:
+                            created_at = created_at.replace(tzinfo=timezone.utc)
+                        age = (now - created_at).total_seconds()
+                        if age < _ORPHAN_MIN_AGE_SECONDS:
+                            continue
+                    except (ValueError, TypeError):
+                        pass
 
                 # Redisに逆引きキーがあるか確認
                 has_reverse = await self.redis.exists(

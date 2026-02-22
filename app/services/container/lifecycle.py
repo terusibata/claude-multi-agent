@@ -292,5 +292,3 @@ class DockerContainerManager(ContainerManagerBase):
         return exit_code, b"".join(stdout_chunks)
 
 
-# 後方互換エイリアス
-ContainerLifecycleManager = DockerContainerManager

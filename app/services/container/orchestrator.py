@@ -2,19 +2,23 @@
 Container Orchestrator
 会話ごとのコンテナ管理を統括する中心モジュール
 
+Docker / ECS デュアルモード対応:
+  - Docker: UDS経由（agent.sock / proxy.sock）でコンテナと通信
+  - ECS: TCP HTTP直接接続（http://{task_ip}:9000）でコンテナと通信
+
 フロー:
   1. リクエスト受信
   2. Redis: conversation_id → container検索
-     ├─ 存在 → TTLリセット → Unix Socket経由でリクエスト転送
+     ├─ 存在 → TTLリセット → UDS/HTTP経由でリクエスト転送
      └─ なし → WarmPoolからコンテナ取得（空なら新規作成）
   3. conversation_idラベル付け
-  4. Unix Socketペア作成 (agent.sock + proxy.sock)
-  5. Credential Injection Proxy起動
-  6. S3 → コンテナへファイル同期
-  7. Redis記録 (TTL: 3600s)
-  8. agent.sock経由で /execute POST
-  9. SSEレスポンス中継
-  10. 完了後、AI生成ファイルをS3同期
+  4. (Docker) UDS Socketペア作成 + Credential Injection Proxy起動
+     (ECS) サイドカーProxy起動済み（no-op）
+  5. S3 → コンテナへファイル同期
+  6. Redis記録 (TTL: 3600s)
+  7. UDS/HTTP経由で /execute POST
+  8. SSEレスポンス中継
+  9. 完了後、AI生成ファイルをS3同期
 """
 import asyncio
 import time
@@ -73,6 +77,8 @@ class ContainerOrchestrator:
         self.redis = redis
         self._proxies: dict[str, CredentialInjectionProxy] = {}
         self._settings = get_settings()
+        # ECSモード用: admin HTTPクライアント（リクエスト間で再利用）
+        self._admin_http_client: httpx.AsyncClient | None = None
 
     def _make_agent_client(
         self, info: ContainerInfo, timeout: httpx.Timeout | None = None,
@@ -211,24 +217,11 @@ class ContainerOrchestrator:
                 conversation_id=conversation_id,
             )
             yield b"event: error\ndata: {\"message\": \"Execution timeout\"}\n\n"
-            # タイムアウト後もコンテナ内エージェントが実行中の可能性があるため、
-            # コンテナを破棄して次回リクエスト用に新規作成する
-            try:
-                old_container_id = info.id
-                await self._cleanup_container(info)
-                new_info = await self.get_or_create(conversation_id)
-                info = new_info
-                recovered = True
-                logger.info(
-                    "タイムアウトコンテナ復旧完了",
-                    old_container_id=old_container_id,
-                    new_container_id=new_info.id,
-                    conversation_id=conversation_id,
-                )
-            except Exception as cleanup_err:
-                logger.error("タイムアウトコンテナクリーンアップ失敗", error=str(cleanup_err))
+            info, recovered = await self._recover_container(info, conversation_id, "timeout")
+            if recovered:
+                yield event_to_sse_bytes(format_container_recovered_event(seq=0))
+
         except ConnectionError as e:
-            # Proxy接続エラー: まずProxy単体の再起動を試行（Step 3-3）
             get_workspace_requests_total().inc(status="error")
             container_logs = await self._capture_container_logs(info.id)
             logger.warning(
@@ -245,27 +238,11 @@ class ContainerOrchestrator:
             if info.manager_type == "ecs":
                 # ECSモード: ProxyはサイドカーのためProxy単体再起動は不可。
                 # コンテナ全体の復旧に直接進む。
-                get_workspace_container_crashes().inc()
-                audit_container_crashed(
-                    container_id=info.id,
-                    conversation_id=conversation_id,
-                    error=str(e),
+                info, recovered = await self._recover_container(
+                    info, conversation_id, str(e),
                 )
-                try:
-                    old_container_id = info.id
-                    await self._cleanup_container(info)
-                    new_info = await self.get_or_create(conversation_id)
-                    info = new_info
-                    recovered = True
-                    logger.info(
-                        "コンテナ復旧完了",
-                        old_container_id=old_container_id,
-                        new_container_id=new_info.id,
-                        conversation_id=conversation_id,
-                    )
+                if recovered:
                     yield event_to_sse_bytes(format_container_recovered_event(seq=0))
-                except Exception as recovery_err:
-                    logger.error("コンテナ復旧失敗", error=str(recovery_err))
             else:
                 # Dockerモード: Proxy単体の再起動を試行
                 try:
@@ -273,31 +250,14 @@ class ContainerOrchestrator:
                     yield event_to_sse_bytes(format_container_recovered_event(seq=0))
                 except Exception as proxy_err:
                     logger.error("Proxy再起動失敗、コンテナ全体復旧へ", error=str(proxy_err))
-                    get_workspace_container_crashes().inc()
-                    audit_container_crashed(
-                        container_id=info.id,
-                        conversation_id=conversation_id,
-                        error=str(e),
+                    info, recovered = await self._recover_container(
+                        info, conversation_id, str(e),
                     )
-                    try:
-                        old_container_id = info.id
-                        await self._cleanup_container(info)
-                        new_info = await self.get_or_create(conversation_id)
-                        info = new_info
-                        recovered = True
-                        logger.info(
-                            "コンテナ復旧完了",
-                            old_container_id=old_container_id,
-                            new_container_id=new_info.id,
-                            conversation_id=conversation_id,
-                        )
+                    if recovered:
                         yield event_to_sse_bytes(format_container_recovered_event(seq=0))
-                    except Exception as recovery_err:
-                        logger.error("コンテナ復旧失敗", error=str(recovery_err))
 
         except Exception as e:
             get_workspace_requests_total().inc(status="error")
-            get_workspace_container_crashes().inc()
             container_logs = await self._capture_container_logs(info.id)
             logger.error(
                 "コンテナ実行エラー",
@@ -308,29 +268,10 @@ class ContainerOrchestrator:
                 error_type=type(e).__name__,
                 container_logs=container_logs,
             )
-            audit_container_crashed(
-                container_id=info.id,
-                conversation_id=conversation_id,
-                error=str(e),
-            )
             yield b"event: error\ndata: {\"message\": \"Container execution failed\"}\n\n"
-
-            # クラッシュ復旧: 不健全コンテナをクリーンアップし新コンテナを準備
-            try:
-                old_container_id = info.id
-                await self._cleanup_container(info)
-                new_info = await self.get_or_create(conversation_id)
-                info = new_info
-                recovered = True
-                logger.info(
-                    "コンテナ復旧完了",
-                    old_container_id=old_container_id,
-                    new_container_id=new_info.id,
-                    conversation_id=conversation_id,
-                )
+            info, recovered = await self._recover_container(info, conversation_id, str(e))
+            if recovered:
                 yield event_to_sse_bytes(format_container_recovered_event(seq=0))
-            except Exception as recovery_err:
-                logger.error("コンテナ復旧失敗", error=str(recovery_err))
         else:
             get_workspace_requests_total().inc(status="success")
         finally:
@@ -378,6 +319,11 @@ class ContainerOrchestrator:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
+        # ECS admin HTTPクライアントをクローズ
+        if self._admin_http_client:
+            await self._admin_http_client.aclose()
+            self._admin_http_client = None
+
         logger.info("全コンテナ破棄完了", count=len(tasks))
 
     # ---- Private methods ----
@@ -385,6 +331,43 @@ class ContainerOrchestrator:
     async def _capture_container_logs(self, container_id: str, tail: int = 50) -> str:
         """コンテナのログ末尾を取得（デバッグ用、破棄前に呼ぶ）"""
         return await self.lifecycle.get_container_logs(container_id, tail=tail)
+
+    async def _recover_container(
+        self,
+        info: ContainerInfo,
+        conversation_id: str,
+        error_detail: str,
+    ) -> tuple[ContainerInfo, bool]:
+        """不健全コンテナを破棄し新コンテナを準備
+
+        Args:
+            info: 不健全なコンテナ情報
+            conversation_id: 会話ID
+            error_detail: エラー詳細（監査ログ用）
+
+        Returns:
+            (new_info, recovered) — recovered=Trueなら新コンテナ準備完了
+        """
+        get_workspace_container_crashes().inc()
+        audit_container_crashed(
+            container_id=info.id,
+            conversation_id=conversation_id,
+            error=error_detail,
+        )
+        try:
+            old_container_id = info.id
+            await self._cleanup_container(info)
+            new_info = await self.get_or_create(conversation_id)
+            logger.info(
+                "コンテナ復旧完了",
+                old_container_id=old_container_id,
+                new_container_id=new_info.id,
+                conversation_id=conversation_id,
+            )
+            return new_info, True
+        except Exception as recovery_err:
+            logger.error("コンテナ復旧失敗", error=str(recovery_err))
+            return info, False
 
     async def _start_proxy(self, info: ContainerInfo) -> None:
         """コンテナ用Proxyを起動
@@ -394,7 +377,7 @@ class ContainerOrchestrator:
         """
         if info.manager_type == "ecs":
             # サイドカーは既に起動済み。no-op。
-            logger.info(
+            logger.debug(
                 "ECSモード: Proxyサイドカー起動済み（no-op）",
                 container_id=info.id,
             )
@@ -469,6 +452,14 @@ class ContainerOrchestrator:
             container_id=container_id,
         )
 
+    def _get_admin_http_client(self) -> httpx.AsyncClient:
+        """ECS admin HTTP用クライアントを取得（遅延初期化・再利用）"""
+        if self._admin_http_client is None:
+            self._admin_http_client = httpx.AsyncClient(
+                timeout=httpx.Timeout(5.0, connect=3.0),
+            )
+        return self._admin_http_client
+
     async def _update_mcp_rules_via_http(
         self,
         container_id: str,
@@ -497,17 +488,17 @@ class ContainerOrchestrator:
         }
 
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.post(
-                    f"{admin_url}/admin/update-rules",
-                    json=rules_payload,
+            client = self._get_admin_http_client()
+            resp = await client.post(
+                f"{admin_url}/admin/update-rules",
+                json=rules_payload,
+            )
+            if resp.status_code != 200:
+                logger.error(
+                    "ECS MCPルール更新失敗",
+                    container_id=container_id,
+                    status=resp.status_code,
                 )
-                if resp.status_code != 200:
-                    logger.error(
-                        "ECS MCPルール更新失敗",
-                        container_id=container_id,
-                        status=resp.status_code,
-                    )
         except Exception as e:
             logger.error(
                 "ECS MCPルール更新エラー",

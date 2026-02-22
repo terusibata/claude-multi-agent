@@ -9,7 +9,6 @@ import asyncio
 import os
 import signal
 
-import httpx
 import structlog
 
 structlog.configure(
@@ -48,30 +47,10 @@ async def main() -> None:
     )
 
     # ECSサイドカーではTCPリスンが必要
-    # CredentialInjectionProxy は UDS だが、サイドカーでは同一タスク内の
-    # localhost:8080 で workspace-agent から接続されるため、
-    # socat 等で TCP→UDS 変換するか、直接 TCP リスンに変更する。
-    # ここでは asyncio.start_server で TCP リスンし、Proxy ロジックを再利用する。
-
-    # UDS の代わりに TCP で直接起動するためにパッチ
+    # 同一タスク内の localhost:8080 で workspace-agent から接続される
     socket_path = "/tmp/proxy-internal.sock"
     proxy = CredentialInjectionProxy(proxy_config, socket_path)
-
-    # TCP リスン版の start
-    proxy._http_client = httpx.AsyncClient(
-        timeout=httpx.Timeout(60.0, connect=10.0),
-        limits=httpx.Limits(
-            max_connections=100,
-            max_keepalive_connections=20,
-            keepalive_expiry=30.0,
-        ),
-    )
-    proxy._server = await asyncio.start_server(
-        proxy._handle_connection,
-        host="0.0.0.0",
-        port=proxy_port,
-    )
-    logger.info("Proxy TCP起動", port=proxy_port)
+    await proxy.start_tcp(host="0.0.0.0", port=proxy_port)
 
     # Admin HTTP サーバー起動
     admin = ProxyAdminServer(proxy, port=admin_port)
@@ -92,11 +71,7 @@ async def main() -> None:
 
     # クリーンアップ
     await admin.stop()
-    if proxy._server:
-        proxy._server.close()
-        await proxy._server.wait_closed()
-    if proxy._http_client:
-        await proxy._http_client.aclose()
+    await proxy.stop()
     logger.info("Proxyサイドカー停止完了")
 
 
