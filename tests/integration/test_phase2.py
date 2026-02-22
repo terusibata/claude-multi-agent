@@ -177,7 +177,7 @@ class TestSeccompConfig:
                 userns_remap_enabled=False,
             )
 
-            from app.services.container.config import get_container_create_config
+            from app.services.container.docker_config import get_container_create_config
 
             config = get_container_create_config("ws-test")
             security_opts = config["HostConfig"]["SecurityOpt"]
@@ -200,7 +200,7 @@ class TestSeccompConfig:
                 userns_remap_enabled=False,
             )
 
-            from app.services.container.config import get_container_create_config
+            from app.services.container.docker_config import get_container_create_config
 
             config = get_container_create_config("ws-test")
             security_opts = config["HostConfig"]["SecurityOpt"]
@@ -226,7 +226,7 @@ class TestUsernsRemapConfig:
                 userns_remap_enabled=True,
             )
 
-            from app.services.container.config import get_container_create_config
+            from app.services.container.docker_config import get_container_create_config
 
             config = get_container_create_config("ws-test")
             assert "UsernsMode" not in config["HostConfig"]

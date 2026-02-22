@@ -14,7 +14,7 @@ import structlog
 
 from app.config import get_settings
 from app.services.container.base import ContainerManagerBase
-from app.services.container.config import get_container_create_config
+from app.services.container.docker_config import get_container_create_config
 from app.services.container.models import ContainerInfo, ContainerStatus
 
 logger = structlog.get_logger(__name__)

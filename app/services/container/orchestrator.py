@@ -41,7 +41,7 @@ from app.infrastructure.metrics import (
     get_workspace_container_startup,
     get_workspace_requests_total,
 )
-from app.services.container.config import (
+from app.services.container.constants import (
     CONTAINER_TTL_SECONDS,
     REDIS_KEY_CONTAINER,
     REDIS_KEY_CONTAINER_REVERSE,
@@ -84,8 +84,6 @@ class ContainerOrchestrator:
         self._settings = get_settings()
         # ECSモード用: admin HTTPクライアント（リクエスト間で再利用）
         self._admin_http_client: httpx.AsyncClient | None = None
-        # 復旧試行記録: {conversation_id: [timestamp, ...]}
-        self._recovery_attempts: dict[str, list[float]] = {}
 
     def _make_agent_client(
         self, info: ContainerInfo, timeout: httpx.Timeout | None = None,
@@ -228,7 +226,7 @@ class ContainerOrchestrator:
             if recovered:
                 yield event_to_sse_bytes(format_container_recovered_event(seq=0))
 
-        except ConnectionError as e:
+        except (ConnectionError, httpx.ConnectError, httpx.RemoteProtocolError) as e:
             get_workspace_requests_total().inc(status="error")
             container_logs = await self._capture_container_logs(info.id)
             logger.warning(
@@ -316,6 +314,8 @@ class ContainerOrchestrator:
         await self.warm_pool.drain()
 
         # 残存コンテナ（会話に割り当て済みのもの）を破棄
+        # Docker API はコンテナ名に先頭 "/" を付与するが、ECS は付与しない。
+        # lstrip("/") で両モードのコンテナ名を正規化する。
         containers = await self.lifecycle.list_workspace_containers()
         tasks = []
         for c in containers:
@@ -366,21 +366,22 @@ class ContainerOrchestrator:
         )
 
         # 復旧試行回数チェック（無限ループ防止）
-        now = time.time()
-        attempts = self._recovery_attempts.get(conversation_id, [])
-        # 時間窓外の古い記録を除去
-        attempts = [t for t in attempts if now - t < _RECOVERY_WINDOW_SECONDS]
-        if len(attempts) >= _MAX_RECOVERY_ATTEMPTS:
-            logger.error(
-                "コンテナ復旧上限到達",
-                conversation_id=conversation_id,
-                attempts=len(attempts),
-                window_seconds=_RECOVERY_WINDOW_SECONDS,
-            )
-            self._recovery_attempts[conversation_id] = attempts
-            return info, False
-        attempts.append(now)
-        self._recovery_attempts[conversation_id] = attempts
+        # Redis カウンターで管理（マルチプロセス対応）
+        recovery_key = f"workspace:recovery:{conversation_id}"
+        try:
+            count = await self.redis.incr(recovery_key)
+            if count == 1:
+                await self.redis.expire(recovery_key, _RECOVERY_WINDOW_SECONDS)
+            if count > _MAX_RECOVERY_ATTEMPTS:
+                logger.error(
+                    "コンテナ復旧上限到達",
+                    conversation_id=conversation_id,
+                    attempts=count,
+                    window_seconds=_RECOVERY_WINDOW_SECONDS,
+                )
+                return info, False
+        except Exception as redis_err:
+            logger.warning("復旧カウンター確認失敗（続行）", error=str(redis_err))
 
         try:
             old_container_id = info.id

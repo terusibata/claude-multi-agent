@@ -11,7 +11,7 @@ from redis.asyncio import Redis
 
 from app.config import get_settings
 from app.infrastructure.metrics import get_workspace_active_containers, get_workspace_gc_cycles
-from app.services.container.config import (
+from app.services.container.constants import (
     REDIS_KEY_CONTAINER,
     REDIS_KEY_CONTAINER_REVERSE,
     REDIS_KEY_ECS_TASK,
@@ -130,16 +130,28 @@ class ContainerGarbageCollector:
                     await self._graceful_destroy(info)
                     destroyed_count += 1
             else:
+                now = datetime.now(timezone.utc)
                 created_str = container_info.get("Created", "")
                 is_old_enough = True
                 if created_str:
                     try:
-                        created_ts = float(created_str) if isinstance(created_str, (int, float, str)) else 0
-                        created_at = datetime.fromtimestamp(created_ts, tz=timezone.utc)
-                        age = (datetime.now(timezone.utc) - created_at).total_seconds()
+                        if isinstance(created_str, datetime):
+                            created_at = created_str
+                        else:
+                            created_at = datetime.fromisoformat(
+                                str(created_str).replace("Z", "+00:00")
+                            )
+                        if created_at.tzinfo is None:
+                            created_at = created_at.replace(tzinfo=timezone.utc)
+                        age = (now - created_at).total_seconds()
                         is_old_enough = age > _ORPHAN_MIN_AGE_SECONDS
-                    except (ValueError, TypeError, OSError):
-                        is_old_enough = True
+                    except (ValueError, TypeError):
+                        logger.warning(
+                            "GC: コンテナ作成時刻パース失敗、スキップ",
+                            container_id=container_id,
+                            created_str=str(created_str),
+                        )
+                        is_old_enough = False
 
                 if is_old_enough:
                     logger.warning("GC: 孤立コンテナ破棄", container_id=container_id)

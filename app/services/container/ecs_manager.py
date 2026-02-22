@@ -18,7 +18,7 @@ from redis.asyncio import Redis
 
 from app.config import get_settings
 from app.services.container.base import ContainerManagerBase
-from app.services.container.config import (
+from app.services.container.constants import (
     CONTAINER_TTL_SECONDS,
     REDIS_KEY_CONTAINER,
     REDIS_KEY_CONTAINER_REVERSE,
@@ -559,6 +559,11 @@ class EcsContainerManager(ContainerManagerBase):
                 return data.get("agent_socket")
 
         # フォールバック: task_arn → describe_tasks → IP
+        # Redis逆引き失敗は Redis キー期限切れや不整合の兆候
+        logger.warning(
+            "Redis逆引き失敗、describe_tasksフォールバック",
+            container_id=container_id,
+        )
         task_arn = await self._resolve_task_arn(container_id)
         if task_arn:
             task_ip = await self._get_task_ip(task_arn)

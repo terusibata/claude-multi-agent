@@ -110,6 +110,19 @@ def _create_container_manager(settings, redis: Redis) -> tuple[ContainerManagerB
         (lifecycle, docker_client) — ECSモードでは docker_client=None
     """
     if settings.container_manager_type == "ecs":
+        # ECSモード必須設定の検証
+        missing = []
+        if not settings.ecs_cluster:
+            missing.append("ECS_CLUSTER")
+        if not settings.ecs_task_definition:
+            missing.append("ECS_TASK_DEFINITION")
+        if not settings.ecs_subnets:
+            missing.append("ECS_SUBNETS")
+        if missing:
+            raise ValueError(
+                f"ECSモードには以下の設定が必須です: {', '.join(missing)}"
+            )
+
         from app.services.container.ecs_manager import EcsContainerManager
         lifecycle = EcsContainerManager(redis)
         logger.info(

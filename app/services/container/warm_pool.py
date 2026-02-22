@@ -20,7 +20,7 @@ from app.infrastructure.metrics import (
     get_workspace_warm_pool_exhausted,
     get_workspace_warm_pool_size,
 )
-from app.services.container.config import (
+from app.services.container.constants import (
     REDIS_KEY_WARM_POOL,
     REDIS_KEY_WARM_POOL_INFO,
     WARM_POOL_TTL_SECONDS,
@@ -71,11 +71,13 @@ class WarmPoolManager:
             self.max_size = _settings.warm_pool_max_size
 
         self._background_tasks: set[asyncio.Task] = set()
-        # ECS RunTask API同時呼び出し制限用Semaphore
+        # コンテナ作成同時実行制限用Semaphore
+        # ECS: RunTask API のスロットリング回避
+        # Docker: Docker デーモンの過負荷防止
         self._create_semaphore = asyncio.Semaphore(
             _settings.ecs_run_task_concurrency
             if _settings.container_manager_type == "ecs"
-            else 100  # Docker は実質無制限
+            else 10
         )
 
     async def preheat(self) -> int:

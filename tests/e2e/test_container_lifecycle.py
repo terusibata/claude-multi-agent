@@ -48,7 +48,7 @@ class TestContainerCreateConfig:
                 apparmor_profile_name="workspace-container",
             )
 
-            from app.services.container.config import get_container_create_config
+            from app.services.container.docker_config import get_container_create_config
 
             config = get_container_create_config("ws-e2e-test")
             assert config["HostConfig"]["NetworkMode"] == "none"
@@ -67,7 +67,7 @@ class TestContainerCreateConfig:
                 apparmor_profile_name="",
             )
 
-            from app.services.container.config import get_container_create_config
+            from app.services.container.docker_config import get_container_create_config
 
             config = get_container_create_config("ws-e2e-test")
             assert config["HostConfig"]["ReadonlyRootfs"] is True
@@ -86,7 +86,7 @@ class TestContainerCreateConfig:
                 apparmor_profile_name="",
             )
 
-            from app.services.container.config import get_container_create_config
+            from app.services.container.docker_config import get_container_create_config
 
             config = get_container_create_config("ws-e2e-test")
             assert config["HostConfig"]["PidsLimit"] == 256
@@ -105,7 +105,7 @@ class TestContainerCreateConfig:
                 apparmor_profile_name="",
             )
 
-            from app.services.container.config import get_container_create_config
+            from app.services.container.docker_config import get_container_create_config
 
             config = get_container_create_config("ws-e2e-test")
             assert config["HostConfig"]["CapDrop"] == ["ALL"]
@@ -126,7 +126,7 @@ class TestContainerCreateConfig:
                 apparmor_profile_name="workspace-container",
             )
 
-            from app.services.container.config import get_container_create_config
+            from app.services.container.docker_config import get_container_create_config
 
             config = get_container_create_config("ws-e2e-test")
             security_opt = config["HostConfig"]["SecurityOpt"]
@@ -419,7 +419,7 @@ class TestAppArmorProfile:
                 apparmor_profile_name="workspace-container",
             )
 
-            from app.services.container.config import get_container_create_config
+            from app.services.container.docker_config import get_container_create_config
 
             config = get_container_create_config("ws-test")
             assert "apparmor=workspace-container" in config["HostConfig"]["SecurityOpt"]

@@ -27,7 +27,7 @@ class TestContainerEnvVars:
                 userns_remap_enabled=True,
             )
 
-            from app.services.container.config import get_container_create_config
+            from app.services.container.docker_config import get_container_create_config
 
             config = get_container_create_config("ws-test")
             env_list = config["Env"]
@@ -55,7 +55,7 @@ class TestContainerEnvVars:
                 userns_remap_enabled=True,
             )
 
-            from app.services.container.config import get_container_create_config
+            from app.services.container.docker_config import get_container_create_config
 
             config = get_container_create_config("ws-test")
             env_list = config["Env"]
@@ -76,7 +76,7 @@ class TestContainerEnvVars:
                 userns_remap_enabled=True,
             )
 
-            from app.services.container.config import get_container_create_config
+            from app.services.container.docker_config import get_container_create_config
 
             config = get_container_create_config("ws-test")
             tmpfs = config["HostConfig"]["Tmpfs"]
