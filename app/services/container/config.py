@@ -8,6 +8,7 @@ from app.services.container.constants import (  # noqa: F401
     CONTAINER_TTL_SECONDS,
     REDIS_KEY_CONTAINER,
     REDIS_KEY_CONTAINER_REVERSE,
+    REDIS_KEY_ECS_TASK,
     REDIS_KEY_WARM_POOL,
     REDIS_KEY_WARM_POOL_INFO,
     WARM_POOL_TTL_SECONDS,

@@ -14,6 +14,7 @@ from app.infrastructure.metrics import get_workspace_active_containers, get_work
 from app.services.container.config import (
     REDIS_KEY_CONTAINER,
     REDIS_KEY_CONTAINER_REVERSE,
+    REDIS_KEY_ECS_TASK,
     REDIS_KEY_WARM_POOL_INFO,
 )
 from app.services.container.base import ContainerManagerBase
@@ -233,7 +234,14 @@ class ContainerGarbageCollector:
                         if age < _ORPHAN_MIN_AGE_SECONDS:
                             continue
                     except (ValueError, TypeError):
-                        pass
+                        # パースできない場合は安全側に倒してスキップ
+                        # （新規タスクの誤破棄を防ぐ）
+                        logger.warning(
+                            "GC(ECS): タスク作成時刻パース失敗、スキップ",
+                            container_id=container_id,
+                            created_str=str(created_str),
+                        )
+                        continue
 
                 # Redisに逆引きキーがあるか確認
                 has_reverse = await self.redis.exists(
@@ -243,7 +251,7 @@ class ContainerGarbageCollector:
                     f"{REDIS_KEY_WARM_POOL_INFO}:{container_id}"
                 )
                 has_ecs_task = await self.redis.exists(
-                    f"workspace:ecs_task:{container_id}"
+                    f"{REDIS_KEY_ECS_TASK}:{container_id}"
                 )
 
                 if not has_reverse and not has_pool and not has_ecs_task:
@@ -312,7 +320,7 @@ class ContainerGarbageCollector:
             await self.redis.delete(f"{REDIS_KEY_CONTAINER}:{info.conversation_id}")
             await self.redis.delete(f"{REDIS_KEY_CONTAINER_REVERSE}:{info.id}")
             if info.manager_type == "ecs":
-                await self.redis.delete(f"workspace:ecs_task:{info.id}")
+                await self.redis.delete(f"{REDIS_KEY_ECS_TASK}:{info.id}")
 
             # BUG-13修正: アクティブコンテナメトリクスをデクリメント
             get_workspace_active_containers().dec()

@@ -45,6 +45,7 @@ from app.services.container.config import (
     CONTAINER_TTL_SECONDS,
     REDIS_KEY_CONTAINER,
     REDIS_KEY_CONTAINER_REVERSE,
+    REDIS_KEY_ECS_TASK,
 )
 from app.services.container.base import ContainerManagerBase
 from app.services.container.models import ContainerInfo, ContainerStatus
@@ -536,7 +537,7 @@ class ContainerOrchestrator:
         # ECSタスクマッピングキーのTTLもリセット（ECSモードのみ存在）
         if info.manager_type == "ecs":
             await self.redis.expire(
-                f"workspace:ecs_task:{info.id}", CONTAINER_TTL_SECONDS
+                f"{REDIS_KEY_ECS_TASK}:{info.id}", CONTAINER_TTL_SECONDS
             )
 
     async def _cleanup_container(self, info: ContainerInfo) -> None:
@@ -552,7 +553,7 @@ class ContainerOrchestrator:
         await self.redis.delete(f"{REDIS_KEY_CONTAINER_REVERSE}:{info.id}")
         # ECSタスクマッピングキーも削除（ECSモードのみ存在）
         if info.manager_type == "ecs":
-            await self.redis.delete(f"workspace:ecs_task:{info.id}")
+            await self.redis.delete(f"{REDIS_KEY_ECS_TASK}:{info.id}")
         get_workspace_active_containers().dec()
         audit_container_destroyed(
             container_id=info.id,
