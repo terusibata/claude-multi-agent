@@ -7,7 +7,6 @@ Redisを使用した分散ロックの実装
 import asyncio
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 
 import structlog
 from redis.asyncio import Redis
@@ -29,11 +28,6 @@ class DistributedLockError(Exception):
 
 class LockAcquisitionError(DistributedLockError):
     """ロック取得失敗エラー"""
-    pass
-
-
-class LockReleaseError(DistributedLockError):
-    """ロック解放失敗エラー"""
     pass
 
 
