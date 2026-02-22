@@ -1,6 +1,10 @@
 """
 ワークスペースエージェント メインアプリケーション
-コンテナ内でUnix Domain Socket上のFastAPIとして動作する
+コンテナ内でUDS (Docker) または HTTP (ECS) 上のFastAPIとして動作する
+
+起動モード:
+  AGENT_LISTEN_MODE=uds  → Unix Domain Socket（デフォルト、Docker向け）
+  AGENT_LISTEN_MODE=http → TCP HTTP（ECS向け、ポート9000）
 """
 import asyncio
 import os
@@ -10,9 +14,14 @@ import subprocess
 import structlog
 import uvicorn
 from fastapi import FastAPI
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
-from workspace_agent.models import ExecuteRequest, HealthResponse
+from workspace_agent.models import (
+    ExecRequest,
+    ExecResponse,
+    ExecuteRequest,
+    HealthResponse,
+)
 from workspace_agent.sdk_client import execute_streaming
 
 structlog.configure(
@@ -25,6 +34,8 @@ structlog.configure(
 logger = structlog.get_logger(__name__)
 
 AGENT_SOCKET = "/var/run/ws/agent.sock"
+AGENT_HTTP_PORT = int(os.environ.get("AGENT_HTTP_PORT", "9000"))
+AGENT_LISTEN_MODE = os.environ.get("AGENT_LISTEN_MODE", "uds")  # "uds" or "http"
 
 app = FastAPI(title="Workspace Agent", docs_url=None, redoc_url=None)
 
@@ -44,6 +55,78 @@ async def execute(request: ExecuteRequest) -> StreamingResponse:
     )
 
 
+@app.post("/exec")
+async def exec_command(request: ExecRequest) -> ExecResponse:
+    """コンテナ内コマンド実行エンドポイント（ECSモード用）
+
+    ECS環境ではDocker exec APIが使えないため、HTTPエンドポイント経由で
+    コンテナ内コマンドを実行する。
+    """
+    logger.info("execリクエスト受信", cmd=request.cmd, timeout=request.timeout)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *request.cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd="/workspace",
+        )
+        try:
+            stdout, _ = await asyncio.wait_for(
+                proc.communicate(), timeout=request.timeout
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return ExecResponse(exit_code=-1, output="Command timed out")
+
+        output = stdout.decode("utf-8", errors="replace") if stdout else ""
+        return ExecResponse(exit_code=proc.returncode or 0, output=output)
+    except Exception as e:
+        logger.error("execエラー", error=str(e), cmd=request.cmd)
+        return ExecResponse(exit_code=-1, output=str(e))
+
+
+@app.post("/exec/binary")
+async def exec_command_binary(request: ExecRequest) -> Response:
+    """コンテナ内コマンド実行エンドポイント（バイナリ出力、stdoutのみ）
+
+    ECS環境用。exit_codeはX-Exit-Codeヘッダーで返す。
+    """
+    logger.info("exec/binaryリクエスト受信", cmd=request.cmd, timeout=request.timeout)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *request.cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd="/workspace",
+        )
+        try:
+            stdout, _ = await asyncio.wait_for(
+                proc.communicate(), timeout=request.timeout
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return Response(
+                content=b"",
+                media_type="application/octet-stream",
+                headers={"X-Exit-Code": "-1"},
+            )
+
+        return Response(
+            content=stdout or b"",
+            media_type="application/octet-stream",
+            headers={"X-Exit-Code": str(proc.returncode or 0)},
+        )
+    except Exception as e:
+        logger.error("exec/binaryエラー", error=str(e), cmd=request.cmd)
+        return Response(
+            content=str(e).encode(),
+            media_type="application/octet-stream",
+            headers={"X-Exit-Code": "-1"},
+        )
+
+
 @app.get("/health")
 async def health() -> HealthResponse:
     """ヘルスチェック"""
@@ -57,7 +140,6 @@ async def diagnostics():
 
     # 1. CLIバイナリ検査
     try:
-        from claude_agent_sdk import ClaudeAgentOptions
         # SDK内部パスからCLIバイナリを探す
         import claude_agent_sdk
         sdk_dir = os.path.dirname(claude_agent_sdk.__file__)
@@ -83,25 +165,27 @@ async def diagnostics():
     proxy_sock = "/var/run/ws/proxy.sock"
     results["proxy_socket"] = {"path": proxy_sock, "exists": os.path.exists(proxy_sock)}
     if os.path.exists(proxy_sock):
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
-            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             s.settimeout(3)
             s.connect(proxy_sock)
-            s.close()
             results["proxy_socket"]["connectable"] = True
         except Exception as e:
             results["proxy_socket"]["connectable"] = False
             results["proxy_socket"]["error"] = str(e)
+        finally:
+            s.close()
 
     # 3. socat (TCP 8080) 疎通確認
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(3)
         s.connect(("127.0.0.1", 8080))
-        s.close()
         results["socat_tcp8080"] = {"connectable": True}
     except Exception as e:
         results["socat_tcp8080"] = {"connectable": False, "error": str(e)}
+    finally:
+        s.close()
 
     # 4. ディレクトリ状態
     dirs_to_check = [
@@ -122,12 +206,14 @@ async def diagnostics():
         "AWS_REGION", "ANTHROPIC_BEDROCK_BASE_URL",
         "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
         "NODE_OPTIONS", "CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK",
+        "AGENT_LISTEN_MODE", "AGENT_HTTP_PORT",
     ]
     results["env"] = {k: os.environ.get(k, "<not set>") for k in env_keys}
+    results["listen_mode"] = AGENT_LISTEN_MODE
 
-    # 6. SDK cli_path 初期化テスト（query呼び出しなし）
+    # 6. イベントループ取得テスト
     try:
-        loop = asyncio.get_event_loop()
+        asyncio.get_event_loop()
         results["sdk_import"] = "ok"
     except Exception as e:
         results["sdk_import"] = str(e)
@@ -136,5 +222,12 @@ async def diagnostics():
 
 
 if __name__ == "__main__":
-    logger.info("ワークスペースエージェント起動", socket=AGENT_SOCKET)
-    uvicorn.run(app, uds=AGENT_SOCKET, log_level="info")
+    if AGENT_LISTEN_MODE == "http":
+        logger.info(
+            "ワークスペースエージェント起動（HTTPモード）",
+            port=AGENT_HTTP_PORT,
+        )
+        uvicorn.run(app, host="0.0.0.0", port=AGENT_HTTP_PORT, log_level="info")
+    else:
+        logger.info("ワークスペースエージェント起動（UDSモード）", socket=AGENT_SOCKET)
+        uvicorn.run(app, uds=AGENT_SOCKET, log_level="info")

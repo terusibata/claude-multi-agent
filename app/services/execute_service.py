@@ -440,7 +440,7 @@ class ExecuteService:
 
         # MCPトークンのプロキシ側注入:
         # コンテナにトークンを渡さず、プロキシ側で認証ヘッダーを注入する
-        container_mcp_configs = self._extract_mcp_headers_to_proxy(
+        container_mcp_configs = await self._extract_mcp_headers_to_proxy(
             mcp_server_configs, container_info.id
         )
 
@@ -541,7 +541,7 @@ class ExecuteService:
                 resolved[key] = value
         return resolved
 
-    def _extract_mcp_headers_to_proxy(
+    async def _extract_mcp_headers_to_proxy(
         self,
         mcp_server_configs: list[dict],
         container_id: str,
@@ -596,7 +596,7 @@ class ExecuteService:
 
         # プロキシにMCPヘッダールールを登録
         if proxy_rules:
-            self.orchestrator.update_mcp_header_rules(container_id, proxy_rules)
+            await self.orchestrator.update_mcp_header_rules(container_id, proxy_rules)
 
         return container_configs
 

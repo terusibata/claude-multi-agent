@@ -33,7 +33,16 @@ RUN useradd -m -u 1000 appuser && mkdir -p /workspace && chown appuser:appuser /
 USER appuser
 WORKDIR /workspace
 
+# デフォルトリスンモード（Docker=uds, ECS=http に環境変数で切替）
+ENV AGENT_LISTEN_MODE="uds" AGENT_HTTP_PORT="9000"
+
+# HEALTHCHECKはリスンモードで条件分岐
+# UDSモード: agent.sock 経由, HTTPモード: TCP直接
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-  CMD curl -sf --unix-socket /var/run/ws/agent.sock http://localhost/health || exit 1
+  CMD if [ "$AGENT_LISTEN_MODE" = "http" ]; then \
+        curl -sf http://localhost:${AGENT_HTTP_PORT}/health || exit 1; \
+      else \
+        curl -sf --unix-socket /var/run/ws/agent.sock http://localhost/health || exit 1; \
+      fi
 
 ENTRYPOINT ["/opt/entrypoint.sh"]

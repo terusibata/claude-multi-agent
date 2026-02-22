@@ -1,6 +1,6 @@
 """
 ワークスペースエージェント リクエスト/レスポンスモデル
-ホスト側BackendとUnix Socket経由で通信するためのスキーマ定義
+ホスト側Backendと通信するためのスキーマ定義（UDS / HTTP両対応）
 """
 from pydantic import BaseModel, Field
 
@@ -17,6 +17,20 @@ class ExecuteRequest(BaseModel):
     cwd: str = "/workspace"
     setting_sources: list[str] | None = None
     mcp_server_configs: list[dict] | None = None
+
+
+class ExecRequest(BaseModel):
+    """コンテナ内コマンド実行リクエスト（ECSモード用）"""
+
+    cmd: list[str]
+    timeout: int = 60
+
+
+class ExecResponse(BaseModel):
+    """コンテナ内コマンド実行レスポンス"""
+
+    exit_code: int
+    output: str
 
 
 class HealthResponse(BaseModel):

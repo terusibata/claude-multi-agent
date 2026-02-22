@@ -23,11 +23,15 @@ class ContainerInfo:
 
     id: str
     conversation_id: str
-    agent_socket: str  # /var/run/ws/{id}/agent.sock
-    proxy_socket: str  # /var/run/ws/{id}/proxy.sock
+    agent_socket: str  # Docker: /var/run/ws/{id}/agent.sock, ECS: http://{task_ip}:9000
+    proxy_socket: str  # Docker: /var/run/ws/{id}/proxy.sock, ECS: ""（サイドカー）
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     last_active_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     status: ContainerStatus = ContainerStatus.READY
+    # ECS固有フィールド
+    task_arn: str = ""
+    task_ip: str = ""
+    manager_type: str = "docker"  # "docker" or "ecs"
 
     def to_redis_hash(self) -> dict[str, str]:
         """Redis Hash用にシリアライズ"""
@@ -39,19 +43,29 @@ class ContainerInfo:
             "created_at": self.created_at.isoformat(),
             "last_active_at": self.last_active_at.isoformat(),
             "status": self.status.value,
+            "task_arn": self.task_arn,
+            "task_ip": self.task_ip,
+            "manager_type": self.manager_type,
         }
 
     @classmethod
     def from_redis_hash(cls, data: dict[str, str]) -> "ContainerInfo":
-        """Redis Hashからデシリアライズ"""
+        """Redis Hashからデシリアライズ（防御的: 新旧フィールド混在に対応）"""
+        created_at_raw = data.get("created_at", "")
+        last_active_raw = data.get("last_active_at", "")
+        now = datetime.now(timezone.utc)
+
         return cls(
-            id=data["container_id"],
-            conversation_id=data["conversation_id"],
-            agent_socket=data["agent_socket"],
-            proxy_socket=data["proxy_socket"],
-            created_at=datetime.fromisoformat(data["created_at"]),
-            last_active_at=datetime.fromisoformat(data["last_active_at"]),
-            status=ContainerStatus(data["status"]),
+            id=data.get("container_id", ""),
+            conversation_id=data.get("conversation_id", ""),
+            agent_socket=data.get("agent_socket", ""),
+            proxy_socket=data.get("proxy_socket", ""),
+            created_at=datetime.fromisoformat(created_at_raw) if created_at_raw else now,
+            last_active_at=datetime.fromisoformat(last_active_raw) if last_active_raw else now,
+            status=ContainerStatus(data["status"]) if data.get("status") else ContainerStatus.READY,
+            task_arn=data.get("task_arn", ""),
+            task_ip=data.get("task_ip", ""),
+            manager_type=data.get("manager_type", "docker"),
         )
 
     def touch(self) -> None:

@@ -1,9 +1,12 @@
 #!/bin/sh
 # workspace-base エントリポイント
-# 1. socat TCP→UDS リバースプロキシを起動 (background)
-# 2. workspace_agent を起動 (foreground)
+# モード:
+#   AGENT_LISTEN_MODE=uds  (デフォルト) → UDS + socat (Docker向け)
+#   AGENT_LISTEN_MODE=http              → HTTP直接リスン (ECS向け、socatスキップ)
 
 set -e
+
+AGENT_LISTEN_MODE="${AGENT_LISTEN_MODE:-uds}"
 
 # ランタイムディレクトリ作成（ReadonlyRootfs + tmpfs のため）
 mkdir -p /var/run/ws 2>/dev/null || true
@@ -24,15 +27,24 @@ if [ "$_writability_ok" = "false" ]; then
     echo "FATAL: Critical directories not writable. Check tmpfs uid/gid in container config." >&2
 fi
 
-# socat: コンテナ内 TCP:8080 → Unix Socket /var/run/ws/proxy.sock
-# pip/npm/curl/SDK CLI は HTTP_PROXY=http://127.0.0.1:8080 で利用
-socat TCP-LISTEN:8080,fork,bind=127.0.0.1,reuseaddr UNIX-CONNECT:/var/run/ws/proxy.sock &
-SOCAT_PID=$!
+SOCAT_PID=""
+
+if [ "$AGENT_LISTEN_MODE" = "uds" ]; then
+    # UDSモード: socat TCP:8080 → Unix Socket /var/run/ws/proxy.sock
+    # pip/npm/curl/SDK CLI は HTTP_PROXY=http://127.0.0.1:8080 で利用
+    socat TCP-LISTEN:8080,fork,bind=127.0.0.1,reuseaddr UNIX-CONNECT:/var/run/ws/proxy.sock &
+    SOCAT_PID=$!
+    echo "socat started (PID: $SOCAT_PID) for UDS proxy relay"
+else
+    echo "HTTP mode: skipping socat (proxy runs as sidecar)"
+fi
 
 # シグナルハンドラ: socat も含めてクリーンアップ
 cleanup() {
-    kill "$SOCAT_PID" 2>/dev/null || true
-    wait "$SOCAT_PID" 2>/dev/null || true
+    if [ -n "$SOCAT_PID" ]; then
+        kill "$SOCAT_PID" 2>/dev/null || true
+        wait "$SOCAT_PID" 2>/dev/null || true
+    fi
     exit 0
 }
 trap cleanup TERM INT
