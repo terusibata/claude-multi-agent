@@ -213,7 +213,7 @@ aws logs tag-log-group \
 ```
 
 例:
-- `agent/workspace-agent/abcdef1234567890` — workspace-agent のログ
+- `ecs/workspace-agent/abcdef1234567890` — workspace-agent のログ
 - `proxy/proxy-sidecar/abcdef1234567890` — proxy-sidecar のログ
 
 Backend は `get_container_logs()` でこのログを取得する。ログストリーム名はタスク ARN から以下のように構築:

@@ -76,7 +76,7 @@ EC2 の場合は `ECS_CAPACITY_PROVIDER` 環境変数に Capacity Provider 名�
         "options": {
           "awslogs-group": "/ecs/workspace-agent",
           "awslogs-region": "<REGION>",
-          "awslogs-stream-prefix": "agent",
+          "awslogs-stream-prefix": "ecs",
           "awslogs-create-group": "true"
         }
       },

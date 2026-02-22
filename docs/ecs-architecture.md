@@ -108,7 +108,7 @@ ECS Task (awsvpc mode)
 └── proxy-sidecar (essential: false)
     ├── Image: <ECR>/proxy-sidecar:latest
     ├── Port: 8080 (Forward Proxy), 8081 (Admin HTTP)
-    ├── Env: PROXY_LISTEN_PORT=8080, ADMIN_PORT=8081
+    ├── Env: PROXY_PORT=8080, PROXY_ADMIN_PORT=8081
     └── HealthCheck: curl http://localhost:8081/health
 ```
 
@@ -157,6 +157,7 @@ Client → FastAPI Backend
 | `/execute` | POST | エージェント実行 (SSE ストリーム) |
 | `/exec` | POST | コマンド実行 (テキスト応答) |
 | `/exec/binary` | POST | コマンド実行 (バイナリ応答) |
+| `/diagnostics` | GET | CLI バイナリ・プロキシ・環境の一括検査 |
 
 ### Proxy サイドカー エンドポイント
 
