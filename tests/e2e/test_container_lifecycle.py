@@ -35,8 +35,8 @@ class TestContainerCreateConfig:
 
     def test_config_has_network_none(self):
         """コンテナが --network none で作成されること"""
-        with patch("app.services.container.config.get_settings") as mock_settings, \
-             patch("app.services.container.config._load_seccomp_profile", return_value='{}'):
+        with patch("app.services.container.docker_config.get_settings") as mock_settings, \
+             patch("app.services.container.docker_config._load_seccomp_profile", return_value='{}'):
             mock_settings.return_value = MagicMock(
                 container_image="workspace-base:latest",
                 container_cpu_quota=200000,
@@ -55,7 +55,7 @@ class TestContainerCreateConfig:
 
     def test_config_has_readonly_rootfs(self):
         """ReadonlyRootfs が有効であること"""
-        with patch("app.services.container.config.get_settings") as mock_settings:
+        with patch("app.services.container.docker_config.get_settings") as mock_settings:
             mock_settings.return_value = MagicMock(
                 container_image="workspace-base:latest",
                 container_cpu_quota=200000,
@@ -74,7 +74,7 @@ class TestContainerCreateConfig:
 
     def test_config_has_pids_limit(self):
         """PidsLimit が設定されていること"""
-        with patch("app.services.container.config.get_settings") as mock_settings:
+        with patch("app.services.container.docker_config.get_settings") as mock_settings:
             mock_settings.return_value = MagicMock(
                 container_image="workspace-base:latest",
                 container_cpu_quota=200000,
@@ -93,7 +93,7 @@ class TestContainerCreateConfig:
 
     def test_config_drops_all_capabilities(self):
         """全 capability が DROP されていること"""
-        with patch("app.services.container.config.get_settings") as mock_settings:
+        with patch("app.services.container.docker_config.get_settings") as mock_settings:
             mock_settings.return_value = MagicMock(
                 container_image="workspace-base:latest",
                 container_cpu_quota=200000,
@@ -113,8 +113,8 @@ class TestContainerCreateConfig:
     def test_config_has_seccomp_and_apparmor(self):
         """seccomp と AppArmor が SecurityOpt に含まれること"""
         fake_seccomp = '{"defaultAction":"SCMP_ACT_ERRNO"}'
-        with patch("app.services.container.config.get_settings") as mock_settings, \
-             patch("app.services.container.config._load_seccomp_profile", return_value=fake_seccomp):
+        with patch("app.services.container.docker_config.get_settings") as mock_settings, \
+             patch("app.services.container.docker_config._load_seccomp_profile", return_value=fake_seccomp):
             mock_settings.return_value = MagicMock(
                 container_image="workspace-base:latest",
                 container_cpu_quota=200000,
@@ -134,9 +134,9 @@ class TestContainerCreateConfig:
             assert f"seccomp={fake_seccomp}" in security_opt
             assert "apparmor=workspace-container" in security_opt
 
-    def test_config_has_node_proxy_env_vars(self):
-        """Node.js global-agent 環境変数が含まれること"""
-        with patch("app.services.container.config.get_settings") as mock_settings:
+    def test_config_has_proxy_env_vars(self):
+        """Proxy関連の環境変数が含まれること"""
+        with patch("app.services.container.docker_config.get_settings") as mock_settings:
             mock_settings.return_value = MagicMock(
                 container_image="workspace-base:latest",
                 container_cpu_quota=200000,
@@ -146,14 +146,17 @@ class TestContainerCreateConfig:
                 resolved_socket_host_path="/var/run/ws",
                 seccomp_profile_path="",
                 apparmor_profile_name="",
+                aws_region="us-west-2",
+                proxy_port=8080,
             )
 
-            from app.services.container.config import get_container_create_config
+            from app.services.container.docker_config import get_container_create_config
 
             config = get_container_create_config("ws-e2e-test")
             env_list = config["Env"]
-            assert "GLOBAL_AGENT_HTTP_PROXY=http://127.0.0.1:8080" in env_list
-            assert "NODE_OPTIONS=--require global-agent/bootstrap" in env_list
+            assert "HTTP_PROXY=http://127.0.0.1:8080" in env_list
+            assert "HTTPS_PROXY=http://127.0.0.1:8080" in env_list
+            assert "ANTHROPIC_BEDROCK_BASE_URL=http://127.0.0.1:8080" in env_list
 
 
 class TestProxyCommunication:
@@ -191,11 +194,10 @@ class TestSSEEventParsing:
 
     def test_parse_text_delta_event(self):
         """text_delta SSE イベントのパースが正常に動作すること"""
-        from app.services.execute_service import ExecuteService
+        from app.services.event_translator import EventTranslator
 
-        service = MagicMock(spec=ExecuteService)
         event_str = 'event: text_delta\ndata: {"text": "Hello world"}'
-        result = ExecuteService._parse_sse_event(service, event_str)
+        result = EventTranslator.parse_sse_event(event_str)
 
         assert result is not None
         assert result["event"] == "text_delta"
@@ -203,11 +205,10 @@ class TestSSEEventParsing:
 
     def test_parse_done_event(self):
         """done SSE イベントのパースが正常に動作すること"""
-        from app.services.execute_service import ExecuteService
+        from app.services.event_translator import EventTranslator
 
-        service = MagicMock(spec=ExecuteService)
         event_str = 'event: done\ndata: {"usage": {"input_tokens": 100, "output_tokens": 50}, "cost_usd": "0.001"}'
-        result = ExecuteService._parse_sse_event(service, event_str)
+        result = EventTranslator.parse_sse_event(event_str)
 
         assert result is not None
         assert result["event"] == "done"
@@ -215,11 +216,10 @@ class TestSSEEventParsing:
 
     def test_parse_error_event(self):
         """error SSE イベントのパースが正常に動作すること"""
-        from app.services.execute_service import ExecuteService
+        from app.services.event_translator import EventTranslator
 
-        service = MagicMock(spec=ExecuteService)
         event_str = 'event: error\ndata: {"message": "Container execution failed"}'
-        result = ExecuteService._parse_sse_event(service, event_str)
+        result = EventTranslator.parse_sse_event(event_str)
 
         assert result is not None
         assert result["event"] == "error"
@@ -312,19 +312,19 @@ class TestPeriodicFileSync:
 
     def test_is_file_tool_result(self):
         """ファイル操作ツール結果が正しく判定されること"""
-        from app.services.execute_service import ExecuteService
+        from app.services.event_translator import EventTranslator
 
         # ファイルツールの場合
         event_file = {"event": "tool_result", "data": {"tool_name": "write_file"}}
-        assert ExecuteService._is_file_tool_result(event_file) is True
+        assert EventTranslator.is_file_tool_result(event_file) is True
 
         # 非ファイルツールの場合
         event_other = {"event": "tool_result", "data": {"tool_name": "Bash"}}
-        assert ExecuteService._is_file_tool_result(event_other) is False
+        assert EventTranslator.is_file_tool_result(event_other) is False
 
         # データなしの場合
         event_empty = {"event": "tool_result", "data": {}}
-        assert ExecuteService._is_file_tool_result(event_empty) is False
+        assert EventTranslator.is_file_tool_result(event_empty) is False
 
 
 class TestS3LifecyclePolicy:
@@ -406,8 +406,8 @@ class TestAppArmorProfile:
 
     def test_config_includes_apparmor(self):
         """コンテナ設定に AppArmor プロファイルが含まれること"""
-        with patch("app.services.container.config.get_settings") as mock_settings, \
-             patch("app.services.container.config._load_seccomp_profile", return_value='{}'):
+        with patch("app.services.container.docker_config.get_settings") as mock_settings, \
+             patch("app.services.container.docker_config._load_seccomp_profile", return_value='{}'):
             mock_settings.return_value = MagicMock(
                 container_image="workspace-base:latest",
                 container_cpu_quota=200000,

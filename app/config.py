@@ -159,8 +159,9 @@ class Settings(BaseSettings):
     warm_pool_ttl: int = 1800  # 30分
 
     # ECS用WarmPool設定（container_manager_type=ecsの場合に使用）
-    ecs_warm_pool_min_size: int = 50
-    ecs_warm_pool_max_size: int = 120
+    # 本番環境では環境変数で適切な値にオーバーライドすること
+    ecs_warm_pool_min_size: int = 2
+    ecs_warm_pool_max_size: int = 20
 
     # ============================================
     # ECS設定（container_manager_type=ecsの場合に使用）
@@ -172,6 +173,7 @@ class Settings(BaseSettings):
     ecs_capacity_provider: str = ""
     ecs_agent_port: int = 9000
     ecs_proxy_admin_port: int = 8081
+    proxy_port: int = 8080  # コンテナ内→Proxy通信ポート (Docker: socat / ECS: サイドカー)
     ecs_run_task_concurrency: int = 10  # RunTask API同時呼び出し上限
 
     @property

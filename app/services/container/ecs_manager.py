@@ -22,6 +22,7 @@ from app.services.container.config import (
     CONTAINER_TTL_SECONDS,
     REDIS_KEY_CONTAINER,
     REDIS_KEY_CONTAINER_REVERSE,
+    REDIS_KEY_ECS_TASK,
 )
 from app.services.container.models import ContainerInfo, ContainerStatus
 
@@ -185,7 +186,7 @@ class EcsContainerManager(ContainerManagerBase):
         # Redis逆引き: container_id → task_arn（destroy時に使用）
         # TTLはコンテナのメインキーと揃える（CONTAINER_TTL_SECONDSは_update_redisで都度延長される）
         await self._redis.set(
-            f"workspace:ecs_task:{container_id}",
+            f"{REDIS_KEY_ECS_TASK}:{container_id}",
             task_arn,
             ex=CONTAINER_TTL_SECONDS,
         )
@@ -227,7 +228,7 @@ class EcsContainerManager(ContainerManagerBase):
         # 注: orchestrator._cleanup_containerからも削除されるが、
         # destroy_containerが直接呼ばれる場合（WarmPool drain, GC孤立タスク検出等）にも
         # 確実にクリーンアップするため、ここでも削除する。Redis deleteは冪等。
-        await self._redis.delete(f"workspace:ecs_task:{container_id}")
+        await self._redis.delete(f"{REDIS_KEY_ECS_TASK}:{container_id}")
 
         logger.info("ECSタスク停止完了", container_id=container_id)
 
@@ -542,7 +543,7 @@ class EcsContainerManager(ContainerManagerBase):
 
     async def _resolve_task_arn(self, container_id: str) -> str | None:
         """container_id → task_arn の逆引き（Redis）"""
-        return await self._redis.get(f"workspace:ecs_task:{container_id}")
+        return await self._redis.get(f"{REDIS_KEY_ECS_TASK}:{container_id}")
 
     async def _get_agent_url(self, container_id: str) -> str | None:
         """container_id → agent HTTP URL を取得"""

@@ -1,21 +1,20 @@
 """
 エージェント実行サービス（コンテナ隔離版）
 
-会話ごとに隔離されたDockerコンテナ内でClaude Agent SDKを実行し、
-Unix Socket経由でSSEイベントを中継する。
+会話ごとに隔離されたコンテナ内でClaude Agent SDKを実行し、
+UDS（Docker）またはHTTP（ECS）経由でSSEイベントを中継する。
 
 フロー:
   1. コンテキスト制限チェック / 会話ロック取得
   2. ContainerOrchestrator経由でコンテナ取得・作成
   3. S3 → コンテナへファイル同期
-  4. コンテナ内workspace_agentにリクエスト送信（Unix Socket）
+  4. コンテナ内workspace_agentにリクエスト送信（UDS / HTTP）
   5. SSEイベントを中継しつつ、doneイベントから使用量を抽出
   6. コンテナ → S3へファイル同期
   7. DB記録（使用量、メッセージログ、タイトル生成）
 """
 
 import asyncio
-import json
 import re
 import time
 from datetime import datetime, timezone
@@ -36,7 +35,8 @@ from app.models.tenant import Tenant
 from app.schemas.execute import ExecuteRequest
 from app.services.container.models import ContainerInfo
 from app.services.container.orchestrator import ContainerOrchestrator
-from app.services.proxy.credential_proxy import McpHeaderRule
+from app.services.event_translator import EventTranslator
+from app.services.mcp_config_builder import McpConfigBuilder
 from app.services.workspace.file_sync import WorkspaceFileSync
 from app.services.workspace.s3_storage import S3StorageBackend
 from app.services.conversation_service import ConversationService
@@ -50,39 +50,16 @@ from app.infrastructure.distributed_lock import (
 )
 from app.utils.streaming import (
     SequenceCounter,
-    create_event,
-    format_assistant_event,
-    format_container_recovered_event,
     format_context_status_event,
     format_done_event,
     format_error_event,
-    format_init_event,
     format_progress_event,
-    format_thinking_event,
     format_title_event,
-    format_tool_call_event,
-    format_tool_result_event,
 )
-from app.utils.progress_messages import get_initial_message
 from app.utils.sensitive_filter import sanitize_log_data
 
 logger = structlog.get_logger(__name__)
 
-
-# ファイル操作ツール名のセット（tool_result同期トリガー用）
-_FILE_TOOL_NAMES = frozenset(
-    {
-        "write_file",
-        "create_file",
-        "edit_file",
-        "replace_file",
-        "Write",
-        "Edit",
-        "write",
-        "create",
-        "save_file",
-    }
-)
 
 # 定期同期のデバウンス間隔（秒）
 _SYNC_DEBOUNCE_SECONDS = 10
@@ -105,6 +82,8 @@ class ExecuteService:
         self.skill_service = SkillService(db)
         self.mcp_server_service = McpServerService(db)
         self._file_sync = self._create_file_sync()
+        self._event_translator = EventTranslator()
+        self._mcp_config = McpConfigBuilder(self.mcp_server_service, orchestrator)
 
     def _create_file_sync(self) -> WorkspaceFileSync | None:
         """ファイル同期インスタンスを生成（S3未設定時はNone）"""
@@ -256,7 +235,6 @@ class ExecuteService:
                 container_info,
             ):
                 # done イベントからメタデータ（usage/cost）を抽出
-                # SDK側の "done" イベントを _translate_event() でホスト形式に変換
                 if event.get("event") == "done":
                     done_data = event.get("data", {})
 
@@ -281,7 +259,7 @@ class ExecuteService:
                         yield title_event
 
                 # tool_call イベントから /workspace 外のファイルパスを収集
-                self._collect_external_file_path(event, external_file_paths)
+                EventTranslator.collect_external_file_path(event, external_file_paths)
 
                 # 長時間実行時のロックTTL延長（60秒間隔）
                 if lock_token and (time.time() - last_lock_extend_time) > 60:
@@ -302,7 +280,7 @@ class ExecuteService:
                     request.workspace_enabled
                     and self._settings.s3_bucket_name
                     and event.get("event") == "tool_result"
-                    and self._is_file_tool_result(event)
+                    and EventTranslator.is_file_tool_result(event)
                     and (time.time() - last_sync_time) > _SYNC_DEBOUNCE_SECONDS
                 ):
                     last_sync_time = time.time()
@@ -335,8 +313,11 @@ class ExecuteService:
                 )
 
             # バックグラウンド同期タスクの完了待ち（最大5秒）
+            # タイムアウト後の未完了タスクはキャンセルしてリソースリークを防止
             if background_sync_tasks:
-                await asyncio.wait(background_sync_tasks, timeout=5.0)
+                _done, pending = await asyncio.wait(background_sync_tasks, timeout=5.0)
+                for task in pending:
+                    task.cancel()
 
             # /workspace外に書かれたファイルをコンテナ内で/workspaceにコピー
             if external_file_paths:
@@ -436,11 +417,11 @@ class ExecuteService:
     ) -> AsyncGenerator[dict, None]:
         """コンテナ内エージェントからSSEストリームを受信・中継"""
         # MCP サーバー設定の構築（テナントDB → シリアライズ）
-        mcp_server_configs = await self._build_mcp_server_configs(request)
+        mcp_server_configs = await self._mcp_config.build_mcp_server_configs(request)
 
         # MCPトークンのプロキシ側注入:
         # コンテナにトークンを渡さず、プロキシ側で認証ヘッダーを注入する
-        container_mcp_configs = await self._extract_mcp_headers_to_proxy(
+        container_mcp_configs = await self._mcp_config.extract_mcp_headers_to_proxy(
             mcp_server_configs, container_info.id
         )
 
@@ -450,7 +431,7 @@ class ExecuteService:
         )
 
         # allowed_tools の計算
-        allowed_tools = self._compute_allowed_tools(request, mcp_server_configs)
+        allowed_tools = McpConfigBuilder.compute_allowed_tools(request, mcp_server_configs)
 
         # システムプロンプト構築
         system_prompt = self._build_system_prompt(request, skills_synced)
@@ -488,140 +469,15 @@ class ExecuteService:
             # SSEイベントをパース → 正規形式に変換して中継
             while "\n\n" in buffer:
                 event_str, buffer = buffer.split("\n\n", 1)
-                raw_event = self._parse_sse_event(event_str)
+                raw_event = EventTranslator.parse_sse_event(event_str)
                 if raw_event:
-                    translated_events = self._translate_event(
+                    translated_events = self._event_translator.translate_event(
                         raw_event,
                         seq_counter,
                         conversation_id=request.conversation_id,
                     )
                     for evt in translated_events:
                         yield evt
-
-    async def _build_mcp_server_configs(self, request: ExecuteRequest) -> list[dict]:
-        """テナントのアクティブ MCP サーバー設定をシリアライズしてコンテナに渡す形式に変換"""
-        try:
-            mcp_servers, _ = await self.mcp_server_service.get_all_by_tenant(
-                request.tenant_id, status="active"
-            )
-        except Exception as e:
-            logger.error("MCP サーバー設定取得エラー", error=str(e))
-            return []
-
-        configs = []
-        for server in mcp_servers:
-            if not server.openapi_spec:
-                continue
-            # headers_template のトークン解決
-            headers = self._resolve_headers(server.headers_template, request.tokens)
-            configs.append(
-                {
-                    "server_name": server.name,
-                    "openapi_spec": server.openapi_spec,
-                    "base_url": server.openapi_base_url,
-                    "headers": headers,
-                }
-            )
-        return configs
-
-    @staticmethod
-    def _resolve_headers(template: dict | None, tokens: dict[str, str] | None) -> dict:
-        """headers_template の ${token} プレースホルダをトークン値で置換"""
-        if not template:
-            return {}
-        resolved = {}
-        for key, value in template.items():
-            if isinstance(value, str) and tokens:
-                resolved[key] = re.sub(
-                    r"\$\{(\w+)\}",
-                    lambda m: tokens.get(m.group(1), m.group(0)),
-                    value,
-                )
-            else:
-                resolved[key] = value
-        return resolved
-
-    async def _extract_mcp_headers_to_proxy(
-        self,
-        mcp_server_configs: list[dict],
-        container_id: str,
-    ) -> list[dict]:
-        """MCPサーバー設定からヘッダーを抽出してプロキシに登録し、コンテナ用設定を返す
-
-        トークンを含むヘッダーはプロキシ側に保持し、コンテナには渡さない。
-        コンテナに渡すMCP設定ではbase_urlをプロキシローカルに書き換える。
-
-        Args:
-            mcp_server_configs: ヘッダー解決済みのMCPサーバー設定リスト
-            container_id: コンテナID（プロキシルール登録用）
-
-        Returns:
-            コンテナ用MCPサーバー設定リスト（ヘッダーなし、base_urlはプロキシローカル）
-        """
-        if not mcp_server_configs:
-            return []
-
-        # プロキシに登録するMCPヘッダールールを構築
-        proxy_rules: dict[str, McpHeaderRule] = {}
-        container_configs: list[dict] = []
-
-        for config in mcp_server_configs:
-            server_name = config["server_name"]
-            original_base_url = config.get("base_url", "")
-            headers = config.get("headers", {})
-
-            if original_base_url:
-                # プロキシルールに登録（ヘッダー有無問わずプロキシ経由に統一）
-                proxy_rules[server_name] = McpHeaderRule(
-                    real_base_url=original_base_url,
-                    headers=headers,
-                )
-                # コンテナ用設定: base_urlをプロキシローカルに書き換え、ヘッダーなし
-                container_configs.append(
-                    {
-                        "server_name": server_name,
-                        "openapi_spec": config["openapi_spec"],
-                        "base_url": f"http://127.0.0.1:8080/mcp/{server_name}",
-                    }
-                )
-            else:
-                # base_url なし（無効な設定）→ そのまま渡す
-                container_configs.append(
-                    {
-                        "server_name": server_name,
-                        "openapi_spec": config["openapi_spec"],
-                        "base_url": "",
-                    }
-                )
-
-        # プロキシにMCPヘッダールールを登録
-        if proxy_rules:
-            await self.orchestrator.update_mcp_header_rules(container_id, proxy_rules)
-
-        return container_configs
-
-    def _compute_allowed_tools(
-        self,
-        request: ExecuteRequest,
-        mcp_server_configs: list[dict],
-    ) -> list[str]:
-        """コンテナに渡す allowed_tools リストを計算"""
-        allowed_tools = []
-
-        # ビルトイン MCP サーバー
-        allowed_tools.append("mcp__file-tools__*")
-        allowed_tools.append("mcp__file-presentation__*")
-
-        # OpenAPI MCP サーバー
-        for config in mcp_server_configs:
-            server_name = config["server_name"]
-            allowed_tools.append(f"mcp__{server_name}__*")
-
-        # preferred_skills のツール
-        if request.preferred_skills:
-            allowed_tools.append("Skill")
-
-        return allowed_tools
 
     async def _sync_skills_to_container(
         self, tenant_id: str, container_id: str
@@ -761,27 +617,6 @@ class ExecuteService:
 
         return "\n".join(parts)
 
-    def _parse_sse_event(self, event_str: str) -> dict | None:
-        """SSEイベント文字列をパース"""
-        event_type = "message"
-        data_str = ""
-
-        for line in event_str.strip().split("\n"):
-            if line.startswith("event: "):
-                event_type = line[7:].strip()
-            elif line.startswith("data: "):
-                data_str = line[6:]
-
-        if not data_str:
-            return None
-
-        try:
-            data = json.loads(data_str)
-        except json.JSONDecodeError:
-            data = {"raw": data_str}
-
-        return {"event": event_type, "data": data}
-
     async def _sync_files_to_container(
         self, request: ExecuteRequest, container_info
     ) -> None:
@@ -870,7 +705,7 @@ class ExecuteService:
         """使用量をDBに記録"""
         try:
             # SDK/翻訳済みどちらの形式でも正規化して統一
-            usage = self._normalize_usage(done_data.get("usage", {}))
+            usage = EventTranslator.normalize_usage(done_data.get("usage", {}))
             input_tokens = usage.get("input_tokens", 0)
             output_tokens = usage.get("output_tokens", 0)
             cache_5m = usage.get("cache_creation_5m_tokens", 0)
@@ -985,7 +820,7 @@ class ExecuteService:
     ) -> dict | None:
         """done前に送信するcontext_status SSEイベントを構築"""
         try:
-            usage = self._normalize_usage(done_data.get("usage", {}))
+            usage = EventTranslator.normalize_usage(done_data.get("usage", {}))
             input_tokens = usage.get("input_tokens", 0)
             output_tokens = usage.get("output_tokens", 0)
             new_tokens = input_tokens + output_tokens
@@ -1099,210 +934,6 @@ class ExecuteService:
             logger.warning("タイトル生成エラー（続行）", error=str(e))
             return None
 
-    def _translate_event(
-        self,
-        raw_event: dict,
-        seq_counter: SequenceCounter,
-        conversation_id: str | None = None,
-    ) -> list[dict]:
-        """
-        SDKイベントをホスト正規形式に変換
-
-        SDK側（workspace_agent）が送信するイベント形式:
-          text_delta, thinking, tool_use, tool_result, done, system, error
-        を、ホスト側の正規形式:
-          init, progress, assistant, thinking, tool_call, tool_result, done, error
-        に変換し、seq と timestamp を付与する。
-
-        Returns:
-            変換後イベントのリスト（1つのSDKイベントから複数のホストイベントを返す場合あり）
-        """
-        event_type = raw_event.get("event", "")
-        data = raw_event.get("data", {})
-
-        if event_type == "system" and data.get("subtype") == "init":
-            # SDK system(init) → 仕様準拠の init イベントに変換
-            init_data = (
-                data.get("data", {}) if isinstance(data.get("data"), dict) else data
-            )
-            tools = list(init_data.get("tools", []))
-
-            # MCP サーバーのツール名を追加
-            # SDK init メッセージの mcp_servers フィールドから接続済みサーバーの
-            # ツール名を抽出し、mcp__<server>__<tool> 形式で tools リストに追加
-            for mcp_server in init_data.get("mcp_servers", []):
-                server_name = mcp_server.get("name", "")
-                status = mcp_server.get("status", "")
-                if server_name and status == "connected":
-                    for tool_name in mcp_server.get("tools", []):
-                        tools.append(f"mcp__{server_name}__{tool_name}")
-
-            return [
-                format_init_event(
-                    seq=seq_counter.next(),
-                    session_id=init_data.get("session_id", ""),
-                    tools=tools,
-                    model=init_data.get("model", ""),
-                    conversation_id=conversation_id,
-                )
-            ]
-        elif event_type == "text_delta":
-            # progress(generating) + assistant
-            return [
-                format_progress_event(
-                    seq=seq_counter.next(),
-                    progress_type="generating",
-                    message=get_initial_message("generating"),
-                ),
-                format_assistant_event(
-                    seq=seq_counter.next(),
-                    content_blocks=[{"type": "text", "text": data.get("text", "")}],
-                ),
-            ]
-        elif event_type == "thinking":
-            # progress(thinking) + thinking
-            return [
-                format_progress_event(
-                    seq=seq_counter.next(),
-                    progress_type="thinking",
-                    message=get_initial_message("thinking"),
-                ),
-                format_thinking_event(
-                    seq=seq_counter.next(),
-                    content=data.get("content", ""),
-                ),
-            ]
-        elif event_type == "tool_use":
-            # progress(tool, running) + tool_call
-            tool_name = data.get("tool_name", "")
-            tool_use_id = data.get("tool_use_id", "")
-            return [
-                format_progress_event(
-                    seq=seq_counter.next(),
-                    progress_type="tool",
-                    message=get_initial_message("tool", tool_name),
-                    tool_use_id=tool_use_id,
-                    tool_name=tool_name,
-                    tool_status="running",
-                ),
-                format_tool_call_event(
-                    seq=seq_counter.next(),
-                    tool_use_id=tool_use_id,
-                    tool_name=tool_name,
-                    tool_input=data.get("input", {}),
-                    summary=f"ツール実行: {tool_name}",
-                ),
-            ]
-        elif event_type == "tool_result":
-            # tool_result のみ（結果自体がステータスを示す）
-            return [
-                format_tool_result_event(
-                    seq=seq_counter.next(),
-                    tool_use_id=data.get("tool_use_id", ""),
-                    tool_name=data.get("tool_name", ""),
-                    status="error" if data.get("is_error") else "completed",
-                    content=data.get("content", ""),
-                    is_error=data.get("is_error", False),
-                )
-            ]
-        elif event_type == "done":
-            return [
-                format_done_event(
-                    seq=seq_counter.next(),
-                    status="error"
-                    if data.get("subtype") == "error_during_execution"
-                    else "success",
-                    result=data.get("result"),
-                    errors=None,
-                    usage=self._normalize_usage(data.get("usage", {})),
-                    cost_usd=str(data.get("cost_usd", "0")),
-                    turn_count=data.get("num_turns", 0),
-                    duration_ms=data.get("duration_ms", 0),
-                    session_id=data.get("session_id"),
-                )
-            ]
-        elif event_type == "container_recovered":
-            return [
-                format_container_recovered_event(
-                    seq=seq_counter.next(),
-                    message=data.get("message", "Container recovered"),
-                    recovered=data.get("recovered", True),
-                    retry_recommended=data.get("retry_recommended", True),
-                )
-            ]
-        else:
-            # error 等: seq/timestamp を付与してそのまま中継
-            return [create_event(event_type, seq_counter.next(), data)]
-
-    @staticmethod
-    def _normalize_usage(raw_usage: dict) -> dict:
-        """
-        SDK usage フォーマットを仕様準拠のフォーマットに正規化（冪等）
-
-        SDK形式:
-          input_tokens, output_tokens, cache_creation_input_tokens,
-          cache_read_input_tokens, cache_creation.ephemeral_5m_input_tokens, ...
-        仕様形式:
-          input_tokens, output_tokens, cache_creation_5m_tokens,
-          cache_creation_1h_tokens, cache_read_tokens, total_tokens
-        """
-        input_tokens = raw_usage.get("input_tokens", 0)
-        output_tokens = raw_usage.get("output_tokens", 0)
-
-        # 正規化済みキーが存在する場合はそのまま返す（冪等性）
-        if "cache_creation_5m_tokens" in raw_usage:
-            cache_5m = raw_usage["cache_creation_5m_tokens"]
-            cache_1h = raw_usage.get("cache_creation_1h_tokens", 0)
-            cache_read = raw_usage.get("cache_read_tokens", 0)
-        else:
-            # SDK生フォーマットから正規化
-            cache_creation = raw_usage.get("cache_creation", {})
-            if isinstance(cache_creation, dict):
-                cache_5m = cache_creation.get("ephemeral_5m_input_tokens", 0)
-                cache_1h = cache_creation.get("ephemeral_1h_input_tokens", 0)
-            else:
-                cache_5m = 0
-                cache_1h = 0
-
-            # フォールバック: トップレベルの cache_creation_input_tokens を 5m として扱う
-            if cache_5m == 0:
-                cache_5m = raw_usage.get("cache_creation_input_tokens", 0)
-
-            cache_read = raw_usage.get("cache_read_input_tokens", 0)
-
-        total_tokens = input_tokens + output_tokens + cache_5m + cache_1h + cache_read
-
-        return {
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "cache_creation_5m_tokens": cache_5m,
-            "cache_creation_1h_tokens": cache_1h,
-            "cache_read_tokens": cache_read,
-            "total_tokens": total_tokens,
-        }
-
-    @staticmethod
-    def _collect_external_file_path(event: dict, external_paths: list[str]) -> None:
-        """
-        tool_callイベントからファイルパスを抽出し、/workspace外のパスを収集
-
-        AIがシステムプロンプトの指示を無視して/workspace外にファイルを作成した場合の
-        安全策として、後でコンテナ内コピーにより回収できるようにする。
-        """
-        if event.get("event") != "tool_call":
-            return
-        data = event.get("data", {})
-        tool_name = data.get("tool_name", "")
-        if tool_name not in _FILE_TOOL_NAMES:
-            return
-        tool_input = data.get("input", {})
-        file_path = tool_input.get("file_path", "")
-        if not file_path:
-            return
-        # /workspace 外の絶対パスのみ収集
-        if file_path.startswith("/") and not file_path.startswith("/workspace/"):
-            external_paths.append(file_path)
-
     async def _rescue_external_files(
         self, container_id: str, external_paths: list[str]
     ) -> None:
@@ -1352,13 +983,6 @@ class ExecuteService:
                     src=src_path,
                     error=str(e),
                 )
-
-    @staticmethod
-    def _is_file_tool_result(event: dict) -> bool:
-        """tool_resultイベントがファイル操作ツールの結果かどうかを判定"""
-        data = event.get("data", {})
-        tool_name = data.get("tool_name", "")
-        return tool_name in _FILE_TOOL_NAMES
 
     def _error_done(self, start_time: float, seq_counter: SequenceCounter) -> dict:
         """エラー時のdoneイベントを生成"""

@@ -79,16 +79,8 @@ class CredentialInjectionProxy:
         self._server: asyncio.AbstractServer | None = None
         self._mcp_header_rules: dict[str, McpHeaderRule] = {}
 
-    async def start(self) -> None:
-        """Proxyサーバーを起動"""
-        socket_dir = Path(self.socket_path).parent
-        socket_dir.mkdir(parents=True, exist_ok=True)
-
-        # 既存ソケットファイルを削除
-        socket_file = Path(self.socket_path)
-        if socket_file.exists():
-            socket_file.unlink()
-
+    def _init_http_client(self) -> None:
+        """外部転送用HTTPクライアントを初期化"""
         self._http_client = httpx.AsyncClient(
             timeout=httpx.Timeout(60.0, connect=10.0),
             limits=httpx.Limits(
@@ -97,11 +89,33 @@ class CredentialInjectionProxy:
                 keepalive_expiry=30.0,
             ),
         )
+
+    async def start(self) -> None:
+        """Unix Domain Socket上でProxyサーバーを起動（Dockerモード用）"""
+        socket_dir = Path(self.socket_path).parent
+        socket_dir.mkdir(parents=True, exist_ok=True)
+
+        # 既存ソケットファイルを削除
+        socket_file = Path(self.socket_path)
+        if socket_file.exists():
+            socket_file.unlink()
+
+        self._init_http_client()
         self._server = await asyncio.start_unix_server(
             self._handle_connection,
             path=self.socket_path,
         )
         logger.info("Proxy起動", socket_path=self.socket_path)
+
+    async def start_tcp(self, host: str = "0.0.0.0", port: int = 8080) -> None:
+        """TCP上でProxyサーバーを起動（ECSサイドカー用）"""
+        self._init_http_client()
+        self._server = await asyncio.start_server(
+            self._handle_connection,
+            host=host,
+            port=port,
+        )
+        logger.info("Proxy TCP起動", host=host, port=port)
 
     def update_mcp_header_rules(self, rules: dict[str, McpHeaderRule]) -> None:
         """MCPヘッダー注入ルールを更新（実行リクエスト毎に呼ばれる）
@@ -156,7 +170,10 @@ class CredentialInjectionProxy:
                     key, value = header_str.split(":", 1)
                     headers[key.strip()] = value.strip()
                     if key.strip().lower() == "content-length":
-                        content_length = int(value.strip())
+                        try:
+                            content_length = int(value.strip())
+                        except ValueError:
+                            content_length = 0
 
             # ボディ読み取り（サイズ上限チェック付き）
             body = b""
@@ -723,7 +740,10 @@ class ProxyAdminServer:
                 if ":" in header_str:
                     key, value = header_str.split(":", 1)
                     if key.strip().lower() == "content-length":
-                        content_length = int(value.strip())
+                        try:
+                            content_length = int(value.strip())
+                        except ValueError:
+                            content_length = 0
 
             # Admin APIのボディサイズ制限（1MB: MCPルール更新程度のペイロード想定）
             _admin_max_body = 1 * 1024 * 1024
