@@ -140,7 +140,6 @@ async def diagnostics():
 
     # 1. CLIバイナリ検査
     try:
-        from claude_agent_sdk import ClaudeAgentOptions
         # SDK内部パスからCLIバイナリを探す
         import claude_agent_sdk
         sdk_dir = os.path.dirname(claude_agent_sdk.__file__)
@@ -166,25 +165,27 @@ async def diagnostics():
     proxy_sock = "/var/run/ws/proxy.sock"
     results["proxy_socket"] = {"path": proxy_sock, "exists": os.path.exists(proxy_sock)}
     if os.path.exists(proxy_sock):
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
-            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             s.settimeout(3)
             s.connect(proxy_sock)
-            s.close()
             results["proxy_socket"]["connectable"] = True
         except Exception as e:
             results["proxy_socket"]["connectable"] = False
             results["proxy_socket"]["error"] = str(e)
+        finally:
+            s.close()
 
     # 3. socat (TCP 8080) 疎通確認
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(3)
         s.connect(("127.0.0.1", 8080))
-        s.close()
         results["socat_tcp8080"] = {"connectable": True}
     except Exception as e:
         results["socat_tcp8080"] = {"connectable": False, "error": str(e)}
+    finally:
+        s.close()
 
     # 4. ディレクトリ状態
     dirs_to_check = [
@@ -210,9 +211,9 @@ async def diagnostics():
     results["env"] = {k: os.environ.get(k, "<not set>") for k in env_keys}
     results["listen_mode"] = AGENT_LISTEN_MODE
 
-    # 6. SDK cli_path 初期化テスト（query呼び出しなし）
+    # 6. イベントループ取得テスト
     try:
-        loop = asyncio.get_event_loop()
+        asyncio.get_event_loop()
         results["sdk_import"] = "ok"
     except Exception as e:
         results["sdk_import"] = str(e)

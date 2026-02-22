@@ -36,6 +36,9 @@ logger = structlog.get_logger(__name__)
 # MCP リバースプロキシのパスプレフィックス
 MCP_PROXY_PREFIX = "/mcp/"
 
+# リクエストボディの最大サイズ（DoS防止）
+_MAX_REQUEST_BODY_SIZE = 50 * 1024 * 1024  # 50MB
+
 
 @dataclass
 class McpHeaderRule:
@@ -155,8 +158,15 @@ class CredentialInjectionProxy:
                     if key.strip().lower() == "content-length":
                         content_length = int(value.strip())
 
-            # ボディ読み取り
+            # ボディ読み取り（サイズ上限チェック付き）
             body = b""
+            if content_length > _MAX_REQUEST_BODY_SIZE:
+                writer.write(
+                    b"HTTP/1.1 413 Request Entity Too Large\r\n"
+                    b"Content-Length: 24\r\n\r\nRequest body too large\r\n"
+                )
+                await writer.drain()
+                return
             if content_length > 0:
                 body = await reader.readexactly(content_length)
 
@@ -715,7 +725,12 @@ class ProxyAdminServer:
                     if key.strip().lower() == "content-length":
                         content_length = int(value.strip())
 
+            # Admin APIのボディサイズ制限（1MB: MCPルール更新程度のペイロード想定）
+            _admin_max_body = 1 * 1024 * 1024
             body = b""
+            if content_length > _admin_max_body:
+                await self._respond(writer, 413, {"error": "Request body too large"})
+                return
             if content_length > 0:
                 body = await reader.readexactly(content_length)
 
