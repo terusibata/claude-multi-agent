@@ -6,6 +6,7 @@ ECS モード固有のコンテナ管理ロジックをテストする。
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from botocore.exceptions import ClientError
 
 
 def _make_ecs_manager():
@@ -128,3 +129,46 @@ class TestEcsStartupValidation:
             lifecycle, docker_client = _create_container_manager(settings, mock_redis)
 
         assert docker_client is not None
+
+
+def _make_client_error(code: str, message: str = "error") -> ClientError:
+    """テスト用の botocore ClientError を生成"""
+    return ClientError(
+        error_response={"Error": {"Code": code, "Message": message}},
+        operation_name="StopTask",
+    )
+
+
+class TestDestroyContainer:
+    """destroy_container のエラーハンドリングテスト（Issue 3 検証）"""
+
+    @pytest.mark.asyncio
+    async def test_ignores_invalid_parameter_exception(self):
+        """InvalidParameterException（既に停止済み）は例外を伝播しない"""
+        manager, mock_redis, _ = _make_ecs_manager()
+
+        mock_redis.get.return_value = "arn:aws:ecs:us-west-2:123:task/cluster/abc"
+
+        mock_ecs = AsyncMock()
+        mock_ecs.stop_task.side_effect = _make_client_error("InvalidParameterException")
+        manager._ecs_client = mock_ecs
+        manager._ecs_ctx = MagicMock()
+
+        # 例外が伝播しないことを確認
+        await manager.destroy_container("ws-already-stopped")
+        mock_redis.delete.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_raises_on_other_client_error(self):
+        """InvalidParameterException 以外の ClientError は re-raise する"""
+        manager, mock_redis, _ = _make_ecs_manager()
+
+        mock_redis.get.return_value = "arn:aws:ecs:us-west-2:123:task/cluster/abc"
+
+        mock_ecs = AsyncMock()
+        mock_ecs.stop_task.side_effect = _make_client_error("AccessDeniedException")
+        manager._ecs_client = mock_ecs
+        manager._ecs_ctx = MagicMock()
+
+        with pytest.raises(ClientError):
+            await manager.destroy_container("ws-access-denied")

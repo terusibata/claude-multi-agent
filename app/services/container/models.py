@@ -48,6 +48,16 @@ class ContainerInfo:
             "manager_type": self.manager_type,
         }
 
+    @staticmethod
+    def _parse_status(raw: str | None) -> ContainerStatus:
+        """Redisステータス値を防御的にパース（不正値はREADYにフォールバック）"""
+        if not raw:
+            return ContainerStatus.READY
+        try:
+            return ContainerStatus(raw)
+        except ValueError:
+            return ContainerStatus.READY
+
     @classmethod
     def from_redis_hash(cls, data: dict[str, str]) -> "ContainerInfo":
         """Redis Hashからデシリアライズ（防御的: 新旧フィールド混在に対応）"""
@@ -62,7 +72,7 @@ class ContainerInfo:
             proxy_socket=data.get("proxy_socket", ""),
             created_at=datetime.fromisoformat(created_at_raw) if created_at_raw else now,
             last_active_at=datetime.fromisoformat(last_active_raw) if last_active_raw else now,
-            status=ContainerStatus(data["status"]) if data.get("status") else ContainerStatus.READY,
+            status=cls._parse_status(data.get("status")),
             task_arn=data.get("task_arn", ""),
             task_ip=data.get("task_ip", ""),
             manager_type=data.get("manager_type", "docker"),

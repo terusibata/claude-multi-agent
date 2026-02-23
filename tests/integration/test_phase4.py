@@ -12,8 +12,8 @@ class TestContainerEnvVars:
 
     def test_proxy_uses_tcp_not_unix_socket(self):
         """環境変数がTCPプロキシ（socat経由）を使用すること"""
-        with patch("app.services.container.config.get_settings") as mock_settings, \
-             patch("app.services.container.config._load_seccomp_profile", return_value='{}'):
+        with patch("app.services.container.docker_config.get_settings") as mock_settings, \
+             patch("app.services.container.docker_config._load_seccomp_profile", return_value='{}'):
             mock_settings.return_value = MagicMock(
                 container_image="workspace-base:latest",
                 container_cpu_quota=200000,
@@ -24,6 +24,7 @@ class TestContainerEnvVars:
                 seccomp_profile_path="deployment/seccomp/workspace-seccomp.json",
                 apparmor_profile_name="",
                 aws_region="us-west-2",
+                proxy_port=8080,
                 userns_remap_enabled=True,
             )
 
@@ -43,7 +44,7 @@ class TestContainerEnvVars:
 
     def test_no_proxy_localhost(self):
         """NO_PROXY にlocalhostが含まれること"""
-        with patch("app.services.container.config.get_settings") as mock_settings:
+        with patch("app.services.container.docker_config.get_settings") as mock_settings:
             mock_settings.return_value = MagicMock(
                 container_image="workspace-base:latest",
                 container_cpu_quota=200000,
@@ -64,7 +65,7 @@ class TestContainerEnvVars:
 
     def test_workspace_tmpfs_writable(self):
         """/workspace が Tmpfs マウントで書き込み可能なこと (ReadonlyRootfs対応)"""
-        with patch("app.services.container.config.get_settings") as mock_settings:
+        with patch("app.services.container.docker_config.get_settings") as mock_settings:
             mock_settings.return_value = MagicMock(
                 container_image="workspace-base:latest",
                 container_cpu_quota=200000,
@@ -224,19 +225,19 @@ class TestGCOrphanContainerHandling:
     @pytest.mark.asyncio
     async def test_gc_destroys_old_orphan_containers(self):
         """GCが古い孤立コンテナ（Redisメタデータなし）を回収すること"""
-        import time
+        from datetime import datetime, timedelta, timezone
 
         from app.services.container.gc import ContainerGarbageCollector
 
         mock_lifecycle = AsyncMock()
-        # 古いコンテナ（5分以上前に作成）
-        old_created = time.time() - 600
+        # 古いコンテナ（10分以上前に作成、ISO 8601形式）
+        old_created = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
         mock_lifecycle.list_workspace_containers.return_value = [
             {
                 "Name": "/ws-orphan123",
                 "Config": {"Labels": {"workspace.conversation_id": "conv-none"}},
                 "State": {"Running": True},
-                "Created": str(old_created),
+                "Created": old_created,
             }
         ]
 

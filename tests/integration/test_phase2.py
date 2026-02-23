@@ -160,12 +160,12 @@ class TestSeccompConfig:
 
     def test_seccomp_profile_applied_when_configured(self):
         """seccompプロファイルパスが設定されている場合にSecurityOptに追加されること"""
-        import app.services.container.config as container_config
-        container_config._seccomp_json_cache = None  # キャッシュリセット
+        import app.services.container.docker_config as docker_config
+        docker_config._seccomp_json_cache = None  # キャッシュリセット
 
         fake_seccomp = '{"defaultAction":"SCMP_ACT_ERRNO"}'
-        with patch("app.services.container.config.get_settings") as mock_settings, \
-             patch("app.services.container.config._load_seccomp_profile", return_value=fake_seccomp):
+        with patch("app.services.container.docker_config.get_settings") as mock_settings, \
+             patch("app.services.container.docker_config._load_seccomp_profile", return_value=fake_seccomp):
             mock_settings.return_value = MagicMock(
                 container_image="workspace-base:latest",
                 container_cpu_quota=200000,
@@ -187,7 +187,7 @@ class TestSeccompConfig:
 
     def test_seccomp_default_when_not_configured(self):
         """seccompプロファイルが未設定の場合はDockerデフォルトが使われること"""
-        with patch("app.services.container.config.get_settings") as mock_settings:
+        with patch("app.services.container.docker_config.get_settings") as mock_settings:
             mock_settings.return_value = MagicMock(
                 container_image="workspace-base:latest",
                 container_cpu_quota=200000,
@@ -213,8 +213,8 @@ class TestUsernsRemapConfig:
 
     def test_no_userns_mode_in_container_config(self):
         """コンテナ設定にUsernsMode が含まれないこと（デーモンレベルで管理）"""
-        with patch("app.services.container.config.get_settings") as mock_settings, \
-             patch("app.services.container.config._load_seccomp_profile", return_value='{}'):
+        with patch("app.services.container.docker_config.get_settings") as mock_settings, \
+             patch("app.services.container.docker_config._load_seccomp_profile", return_value='{}'):
             mock_settings.return_value = MagicMock(
                 container_image="workspace-base:latest",
                 container_cpu_quota=200000,
