@@ -14,7 +14,6 @@ from uuid import uuid4
 
 import httpx
 import structlog
-from botocore.exceptions import ClientError
 from redis.asyncio import Redis
 
 from app.config import get_settings
@@ -202,6 +201,8 @@ class EcsContainerManager(ContainerManagerBase):
 
     async def destroy_container(self, container_id: str, grace_period: int = 30) -> None:
         """ECSタスクを停止"""
+        from botocore.exceptions import ClientError
+
         logger.info("ECSタスク停止中", container_id=container_id)
 
         task_arn = await self._resolve_task_arn(container_id)

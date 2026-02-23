@@ -3,7 +3,6 @@ file_utils ユニットテスト
 
 write_file_to_container のチャンク分割・エラーハンドリングをテストする。
 """
-import base64
 from unittest.mock import AsyncMock, call
 
 import pytest
