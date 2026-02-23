@@ -26,6 +26,30 @@ logger = structlog.get_logger(__name__)
 _ORPHAN_MIN_AGE_SECONDS = 300
 
 
+def _parse_container_age_seconds(created: str | datetime) -> float | None:
+    """コンテナ作成時刻から経過秒数を算出する
+
+    Args:
+        created: ISO 8601 文字列または datetime オブジェクト
+
+    Returns:
+        経過秒数。パース失敗時は None（安全側に倒して破棄しない判定に使う）。
+    """
+    now = datetime.now(timezone.utc)
+    try:
+        if isinstance(created, datetime):
+            created_at = created
+        else:
+            created_at = datetime.fromisoformat(
+                str(created).replace("Z", "+00:00")
+            )
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        return (now - created_at).total_seconds()
+    except (ValueError, TypeError):
+        return None
+
+
 class ContainerGarbageCollector:
     """コンテナGCループ"""
 
@@ -130,28 +154,19 @@ class ContainerGarbageCollector:
                     await self._graceful_destroy(info)
                     destroyed_count += 1
             else:
-                now = datetime.now(timezone.utc)
                 created_str = container_info.get("Created", "")
                 is_old_enough = True
                 if created_str:
-                    try:
-                        if isinstance(created_str, datetime):
-                            created_at = created_str
-                        else:
-                            created_at = datetime.fromisoformat(
-                                str(created_str).replace("Z", "+00:00")
-                            )
-                        if created_at.tzinfo is None:
-                            created_at = created_at.replace(tzinfo=timezone.utc)
-                        age = (now - created_at).total_seconds()
-                        is_old_enough = age > _ORPHAN_MIN_AGE_SECONDS
-                    except (ValueError, TypeError):
+                    age = _parse_container_age_seconds(created_str)
+                    if age is None:
                         logger.warning(
                             "GC: コンテナ作成時刻パース失敗、スキップ",
                             container_id=container_id,
                             created_str=str(created_str),
                         )
                         is_old_enough = False
+                    else:
+                        is_old_enough = age > _ORPHAN_MIN_AGE_SECONDS
 
                 if is_old_enough:
                     logger.warning("GC: 孤立コンテナ破棄", container_id=container_id)
@@ -222,7 +237,6 @@ class ContainerGarbageCollector:
         _ORPHAN_MIN_AGE_SECONDS 未満のタスクはスキップする。
         """
         destroyed = 0
-        now = datetime.now(timezone.utc)
         try:
             containers = await self.lifecycle.list_workspace_containers()
             for c in containers:
@@ -233,26 +247,15 @@ class ContainerGarbageCollector:
                 # 作成直後のタスクはスキップ（Redis登録前の正常タスクを保護）
                 created_str = c.get("Created", "")
                 if created_str:
-                    try:
-                        if isinstance(created_str, datetime):
-                            created_at = created_str
-                        else:
-                            created_at = datetime.fromisoformat(
-                                str(created_str).replace("Z", "+00:00")
-                            )
-                        if created_at.tzinfo is None:
-                            created_at = created_at.replace(tzinfo=timezone.utc)
-                        age = (now - created_at).total_seconds()
-                        if age < _ORPHAN_MIN_AGE_SECONDS:
-                            continue
-                    except (ValueError, TypeError):
-                        # パースできない場合は安全側に倒してスキップ
-                        # （新規タスクの誤破棄を防ぐ）
+                    age = _parse_container_age_seconds(created_str)
+                    if age is None:
                         logger.warning(
                             "GC(ECS): タスク作成時刻パース失敗、スキップ",
                             container_id=container_id,
                             created_str=str(created_str),
                         )
+                        continue
+                    if age < _ORPHAN_MIN_AGE_SECONDS:
                         continue
 
                 # Redisに逆引きキーがあるか確認
