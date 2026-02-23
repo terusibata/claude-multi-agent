@@ -18,7 +18,7 @@ from redis.asyncio import Redis
 
 from app.config import get_settings
 from app.services.container.base import ContainerManagerBase
-from app.services.container.config import (
+from app.services.container.constants import (
     CONTAINER_TTL_SECONDS,
     REDIS_KEY_CONTAINER,
     REDIS_KEY_CONTAINER_REVERSE,
@@ -201,6 +201,8 @@ class EcsContainerManager(ContainerManagerBase):
 
     async def destroy_container(self, container_id: str, grace_period: int = 30) -> None:
         """ECSタスクを停止"""
+        from botocore.exceptions import ClientError
+
         logger.info("ECSタスク停止中", container_id=container_id)
 
         task_arn = await self._resolve_task_arn(container_id)
@@ -215,14 +217,21 @@ class EcsContainerManager(ContainerManagerBase):
                 task=task_arn,
                 reason=f"Container {container_id} destroyed",
             )
-        except Exception as e:
-            # タスクが既に停止済みの場合はエラーを無視
-            error_str = str(e)
-            if "not found" in error_str.lower() or "InvalidParameterException" in error_str:
+        except ClientError as e:
+            error_code = e.response.get("Error", {}).get("Code", "")
+            if error_code == "InvalidParameterException":
                 logger.warning("ECSタスク未検出（既に停止済み）", container_id=container_id)
             else:
-                logger.error("ECSタスク停止エラー", container_id=container_id, error=error_str)
+                logger.error(
+                    "ECSタスク停止エラー",
+                    container_id=container_id,
+                    error_code=error_code,
+                    error=str(e),
+                )
                 raise
+        except Exception as e:
+            logger.error("ECSタスク停止エラー（非AWS）", container_id=container_id, error=str(e))
+            raise
 
         # Redis逆引きキーを削除
         # 注: orchestrator._cleanup_containerからも削除されるが、
@@ -546,7 +555,14 @@ class EcsContainerManager(ContainerManagerBase):
         return await self._redis.get(f"{REDIS_KEY_ECS_TASK}:{container_id}")
 
     async def _get_agent_url(self, container_id: str) -> str | None:
-        """container_id → agent HTTP URL を取得"""
+        """container_id -> agent HTTP URL を取得
+
+        NOTE: Redis の REVERSE_KEY と CONTAINER_KEY の間に微小な TOCTOU 窓がある
+        （REVERSE_KEY 取得後に CONTAINER_KEY が TTL 切れする可能性）。
+        実際にはマイクロ秒オーダーの窓であり、仮に発生しても下部の
+        describe_tasks フォールバックが正しく処理するため、実害はない。
+        Lua スクリプト等でのアトミック化は過剰対策と判断し、コメントのみ残す。
+        """
         # まずRedisのcontainer_reverseからconversation_idを引く
         conversation_id = await self._redis.get(
             f"{REDIS_KEY_CONTAINER_REVERSE}:{container_id}"
@@ -559,6 +575,11 @@ class EcsContainerManager(ContainerManagerBase):
                 return data.get("agent_socket")
 
         # フォールバック: task_arn → describe_tasks → IP
+        # Redis逆引き失敗は Redis キー期限切れや不整合の兆候
+        logger.warning(
+            "Redis逆引き失敗、describe_tasksフォールバック",
+            container_id=container_id,
+        )
         task_arn = await self._resolve_task_arn(container_id)
         if task_arn:
             task_ip = await self._get_task_ip(task_arn)

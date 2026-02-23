@@ -3,12 +3,12 @@ Docker コンテナ作成設定
 Docker APIに渡すコンテナ設定を生成する（Dockerモード専用）
 """
 import json
-import logging
 from pathlib import Path
 
+import structlog
 from app.config import get_settings
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 # seccompプロファイルのキャッシュ（プロセス起動中に1度だけ読み込む）
 _seccomp_json_cache: str | None = None
@@ -30,7 +30,7 @@ def _load_seccomp_profile(path: str) -> str | None:
         profile_path = Path.cwd() / profile_path
 
     if not profile_path.exists():
-        logger.warning("seccompプロファイルが見つかりません: %s", profile_path)
+        logger.warning("seccompプロファイルが見つかりません", path=str(profile_path))
         return None
 
     raw = profile_path.read_text(encoding="utf-8")
@@ -38,7 +38,7 @@ def _load_seccomp_profile(path: str) -> str | None:
     json.loads(raw)
     # 改行を除去してコンパクトにする
     _seccomp_json_cache = json.dumps(json.loads(raw), separators=(",", ":"))
-    logger.info("seccompプロファイル読み込み完了: %s", profile_path)
+    logger.info("seccompプロファイル読み込み完了", path=str(profile_path))
     return _seccomp_json_cache
 
 
