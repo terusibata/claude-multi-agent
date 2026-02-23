@@ -164,7 +164,7 @@ async def _init_container_stack(app: FastAPI, settings) -> tuple:
     gc = ContainerGarbageCollector(
         lifecycle,
         redis,
-        proxy_stop_callback=orchestrator._stop_proxy,
+        proxy_stop_callback=orchestrator.stop_proxy,
     )
     app.state.gc = gc
 

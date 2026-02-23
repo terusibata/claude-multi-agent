@@ -91,6 +91,9 @@ class EcsContainerManager(ContainerManagerBase):
         if self._logs_client:
             await self._logs_ctx.__aexit__(None, None, None)
             self._logs_client = None
+        # close後の _get_ecs_client / _get_logs_client 呼び出しで
+        # 無効化済みセッションを再利用しないようリセット
+        self._session = None
 
     async def create_container(self, conversation_id: str = "") -> ContainerInfo:
         """ECS RunTaskでワークスペースタスクを起動"""
@@ -274,8 +277,13 @@ class EcsContainerManager(ContainerManagerBase):
         if not task_ip:
             return False
 
+        # close() 後のレースコンディション対策
+        http_client = self._http_client
+        if not http_client:
+            return False
+
         try:
-            resp = await self._http_client.get(
+            resp = await http_client.get(
                 f"http://{task_ip}:{self._settings.ecs_agent_port}/health",
                 timeout=3.0,
             )
@@ -390,8 +398,13 @@ class EcsContainerManager(ContainerManagerBase):
                 except Exception:
                     pass
 
+            # close() 後のレースコンディション対策
+            http_client = self._http_client
+            if not http_client:
+                return False
+
             try:
-                resp = await self._http_client.get(
+                resp = await http_client.get(
                     f"{agent_url}/health", timeout=2.0,
                 )
                 if resp.status_code == 200:
@@ -426,8 +439,13 @@ class EcsContainerManager(ContainerManagerBase):
         if not agent_url:
             return -1, f"Container {container_id} not found"
 
+        # close() 後のレースコンディション対策
+        http_client = self._http_client
+        if not http_client:
+            return -1, "HTTP client closed"
+
         try:
-            resp = await self._http_client.post(
+            resp = await http_client.post(
                 f"{agent_url}/exec",
                 json={"cmd": cmd, "timeout": 60},
             )
@@ -446,8 +464,13 @@ class EcsContainerManager(ContainerManagerBase):
         if not agent_url:
             return -1, b""
 
+        # close() 後のレースコンディション対策
+        http_client = self._http_client
+        if not http_client:
+            return -1, b""
+
         try:
-            resp = await self._http_client.post(
+            resp = await http_client.post(
                 f"{agent_url}/exec/binary",
                 json={"cmd": cmd, "timeout": 60},
             )

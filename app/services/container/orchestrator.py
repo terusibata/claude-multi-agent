@@ -289,6 +289,21 @@ class ContainerOrchestrator:
                     info.touch()
                     await self._update_redis(info)
 
+    async def get_container_info(self, conversation_id: str) -> ContainerInfo | None:
+        """会話に紐づくコンテナ情報をRedisから取得（読み取りのみ）
+
+        get_or_create() と異なり、コンテナが存在しない場合に新規作成は行わない。
+        ストリーム完了後のコンテナ情報再取得など、副作用なしで現在の状態を
+        確認したい場合に使用する。
+
+        Args:
+            conversation_id: 会話ID
+
+        Returns:
+            コンテナ情報（未割当の場合はNone）
+        """
+        return await self._get_container_from_redis(conversation_id)
+
     async def destroy(self, conversation_id: str) -> None:
         """会話に紐づくコンテナを破棄"""
         info = await self._get_container_from_redis(conversation_id)
@@ -306,7 +321,7 @@ class ContainerOrchestrator:
         proxy_ids = list(self._proxies.keys())
         for proxy_id in proxy_ids:
             try:
-                await self._stop_proxy(proxy_id)
+                await self.stop_proxy(proxy_id)
             except Exception as e:
                 logger.warning("Proxy停止エラー", container_id=proxy_id, error=str(e))
 
@@ -427,9 +442,10 @@ class ContainerOrchestrator:
         await proxy.start()
         self._proxies[info.id] = proxy
 
-    async def _stop_proxy(self, container_id: str) -> None:
+    async def stop_proxy(self, container_id: str) -> None:
         """コンテナ用Proxyを停止
 
+        GCからのコールバックにも使用されるためpublicメソッド。
         ECSモード: Proxyはサイドカー。タスク停止時に自動停止するためno-op。
         """
         proxy = self._proxies.pop(container_id, None)
@@ -448,7 +464,7 @@ class ContainerOrchestrator:
             return
 
         logger.warning("Proxy再起動", container_id=info.id)
-        await self._stop_proxy(info.id)
+        await self.stop_proxy(info.id)
         await self._start_proxy(info)
 
     async def update_mcp_header_rules(
@@ -570,7 +586,7 @@ class ContainerOrchestrator:
 
     async def _cleanup_container(self, info: ContainerInfo) -> None:
         """コンテナとProxy、Redisメタデータをクリーンアップ"""
-        await self._stop_proxy(info.id)
+        await self.stop_proxy(info.id)
         try:
             await self.lifecycle.destroy_container(
                 info.id, grace_period=self._settings.container_grace_period

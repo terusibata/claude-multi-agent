@@ -15,7 +15,6 @@ UDS（Docker）またはHTTP（ECS）経由でSSEイベントを中継する。
 """
 
 import asyncio
-import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,33 +29,34 @@ from app.infrastructure.audit_log import (
     audit_agent_execution_failed,
     audit_agent_execution_started,
 )
+from app.infrastructure.distributed_lock import (
+    ConversationLockError,
+    get_conversation_lock_manager,
+)
 from app.models.model import Model
 from app.models.tenant import Tenant
 from app.schemas.execute import ExecuteRequest
 from app.services.container.models import ContainerInfo
 from app.services.container.orchestrator import ContainerOrchestrator
+from app.services.context_manager import ContextManager
+from app.services.conversation_service import ConversationService
 from app.services.event_translator import EventTranslator
 from app.services.mcp_config_builder import McpConfigBuilder
-from app.services.workspace.file_sync import WorkspaceFileSync
-from app.services.workspace.s3_storage import S3StorageBackend
-from app.services.conversation_service import ConversationService
 from app.services.mcp_server_service import McpServerService
 from app.services.message_log_service import MessageLogService
+from app.services.prompt_builder import build_system_prompt
 from app.services.skill_service import SkillService
 from app.services.usage_service import UsageService
-from app.infrastructure.distributed_lock import (
-    ConversationLockError,
-    get_conversation_lock_manager,
-)
+from app.services.workspace.file_sync import WorkspaceFileSync
+from app.services.workspace.s3_storage import S3StorageBackend
+from app.utils.sensitive_filter import sanitize_log_data
 from app.utils.streaming import (
     SequenceCounter,
-    format_context_status_event,
     format_done_event,
     format_error_event,
     format_progress_event,
     format_title_event,
 )
-from app.utils.sensitive_filter import sanitize_log_data
 
 logger = structlog.get_logger(__name__)
 
@@ -84,6 +84,7 @@ class ExecuteService:
         self._file_sync = self._create_file_sync()
         self._event_translator = EventTranslator()
         self._mcp_config = McpConfigBuilder(self.mcp_server_service, orchestrator)
+        self._context_manager = ContextManager(db)
 
     def _create_file_sync(self) -> WorkspaceFileSync | None:
         """ファイル同期インスタンスを生成（S3未設定時はNone）"""
@@ -128,7 +129,7 @@ class ExecuteService:
         )
 
         # コンテキスト制限チェック
-        context_error = await self._check_context_limit(
+        context_error = await self._context_manager.check_context_limit(
             conversation_id, request.tenant_id, model, seq_counter
         )
         if context_error:
@@ -223,10 +224,8 @@ class ExecuteService:
             last_sync_time = 0.0
             last_lock_extend_time = time.time()
             background_sync_tasks: set[asyncio.Task] = set()
-            external_file_paths: list[
-                str
-            ] = []  # /workspace外に書かれたファイルパスを収集
-            assistant_events: list[dict] = []  # アシスタントメッセージ永続化用
+            external_file_paths: list[str] = []
+            assistant_events: list[dict] = []
 
             async for event in self._stream_from_container(
                 request,
@@ -239,7 +238,7 @@ class ExecuteService:
                     done_data = event.get("data", {})
 
                     # done前にcontext_statusイベントを送信（仕様準拠）
-                    ctx_event = await self._build_context_status_event(
+                    ctx_event = await self._context_manager.build_context_status_event(
                         request.conversation_id,
                         request.tenant_id,
                         model,
@@ -299,18 +298,15 @@ class ExecuteService:
 
             # ストリーム完了後、コンテナ情報を最新に更新
             # クラッシュ復旧時は orchestrator.execute() 内で新コンテナに
-            # 切り替わっているため、後続処理が破棄済みコンテナを操作するのを防ぐ
-            try:
-                container_info = await self.orchestrator.get_or_create(
-                    request.conversation_id
-                )
-                container_id = container_info.id
-            except Exception as e:
-                logger.warning(
-                    "コンテナ情報再取得失敗（後続処理は旧情報で続行）",
-                    conversation_id=conversation_id,
-                    error=str(e),
-                )
+            # 切り替わっているため、後続処理が破棄済みコンテナを操作するのを防ぐ。
+            # get_or_create ではなく get_container_info を使い、
+            # 副作用（WarmPool取得やProxy起動）を発生させない。
+            refreshed = await self.orchestrator.get_container_info(
+                request.conversation_id
+            )
+            if refreshed:
+                container_info = refreshed
+                container_id = refreshed.id
 
             # バックグラウンド同期タスクの完了待ち（最大5秒）
             # タイムアウト後の未完了タスクはキャンセルしてリソースリークを防止
@@ -434,7 +430,7 @@ class ExecuteService:
         allowed_tools = McpConfigBuilder.compute_allowed_tools(request, mcp_server_configs)
 
         # システムプロンプト構築
-        system_prompt = self._build_system_prompt(request, skills_synced)
+        system_prompt = build_system_prompt(request, skills_synced)
 
         container_request = {
             "user_input": request.user_input,
@@ -479,6 +475,8 @@ class ExecuteService:
                     for evt in translated_events:
                         yield evt
 
+    # ---- ファイル同期 ----
+
     async def _sync_skills_to_container(
         self, tenant_id: str, container_id: str
     ) -> bool:
@@ -518,11 +516,7 @@ class ExecuteService:
     async def _write_skill_to_container(
         self, container_id: str, dest_path: str, data: bytes
     ) -> None:
-        """スキルファイルをコンテナに書き込む（S3設定不要）
-
-        lifecycle.exec_in_container を直接使用し、
-        _file_sync（S3依存）を経由せずにコンテナへ書き込む。
-        """
+        """スキルファイルをコンテナに書き込む（S3設定不要）"""
         from app.services.container.file_utils import write_file_to_container
 
         await write_file_to_container(
@@ -533,55 +527,8 @@ class ExecuteService:
             tmp_prefix="_skill_xfer",
         )
 
-    def _build_system_prompt(self, request: ExecuteRequest, skills_synced: bool) -> str:
-        """コンテナに渡すシステムプロンプトを構築"""
-        parts = [
-            "あなたのワークスペースは /workspace です。"
-            "ファイルの作成・編集は必ず /workspace ディレクトリ内で行ってください。"
-            "相対パスを使用してください（例: hello.py, docs/readme.md）。"
-            "/tmp や他のディレクトリへの書き込みは禁止です。",
-            "",
-            "## ファイル作成ルール",
-            "- **相対パスのみ使用**（例: `hello.py`）。絶対パス（/tmp/等）は禁止",
-            "- ファイル作成後は `mcp__file-presentation__present_files` で提示",
-            '- file_paths は配列で指定: `["hello.py"]`',
-            "- **サブエージェント（Task）がファイルを作成した場合も、その完了後に必ず `mcp__file-presentation__present_files` を呼び出してください**",
-            "",
-            "## ファイル読み込み",
-            "ワークスペースのファイルは以下の手順で読んでください：",
-            "1. list_workspace_files でファイル一覧を確認",
-            "2. 構造確認（Excel: get_sheet_info, PDF: inspect_pdf_file, Word: get_document_info, PowerPoint: get_presentation_info, 画像: inspect_image_file）",
-            "3. データ取得（Excel: get_sheet_csv, PDF: read_pdf_pages, Word: get_document_content, PowerPoint: get_slides_content）",
-            "4. 検索（Excel: search_workbook, Word: search_document, PowerPoint: search_presentation）",
-            "5. 図表確認が必要な場合のみ convert_pdf_to_images → read_image_file",
-            "※ 画像読み込みはコンテキストを消費するため、必要な場合のみ使用",
-            "※ テキスト/CSV/JSONファイルは従来のReadツールも使用可能",
-        ]
-
-        # preferred_skills 指示（インジェクション防止のためバリデーション付き）
-        if request.preferred_skills:
-            valid_skills = []
-            for skill_name in request.preferred_skills:
-                if re.match(r"^[a-zA-Z0-9_\-\u3040-\u9FFF]+$", skill_name):
-                    valid_skills.append(skill_name)
-                else:
-                    logger.warning(
-                        "不正なスキル名を除外",
-                        skill_name=skill_name[:50],
-                    )
-            if valid_skills:
-                parts.append("")
-                parts.append("## 優先スキル")
-                parts.append(
-                    "以下のスキルが利用可能です。関連するタスクには優先的に使用してください:"
-                )
-                for skill_name in valid_skills:
-                    parts.append(f"- {skill_name}")
-
-        return "\n".join(parts)
-
     async def _sync_files_to_container(
-        self, request: ExecuteRequest, container_info
+        self, request: ExecuteRequest, container_info: ContainerInfo
     ) -> None:
         """S3からコンテナへファイルを同期"""
         if not self._file_sync:
@@ -595,7 +542,7 @@ class ExecuteService:
             logger.error("S3→コンテナ同期エラー", error=str(e))
 
     async def _sync_files_from_container(
-        self, request: ExecuteRequest, container_info
+        self, request: ExecuteRequest, container_info: ContainerInfo
     ) -> None:
         """コンテナからS3へファイルを同期"""
         if not self._file_sync:
@@ -607,6 +554,50 @@ class ExecuteService:
             )
         except Exception as e:
             logger.error("コンテナ→S3同期エラー", error=str(e))
+
+    async def _rescue_external_files(
+        self, container_id: str, external_paths: list[str]
+    ) -> None:
+        """
+        /workspace外に書かれたファイルをコンテナ内で/workspaceにコピー
+
+        ディレクトリ構造を保持してコピーする:
+          /tmp/test_file.txt → /workspace/_external/tmp/test_file.txt
+        """
+        for src_path in external_paths:
+            relative = src_path.lstrip("/")
+            dest_path = f"/workspace/_external/{relative}"
+            dest_dir = "/".join(dest_path.split("/")[:-1])
+            try:
+                await self.orchestrator.lifecycle.exec_in_container(
+                    container_id,
+                    ["mkdir", "-p", dest_dir],
+                )
+                exit_code, _ = await self.orchestrator.lifecycle.exec_in_container(
+                    container_id,
+                    ["cp", "-f", src_path, dest_path],
+                )
+                if exit_code == 0:
+                    logger.info(
+                        "外部ファイルを/workspaceに回収",
+                        src=src_path,
+                        dest=dest_path,
+                        container_id=container_id,
+                    )
+                else:
+                    logger.warning(
+                        "外部ファイル回収失敗（cp失敗）",
+                        src=src_path,
+                        exit_code=exit_code,
+                    )
+            except Exception as e:
+                logger.warning(
+                    "外部ファイル回収エラー",
+                    src=src_path,
+                    error=str(e),
+                )
+
+    # ---- DB記録 ----
 
     async def _save_user_message(self, request: ExecuteRequest) -> None:
         """ユーザーメッセージをDBに保存"""
@@ -693,7 +684,7 @@ class ExecuteService:
             )
 
             # コンテキスト状況を更新
-            await self._update_context_status(
+            await self._context_manager.update_context_status(
                 request.conversation_id,
                 request.tenant_id,
                 model,
@@ -702,144 +693,6 @@ class ExecuteService:
             )
         except Exception as e:
             logger.error("使用量記録エラー", error=str(e))
-
-    async def _check_context_limit(
-        self,
-        conversation_id: str,
-        tenant_id: str,
-        model: Model,
-        seq_counter: SequenceCounter,
-    ) -> dict | None:
-        """コンテキスト制限チェック"""
-        conversation = await self.conversation_service.get_conversation_by_id(
-            conversation_id, tenant_id
-        )
-        if not conversation:
-            return None
-
-        if conversation.context_limit_reached:
-            return format_error_event(
-                seq=seq_counter.next(),
-                error_type="context_limit_exceeded",
-                message="この会話はコンテキスト制限に達しています。新しいチャットを開始してください。",
-                recoverable=False,
-            )
-
-        max_context = model.context_window
-        if max_context > 0 and conversation.estimated_context_tokens > 0:
-            usage_percent = (conversation.estimated_context_tokens / max_context) * 100
-            if usage_percent >= 95:
-                return format_error_event(
-                    seq=seq_counter.next(),
-                    error_type="context_limit_exceeded",
-                    message=f"コンテキスト使用率が{usage_percent:.1f}%に達しています。新しいチャットを開始してください。",
-                    recoverable=False,
-                )
-
-        return None
-
-    async def _update_context_status(
-        self,
-        conversation_id: str,
-        tenant_id: str,
-        model: Model,
-        input_tokens: int,
-        output_tokens: int,
-    ) -> None:
-        """コンテキスト状況を更新"""
-        estimated = input_tokens + output_tokens
-        max_context = model.context_window
-
-        # 累積後の値で limit_reached を正確に判定
-        conversation = await self.conversation_service.get_conversation_by_id(
-            conversation_id, tenant_id
-        )
-        accumulated_after = (
-            (conversation.estimated_context_tokens or 0) + estimated
-            if conversation
-            else estimated
-        )
-        usage_percent = (
-            (accumulated_after / max_context) * 100 if max_context > 0 else 0
-        )
-        limit_reached = usage_percent >= 95
-
-        await self.conversation_service.update_conversation_context_status(
-            conversation_id=conversation_id,
-            tenant_id=tenant_id,
-            total_input_tokens=input_tokens,
-            total_output_tokens=output_tokens,
-            estimated_context_tokens=estimated,
-            context_limit_reached=limit_reached,
-        )
-
-    async def _build_context_status_event(
-        self,
-        conversation_id: str,
-        tenant_id: str,
-        model: Model,
-        done_data: dict,
-        seq_counter: SequenceCounter,
-    ) -> dict | None:
-        """done前に送信するcontext_status SSEイベントを構築"""
-        try:
-            usage = EventTranslator.normalize_usage(done_data.get("usage", {}))
-            input_tokens = usage.get("input_tokens", 0)
-            output_tokens = usage.get("output_tokens", 0)
-            new_tokens = input_tokens + output_tokens
-
-            conversation = await self.conversation_service.get_conversation_by_id(
-                conversation_id, tenant_id
-            )
-            accumulated = (
-                (conversation.estimated_context_tokens or 0) + new_tokens
-                if conversation
-                else new_tokens
-            )
-            max_context = model.context_window
-            if max_context <= 0:
-                return None
-
-            usage_percent = (accumulated / max_context) * 100
-
-            if usage_percent >= 95:
-                warning_level = "blocked"
-                can_continue = False
-                message = (
-                    "コンテキスト制限に達しました。新しいチャットを開始してください。"
-                )
-                recommended_action = "new_chat"
-            elif usage_percent >= 85:
-                warning_level = "critical"
-                can_continue = True
-                message = (
-                    "コンテキストが残りわずかです。次の返信でエラーの可能性があります。"
-                )
-                recommended_action = "new_chat"
-            elif usage_percent >= 70:
-                warning_level = "warning"
-                can_continue = True
-                message = "会話が長くなっています。新しいチャットを開始することをおすすめします。"
-                recommended_action = "new_chat"
-            else:
-                warning_level = "normal"
-                can_continue = True
-                message = None
-                recommended_action = None
-
-            return format_context_status_event(
-                seq=seq_counter.next(),
-                current_context_tokens=accumulated,
-                max_context_tokens=max_context,
-                usage_percent=usage_percent,
-                warning_level=warning_level,
-                can_continue=can_continue,
-                message=message,
-                recommended_action=recommended_action,
-            )
-        except Exception as e:
-            logger.warning("context_statusイベント構築エラー", error=str(e))
-            return None
 
     async def _generate_title_if_needed(
         self,
@@ -896,56 +749,6 @@ class ExecuteService:
         except Exception as e:
             logger.warning("タイトル生成エラー（続行）", error=str(e))
             return None
-
-    async def _rescue_external_files(
-        self, container_id: str, external_paths: list[str]
-    ) -> None:
-        """
-        /workspace外に書かれたファイルをコンテナ内で/workspaceにコピー
-
-        sync_from_container() は /workspace 以下のみスキャンするため、
-        /workspace 外のファイルは検出されない。このメソッドで事前にコピーすることで
-        同期対象に含まれるようにする。
-
-        ディレクトリ構造を保持してコピーする:
-          /tmp/test_file.txt → /workspace/_external/tmp/test_file.txt
-          /home/user/data.csv → /workspace/_external/home/user/data.csv
-        """
-        for src_path in external_paths:
-            # 先頭の / を除去してディレクトリ構造を保持
-            # /tmp/test_file.txt → _external/tmp/test_file.txt
-            relative = src_path.lstrip("/")
-            dest_path = f"/workspace/_external/{relative}"
-            dest_dir = "/".join(dest_path.split("/")[:-1])
-            try:
-                # 宛先ディレクトリを作成
-                await self.orchestrator.lifecycle.exec_in_container(
-                    container_id,
-                    ["mkdir", "-p", dest_dir],
-                )
-                exit_code, _ = await self.orchestrator.lifecycle.exec_in_container(
-                    container_id,
-                    ["cp", "-f", src_path, dest_path],
-                )
-                if exit_code == 0:
-                    logger.info(
-                        "外部ファイルを/workspaceに回収",
-                        src=src_path,
-                        dest=dest_path,
-                        container_id=container_id,
-                    )
-                else:
-                    logger.warning(
-                        "外部ファイル回収失敗（cp失敗）",
-                        src=src_path,
-                        exit_code=exit_code,
-                    )
-            except Exception as e:
-                logger.warning(
-                    "外部ファイル回収エラー",
-                    src=src_path,
-                    error=str(e),
-                )
 
     def _error_done(self, start_time: float, seq_counter: SequenceCounter) -> dict:
         """エラー時のdoneイベントを生成"""
