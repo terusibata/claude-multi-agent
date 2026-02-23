@@ -439,8 +439,13 @@ class EcsContainerManager(ContainerManagerBase):
         if not agent_url:
             return -1, f"Container {container_id} not found"
 
+        # close() 後のレースコンディション対策
+        http_client = self._http_client
+        if not http_client:
+            return -1, "HTTP client closed"
+
         try:
-            resp = await self._http_client.post(
+            resp = await http_client.post(
                 f"{agent_url}/exec",
                 json={"cmd": cmd, "timeout": 60},
             )
@@ -459,8 +464,13 @@ class EcsContainerManager(ContainerManagerBase):
         if not agent_url:
             return -1, b""
 
+        # close() 後のレースコンディション対策
+        http_client = self._http_client
+        if not http_client:
+            return -1, b""
+
         try:
-            resp = await self._http_client.post(
+            resp = await http_client.post(
                 f"{agent_url}/exec/binary",
                 json={"cmd": cmd, "timeout": 60},
             )
