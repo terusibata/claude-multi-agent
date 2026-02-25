@@ -1,6 +1,6 @@
 # ヘルスチェックAPI
 
-システムの状態監視とKubernetes/ECS対応のヘルスチェックを提供するAPIです。
+システムの状態監視とヘルスチェックを提供するAPIです。
 
 ## 概要
 
@@ -11,7 +11,7 @@
 | スコープ | グローバル |
 
 これらのエンドポイントは認証なしでアクセス可能です。
-Kubernetesのliveness/readinessプローブとして使用できます。
+liveness/readinessプローブとして使用できます。
 
 ---
 
@@ -21,8 +21,8 @@ Kubernetesのliveness/readinessプローブとして使用できます。
 |---------|------|------|------|
 | GET | `/` | ルートエンドポイント | API情報確認 |
 | GET | `/health` | 詳細ヘルスチェック | モニタリング |
-| GET | `/health/live` | Liveness Probe | Kubernetes |
-| GET | `/health/ready` | Readiness Probe | Kubernetes |
+| GET | `/health/live` | Liveness Probe | ヘルスチェック |
+| GET | `/health/ready` | Readiness Probe | ヘルスチェック |
 | GET | `/metrics` | Prometheusメトリクス | メトリクス収集 |
 
 ---
@@ -60,9 +60,7 @@ interface ComponentHealth {
 | コンポーネント | 重要度 | 説明 |
 |---------------|--------|------|
 | `database` | **重要** | PostgreSQLデータベース |
-| `redis` | 非重要 | Redisキャッシュ |
 | `s3` | 非重要 | AWS S3ストレージ |
-| `container_system` | 非重要 | コンテナオーケストレーション（Docker） |
 
 重要コンポーネントが`unhealthy`の場合、全体ステータスも`unhealthy`になります。
 
@@ -114,11 +112,6 @@ curl -X GET "https://api.example.com/"
       "message": null,
       "latency_ms": 5.23
     },
-    "redis": {
-      "status": "healthy",
-      "message": null,
-      "latency_ms": 1.15
-    },
     "s3": {
       "status": "healthy",
       "message": null,
@@ -142,15 +135,10 @@ curl -X GET "https://api.example.com/"
       "message": null,
       "latency_ms": 5.23
     },
-    "redis": {
+    "s3": {
       "status": "unhealthy",
       "message": "Connection refused",
       "latency_ms": null
-    },
-    "s3": {
-      "status": "healthy",
-      "message": null,
-      "latency_ms": 45.67
     }
   }
 }
@@ -169,11 +157,6 @@ curl -X GET "https://api.example.com/"
       "status": "unhealthy",
       "message": "Connection timed out",
       "latency_ms": null
-    },
-    "redis": {
-      "status": "healthy",
-      "message": null,
-      "latency_ms": 1.15
     },
     "s3": {
       "status": "healthy",
@@ -198,11 +181,6 @@ curl -X GET "https://api.example.com/"
       "message": null,
       "latency_ms": 5.23
     },
-    "redis": {
-      "status": "healthy",
-      "message": null,
-      "latency_ms": 1.15
-    },
     "s3": {
       "status": "healthy",
       "message": "S3未設定（スキップ）",
@@ -222,7 +200,7 @@ curl -X GET "https://api.example.com/health"
 
 ## GET /health/live
 
-Kubernetesのliveness probe用エンドポイント。
+Liveness probe用エンドポイント。
 アプリケーションプロセスが生存しているかを確認します。
 
 ### 動作
@@ -241,19 +219,6 @@ Kubernetesのliveness probe用エンドポイント。
 }
 ```
 
-### Kubernetes設定例
-
-```yaml
-livenessProbe:
-  httpGet:
-    path: /health/live
-    port: 8000
-  initialDelaySeconds: 10
-  periodSeconds: 10
-  timeoutSeconds: 5
-  failureThreshold: 3
-```
-
 ### curlの例
 
 ```bash
@@ -264,7 +229,7 @@ curl -X GET "https://api.example.com/health/live"
 
 ## GET /health/ready
 
-Kubernetesのreadiness probe用エンドポイント。
+Readiness probe用エンドポイント。
 アプリケーションがトラフィックを受け入れる準備ができているかを確認します。
 
 ### 動作
@@ -288,19 +253,6 @@ Kubernetesのreadiness probe用エンドポイント。
 {
   "detail": "Service not ready"
 }
-```
-
-### Kubernetes設定例
-
-```yaml
-readinessProbe:
-  httpGet:
-    path: /health/ready
-    port: 8000
-  initialDelaySeconds: 5
-  periodSeconds: 5
-  timeoutSeconds: 3
-  failureThreshold: 3
 ```
 
 ### curlの例
@@ -352,27 +304,6 @@ services:
 
 ---
 
-## ECS タスク定義例
-
-```json
-{
-  "containerDefinitions": [
-    {
-      "name": "api",
-      "healthCheck": {
-        "command": ["CMD-SHELL", "curl -f http://localhost:8000/health/ready || exit 1"],
-        "interval": 10,
-        "timeout": 5,
-        "retries": 3,
-        "startPeriod": 30
-      }
-    }
-  ]
-}
-```
-
----
-
 ## GET /metrics
 
 Prometheus形式でアプリケーションメトリクスを公開するエンドポイント。
@@ -400,7 +331,6 @@ Prometheus形式でアプリケーションメトリクスを公開するエン�
 | メトリクス名 | 型 | ラベル | 説明 |
 |-------------|------|--------|------|
 | `db_pool_connections` | Gauge | state (idle/active/overflow) | DBコネクションプール状態 |
-| `redis_operations_total` | Counter | operation, status | Redis操作数 |
 | `s3_operations_total` | Counter | operation, status | S3操作数 |
 | `errors_total` | Counter | type, code | エラー総数 |
 
@@ -413,22 +343,12 @@ Prometheus形式でアプリケーションメトリクスを公開するエン�
 | `agent_executions_total` | Counter | tenant_id, status | エージェント実行数 |
 | `agent_execution_duration_seconds` | Histogram | tenant_id | エージェント実行時間 |
 
-#### ワークスペースコンテナメトリクス
+#### AgentCore Runtime メトリクス
 
 | メトリクス名 | 型 | ラベル | 説明 |
 |-------------|------|--------|------|
-| `workspace_active_containers` | Gauge | - | アクティブコンテナ数 |
-| `workspace_warm_pool_size` | Gauge | - | WarmPoolサイズ |
-| `workspace_host_cpu_percent` | Gauge | - | ホストCPU使用率 |
-| `workspace_container_startup_seconds` | Histogram | - | コンテナ起動時間 |
-| `workspace_warm_pool_acquire_seconds` | Histogram | - | WarmPool取得時間 |
-| `workspace_requests_total` | Counter | status | コンテナリクエスト総数 |
-| `workspace_container_crashes_total` | Counter | - | コンテナクラッシュ数 |
+| `workspace_requests_total` | Counter | status | AgentCore呼び出し総数 |
 | `workspace_s3_sync_errors_total` | Counter | direction | S3同期エラー数 |
-| `workspace_proxy_blocked_total` | Counter | - | Proxyドメインブロック数 |
-| `workspace_warm_pool_exhausted_total` | Counter | - | WarmPool枯渇回数 |
-| `workspace_gc_cycles_total` | Counter | result | GCサイクル数 |
-| `workspace_proxy_request_duration_seconds` | Histogram | method | Proxyリクエスト処理時間 |
 
 ### Prometheus scrape設定例
 
@@ -453,4 +373,3 @@ curl -X GET "http://localhost:8000/metrics"
 ## 関連API
 
 - [概要](./00-overview.md) - API全体の情報
-- [監視ガイド](../operations/monitoring-guide.md) - メトリクスの活用方法
