@@ -85,7 +85,7 @@ class AgentCoreClient:
                       指定された場合、"agentcore_session_id" キーにセッションIDが格納される。
 
         Yields:
-            SSEストリームの行文字列（改行付き）
+            SSEストリームの行文字列（改行なし、iter_lines()により改行は除去済み）
         """
         loop = asyncio.get_running_loop()
 
