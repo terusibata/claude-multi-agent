@@ -211,15 +211,18 @@ class ExecuteService:
                 )
 
                 # session_id / agentcore_session_id をDBに保存（セッション再開用）
-                new_session_id = done_data.get("session_id")
-                new_agentcore_sid = agentcore_metadata.get("agentcore_session_id")
-                if new_session_id or new_agentcore_sid:
-                    await self.conversation_service.update_conversation(
-                        conversation_id=request.conversation_id,
-                        tenant_id=request.tenant_id,
-                        session_id=new_session_id,
-                        agentcore_session_id=new_agentcore_sid,
-                    )
+                try:
+                    new_session_id = done_data.get("session_id")
+                    new_agentcore_sid = agentcore_metadata.get("agentcore_session_id")
+                    if new_session_id or new_agentcore_sid:
+                        await self.conversation_service.update_conversation(
+                            conversation_id=request.conversation_id,
+                            tenant_id=request.tenant_id,
+                            session_id=new_session_id,
+                            agentcore_session_id=new_agentcore_sid,
+                        )
+                except Exception as e:
+                    logger.error("セッションID保存エラー（続行）", error=str(e))
 
             # アシスタントメッセージをDBに保存
             if assistant_events:
