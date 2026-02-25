@@ -1,7 +1,7 @@
 """
 ヘルスチェックエンドポイント
 
-Kubernetes/ECS対応のヘルスチェック実装
+AgentCore Runtime対応のヘルスチェック実装
 """
 from datetime import datetime, timezone
 from enum import Enum
@@ -166,7 +166,7 @@ async def health_check(db: AsyncSession = Depends(get_db)) -> HealthResponse:
 @router.get(
     "/health/live",
     summary="Liveness Probe",
-    description="Kubernetesのliveness probe用エンドポイント",
+    description="Liveness probe用エンドポイント",
 )
 async def liveness_probe():
     """
@@ -181,7 +181,7 @@ async def liveness_probe():
 @router.get(
     "/health/ready",
     summary="Readiness Probe",
-    description="Kubernetesのreadiness probe用エンドポイント",
+    description="Readiness probe用エンドポイント",
 )
 async def readiness_probe(db: AsyncSession = Depends(get_db)):
     """

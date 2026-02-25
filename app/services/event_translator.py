@@ -26,22 +26,6 @@ from app.utils.streaming import (
 from app.utils.progress_messages import get_initial_message
 
 
-# ファイル操作ツール名のセット（tool_result同期トリガー用）
-_FILE_TOOL_NAMES = frozenset(
-    {
-        "write_file",
-        "create_file",
-        "edit_file",
-        "replace_file",
-        "Write",
-        "Edit",
-        "write",
-        "create",
-        "save_file",
-    }
-)
-
-
 class EventTranslator:
     """SDKイベントをホスト正規形式に変換するトランスレータ"""
 
@@ -253,31 +237,3 @@ class EventTranslator:
 
         return {"event": event_type, "data": data}
 
-    @staticmethod
-    def collect_external_file_path(event: dict, external_paths: list[str]) -> None:
-        """
-        tool_callイベントからファイルパスを抽出し、/workspace外のパスを収集
-
-        AIがシステムプロンプトの指示を無視して/workspace外にファイルを作成した場合の
-        安全策として、後でコンテナ内コピーにより回収できるようにする。
-        """
-        if event.get("event") != "tool_call":
-            return
-        data = event.get("data", {})
-        tool_name = data.get("tool_name", "")
-        if tool_name not in _FILE_TOOL_NAMES:
-            return
-        tool_input = data.get("input", {})
-        file_path = tool_input.get("file_path", "")
-        if not file_path:
-            return
-        # /workspace 外の絶対パスのみ収集
-        if file_path.startswith("/") and not file_path.startswith("/workspace/"):
-            external_paths.append(file_path)
-
-    @staticmethod
-    def is_file_tool_result(event: dict) -> bool:
-        """tool_resultイベントがファイル操作ツールの結果かどうかを判定"""
-        data = event.get("data", {})
-        tool_name = data.get("tool_name", "")
-        return tool_name in _FILE_TOOL_NAMES

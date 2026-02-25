@@ -317,25 +317,43 @@ class ExecuteService:
         }
 
         # AgentCore invoke
-        buffer = ""
-        async for chunk in self.agentcore.invoke_streaming(
+        # iter_lines() から行単位でSSEイベントを組み立てる
+        event_lines: list[str] = []
+        async for line in self.agentcore.invoke_streaming(
             payload=invocation_payload,
             session_id=agentcore_session_id,
             metadata=agentcore_metadata,
         ):
-            decoded = chunk.decode("utf-8", errors="replace")
-            buffer += decoded
+            # 空行 = SSEイベント区切り
+            if not line.strip():
+                if event_lines:
+                    event_str = "\n".join(event_lines)
+                    event_lines = []
+                    raw_event = EventTranslator.parse_sse_event(event_str)
+                    if raw_event:
+                        # file_manifest はそのまま内部イベントとして返す
+                        if raw_event.get("event") == "file_manifest":
+                            yield raw_event
+                            continue
 
-            # SSEイベントをパース → 正規形式に変換して中継
-            while "\n\n" in buffer:
-                event_str, buffer = buffer.split("\n\n", 1)
-                raw_event = EventTranslator.parse_sse_event(event_str)
-                if raw_event:
-                    # file_manifest はそのまま内部イベントとして返す
-                    if raw_event.get("event") == "file_manifest":
-                        yield raw_event
-                        continue
+                        translated_events = self._event_translator.translate_event(
+                            raw_event,
+                            seq_counter,
+                            conversation_id=request.conversation_id,
+                        )
+                        for evt in translated_events:
+                            yield evt
+            else:
+                event_lines.append(line)
 
+        # ストリーム終了時に未処理の行が残っている場合
+        if event_lines:
+            event_str = "\n".join(event_lines)
+            raw_event = EventTranslator.parse_sse_event(event_str)
+            if raw_event:
+                if raw_event.get("event") == "file_manifest":
+                    yield raw_event
+                else:
                     translated_events = self._event_translator.translate_event(
                         raw_event,
                         seq_counter,

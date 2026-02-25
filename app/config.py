@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     # AgentCore Runtime設定
     # ============================================
     agentcore_runtime_arn: str = ""  # AgentCore Runtime ARN
+    agentcore_qualifier: str = ""  # AgentCore Runtime qualifier（バージョン/エンドポイント指定）
     agentcore_idle_timeout: int = 900  # セッションアイドルタイムアウト（秒）
 
     # SSEアイドルタイムアウト（秒）

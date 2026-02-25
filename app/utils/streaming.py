@@ -1,5 +1,5 @@
 """
-SSEストリーミングユーティリティ v2
+SSEストリーミングユーティリティ
 Server-Sent Events形式でのストリーミング送信
 
 イベント形式:
@@ -8,8 +8,6 @@ Server-Sent Events形式でのストリーミング送信
 - assistant: テキスト・ツール使用
 - tool_call: ツール呼び出し開始
 - tool_result: ツール実行結果
-- subagent_start: サブエージェント開始
-- subagent_end: サブエージェント終了
 - progress: 進捗更新（状態・ターン・ツール統合）
 - title: タイトル生成
 - ping: ハートビート
@@ -24,8 +22,6 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
-
-from sse_starlette.sse import ServerSentEvent
 
 
 # =============================================================================
@@ -80,23 +76,6 @@ def create_event(event_type: str, seq: int, data: dict[str, Any]) -> dict:
             **data,
         },
     }
-
-
-def generate_sse_event(event: str, data: dict[str, Any]) -> ServerSentEvent:
-    """
-    SSEイベントを生成
-
-    Args:
-        event: イベントタイプ
-        data: イベントデータ
-
-    Returns:
-        ServerSentEventオブジェクト
-    """
-    return ServerSentEvent(
-        event=event,
-        data=json.dumps(data, ensure_ascii=False, default=str),
-    )
 
 
 # =============================================================================
@@ -262,68 +241,6 @@ def format_tool_result_event(
         data["parent_agent_id"] = parent_agent_id
 
     return create_event("tool_result", seq, data)
-
-
-def format_subagent_start_event(
-    seq: int,
-    agent_id: str,
-    agent_type: str,
-    description: str,
-    model: str | None = None,
-) -> dict:
-    """
-    サブエージェント開始イベントをフォーマット
-
-    Args:
-        seq: シーケンス番号
-        agent_id: エージェントID（tool_use_id）
-        agent_type: エージェントタイプ
-        description: 説明
-        model: 使用モデル
-
-    Returns:
-        イベントデータ
-    """
-    data = {
-        "agent_id": agent_id,
-        "agent_type": agent_type,
-        "description": description,
-    }
-    if model:
-        data["model"] = model
-
-    return create_event("subagent_start", seq, data)
-
-
-def format_subagent_end_event(
-    seq: int,
-    agent_id: str,
-    agent_type: str,
-    status: str,
-    result_preview: str | None = None,
-) -> dict:
-    """
-    サブエージェント終了イベントをフォーマット
-
-    Args:
-        seq: シーケンス番号
-        agent_id: エージェントID（tool_use_id）
-        agent_type: エージェントタイプ
-        status: ステータス（completed / error）
-        result_preview: 結果プレビュー
-
-    Returns:
-        イベントデータ
-    """
-    data = {
-        "agent_id": agent_id,
-        "agent_type": agent_type,
-        "status": status,
-    }
-    if result_preview:
-        data["result_preview"] = result_preview
-
-    return create_event("subagent_end", seq, data)
 
 
 def format_progress_event(
@@ -548,23 +465,6 @@ def format_container_recovered_event(
         "recovered": recovered,
         "retry_recommended": retry_recommended,
     })
-
-
-def event_to_sse_bytes(event: dict) -> bytes:
-    """
-    内部イベント辞書をSSE形式のバイト列に変換
-
-    orchestrator等、raw bytesでSSEイベントを送信する箇所で使用する。
-
-    Args:
-        event: {"event": <type>, "data": {...}} 形式のイベント
-
-    Returns:
-        b'event: <type>\\ndata: <json>\\n\\n' 形式のバイト列
-    """
-    event_type = event["event"]
-    data_json = json.dumps(event["data"], ensure_ascii=False, default=str)
-    return f"event: {event_type}\ndata: {data_json}\n\n".encode("utf-8")
 
 
 def to_sse_payload(event: dict) -> dict:

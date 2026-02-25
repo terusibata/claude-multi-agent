@@ -28,19 +28,8 @@ RUN apt-get update && apt-get install -y \
     gosu \
     && rm -rf /var/lib/apt/lists/*
 
-# Node.js のインストール（Claude Agent SDKに必要）
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y nodejs \
-    && rm -rf /var/lib/apt/lists/*
-
 # 非rootユーザーの作成
 RUN useradd -m -u 1000 appuser
-
-# Docker Socket アクセス用プレースホルダーグループ
-# 実際のホスト側GIDはentrypoint.shでランタイム検出しgroupmodで同期する
-# （PostgreSQL/Redis公式イメージと同じパターン）
-RUN groupadd -g 999 docker 2>/dev/null || true \
-    && usermod -aG docker appuser 2>/dev/null || true
 
 # 作業ディレクトリの設定
 WORKDIR /app
@@ -53,7 +42,6 @@ COPY --chown=appuser:appuser app/ /app/app/
 COPY --chown=appuser:appuser alembic/ /app/alembic/
 COPY --chown=appuser:appuser alembic.ini /app/
 COPY --chown=appuser:appuser entrypoint.sh /app/
-COPY --chown=appuser:appuser deployment/seccomp/ /app/deployment/seccomp/
 
 # エントリーポイントスクリプトに実行権限を付与
 RUN chmod +x /app/entrypoint.sh
@@ -63,12 +51,6 @@ RUN mkdir -p /skills && chown appuser:appuser /skills
 
 # ワークスペース用ディレクトリの作成
 RUN mkdir -p /var/lib/aiagent/workspaces && chown -R appuser:appuser /var/lib/aiagent
-
-# ワークスペースSocket用ディレクトリの作成
-RUN mkdir -p /var/run/workspace-sockets && chown appuser:appuser /var/run/workspace-sockets
-
-# NOTE: USER appuserは設定しない。entrypoint.shでrootとしてソケットディレクトリの
-# 権限を修正した後、gosuでappuserに切り替えてアプリケーションを起動する。
 
 # 環境変数の設定
 ENV PYTHONPATH=/app

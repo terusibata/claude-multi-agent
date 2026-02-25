@@ -1,7 +1,7 @@
 """
 Amazon Bedrock AgentCore Runtime クライアント
 
-ContainerOrchestrator を完全代替。boto3 の bedrock-agentcore クライアントを使用し、
+boto3 の bedrock-agentcore クライアントを使用し、
 AgentCore Runtime の invoke_agent_runtime API を呼び出す。
 
 API ドキュメント:
@@ -11,6 +11,7 @@ API ドキュメント:
 
 import asyncio
 import json
+import threading
 from collections.abc import AsyncIterator
 
 import structlog
@@ -37,11 +38,14 @@ class AgentCoreClient:
         self,
         runtime_arn: str | None = None,
         aws_region: str | None = None,
+        qualifier: str | None = None,
     ):
         settings = get_settings()
         self._runtime_arn = runtime_arn or settings.agentcore_runtime_arn
         self._aws_region = aws_region or settings.aws_region
+        self._qualifier = qualifier or settings.agentcore_qualifier or None
         self._client = None
+        self._client_lock = threading.Lock()
 
         if not self._runtime_arn:
             logger.warning(
@@ -49,27 +53,30 @@ class AgentCoreClient:
             )
 
     def _get_client(self):
-        """boto3 bedrock-agentcore クライアントを取得（キャッシュ付き）"""
-        if self._client is None:
-            import boto3
-            from botocore.config import Config
+        """boto3 bedrock-agentcore クライアントを取得（スレッドセーフ・キャッシュ付き）"""
+        if self._client is not None:
+            return self._client
+        with self._client_lock:
+            if self._client is None:
+                import boto3
+                from botocore.config import Config
 
-            config = Config(
-                region_name=self._aws_region,
-                read_timeout=3600,  # 60分 SSEストリーミング対応
-                retries={"max_attempts": 3, "mode": "adaptive"},
-            )
-            self._client = boto3.client("bedrock-agentcore", config=config)
-        return self._client
+                config = Config(
+                    region_name=self._aws_region,
+                    read_timeout=3600,  # 60分 SSEストリーミング対応
+                    retries={"max_attempts": 3, "mode": "adaptive"},
+                )
+                self._client = boto3.client("bedrock-agentcore", config=config)
+            return self._client
 
     async def invoke_streaming(
         self,
         payload: dict,
         session_id: str | None = None,
         metadata: dict | None = None,
-    ) -> AsyncIterator[bytes]:
+    ) -> AsyncIterator[str]:
         """
-        AgentCore Runtime にリクエストを送信し、SSEストリームを返す
+        AgentCore Runtime にリクエストを送信し、SSE行ストリームを返す
 
         Args:
             payload: invocation ペイロード（JSON シリアライズされる）
@@ -78,7 +85,7 @@ class AgentCoreClient:
                       指定された場合、"agentcore_session_id" キーにセッションIDが格納される。
 
         Yields:
-            SSEストリームのバイトチャンク
+            SSEストリームの行文字列（改行付き）
         """
         loop = asyncio.get_running_loop()
 
@@ -95,10 +102,15 @@ class AgentCoreClient:
             if session_id:
                 kwargs["runtimeSessionId"] = session_id
 
+            # バージョン/エンドポイント指定
+            if self._qualifier:
+                kwargs["qualifier"] = self._qualifier
+
             logger.info(
                 "AgentCore invoke_agent_runtime 呼び出し",
                 runtime_arn=self._runtime_arn,
                 session_id=session_id,
+                qualifier=self._qualifier,
                 payload_size=len(kwargs["payload"]),
             )
 
@@ -118,23 +130,29 @@ class AgentCoreClient:
                 session_id=new_session_id,
             )
 
-        # StreamingBody からチャンクを読み出し
-        streaming_body = response.get("response") or response.get("body")
+        # StreamingBody からSSE行を読み出し
+        # boto3 API レスポンスのストリーミングボディは "response" キーに格納される
+        streaming_body = response.get("response")
         if streaming_body is None:
-            logger.error("AgentCore レスポンスにストリームなし")
+            logger.error(
+                "AgentCore レスポンスにストリームなし",
+                response_keys=list(response.keys()),
+            )
             return
 
         # asyncio.Queue によるストリーミングブリッジ:
-        # バックグラウンドスレッドで同期的にチャンクを読み出し、
+        # バックグラウンドスレッドで同期的にSSE行を読み出し、
         # Queue経由でasync側にリアルタイムで渡す
-        queue: asyncio.Queue = asyncio.Queue(maxsize=64)
+        queue: asyncio.Queue = asyncio.Queue(maxsize=128)
 
         def _stream_to_queue():
-            """StreamingBody からチャンクを読み出してQueueに投入"""
+            """StreamingBody からSSE行を読み出してQueueに投入"""
             try:
-                for chunk in streaming_body.iter_chunks(chunk_size=4096):
+                # AWS公式推奨: SSEストリームには iter_lines() を使用
+                for line in streaming_body.iter_lines():
+                    decoded = line.decode("utf-8", errors="replace") if isinstance(line, bytes) else line
                     asyncio.run_coroutine_threadsafe(
-                        queue.put(chunk), loop
+                        queue.put(decoded), loop
                     ).result(timeout=60)
             except Exception as e:
                 logger.error("AgentCore ストリーム読み出しエラー", error=str(e))
@@ -147,7 +165,7 @@ class AgentCoreClient:
         # バックグラウンドスレッドで読み出し開始
         loop.run_in_executor(None, _stream_to_queue)
 
-        # Queueからチャンクをyield（真のストリーミング）
+        # Queueから行をyield（真のストリーミング）
         while True:
             item = await queue.get()
             if item is _SENTINEL:
