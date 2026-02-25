@@ -9,6 +9,7 @@ API ドキュメント:
   - https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/bedrock-agentcore/client/invoke_agent_runtime.html
 """
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 
@@ -17,6 +18,8 @@ import structlog
 from app.config import get_settings
 
 logger = structlog.get_logger(__name__)
+
+_SENTINEL = object()  # Queue終端マーカー
 
 
 class AgentCoreClient:
@@ -34,6 +37,10 @@ class AgentCoreClient:
         settings = get_settings()
         self._runtime_arn = runtime_arn or settings.agentcore_runtime_arn
         self._aws_region = aws_region or settings.aws_region
+        self._client = None
+
+        # 直近の invoke で返された AgentCore セッションID
+        self.last_session_id: str | None = None
 
         if not self._runtime_arn:
             logger.warning(
@@ -41,16 +48,18 @@ class AgentCoreClient:
             )
 
     def _get_client(self):
-        """boto3 bedrock-agentcore クライアントを取得"""
-        import boto3
-        from botocore.config import Config
+        """boto3 bedrock-agentcore クライアントを取得（キャッシュ付き）"""
+        if self._client is None:
+            import boto3
+            from botocore.config import Config
 
-        config = Config(
-            region_name=self._aws_region,
-            read_timeout=3600,  # 60分 SSEストリーミング対応
-            retries={"max_attempts": 3, "mode": "adaptive"},
-        )
-        return boto3.client("bedrock-agentcore", config=config)
+            config = Config(
+                region_name=self._aws_region,
+                read_timeout=3600,  # 60分 SSEストリーミング対応
+                retries={"max_attempts": 3, "mode": "adaptive"},
+            )
+            self._client = boto3.client("bedrock-agentcore", config=config)
+        return self._client
 
     async def invoke_streaming(
         self,
@@ -60,6 +69,8 @@ class AgentCoreClient:
         """
         AgentCore Runtime にリクエストを送信し、SSEストリームを返す
 
+        呼び出し後、self.last_session_id に AgentCore セッションIDが格納される。
+
         Args:
             payload: invocation ペイロード（JSON シリアライズされる）
             session_id: AgentCore セッションID（コンテナ親和性用）
@@ -67,7 +78,7 @@ class AgentCoreClient:
         Yields:
             SSEストリームのバイトチャンク
         """
-        import asyncio
+        loop = asyncio.get_running_loop()
 
         def _invoke():
             client = self._get_client()
@@ -93,12 +104,12 @@ class AgentCoreClient:
             return response
 
         # boto3 は同期APIのためスレッドプールで実行
-        loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(None, _invoke)
 
-        # レスポンスからセッションIDを取得
+        # レスポンスからセッションIDを取得し、インスタンスに保存
         new_session_id = response.get("runtimeSessionId")
         if new_session_id:
+            self.last_session_id = new_session_id
             logger.info(
                 "AgentCore セッションID取得",
                 session_id=new_session_id,
@@ -110,26 +121,32 @@ class AgentCoreClient:
             logger.error("AgentCore レスポンスにストリームなし")
             return
 
-        # ストリーミングレスポンスをチャンクごとに yield
-        # StreamingBody.iter_chunks() は同期イテレータのためスレッドで処理
-        import asyncio
+        # asyncio.Queue によるストリーミングブリッジ:
+        # バックグラウンドスレッドで同期的にチャンクを読み出し、
+        # Queue経由でasync側にリアルタイムで渡す
+        queue: asyncio.Queue = asyncio.Queue(maxsize=64)
 
-        def _read_chunks():
-            """StreamingBody からチャンクを順次読み出すジェネレータ"""
-            chunks = []
+        def _stream_to_queue():
+            """StreamingBody からチャンクを読み出してQueueに投入"""
             try:
                 for chunk in streaming_body.iter_chunks(chunk_size=4096):
-                    chunks.append(chunk)
+                    asyncio.run_coroutine_threadsafe(
+                        queue.put(chunk), loop
+                    ).result(timeout=60)
             except Exception as e:
                 logger.error("AgentCore ストリーム読み出しエラー", error=str(e))
             finally:
                 streaming_body.close()
-            return chunks
+                asyncio.run_coroutine_threadsafe(
+                    queue.put(_SENTINEL), loop
+                ).result(timeout=10)
 
-        chunks = await loop.run_in_executor(None, _read_chunks)
-        for chunk in chunks:
-            yield chunk
+        # バックグラウンドスレッドで読み出し開始
+        loop.run_in_executor(None, _stream_to_queue)
 
-    def extract_session_id(self, response: dict) -> str | None:
-        """レスポンスから AgentCore セッションIDを抽出"""
-        return response.get("runtimeSessionId")
+        # Queueからチャンクをyield（真のストリーミング）
+        while True:
+            item = await queue.get()
+            if item is _SENTINEL:
+                break
+            yield item
