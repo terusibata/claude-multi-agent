@@ -149,9 +149,10 @@ class ExecuteService:
             # AgentCore経由でストリーム実行
             done_data = None
             assistant_events: list[dict] = []
+            agentcore_metadata: dict = {}
 
             async for event in self._stream_from_agentcore(
-                request, model, seq_counter
+                request, model, seq_counter, agentcore_metadata
             ):
                 # done イベントからメタデータ（usage/cost）を抽出
                 if event.get("event") == "done":
@@ -187,6 +188,14 @@ class ExecuteService:
 
                 yield event
 
+            # done イベントが来なかった場合のフォールバック（ストリーム途中切断等）
+            if done_data is None:
+                logger.warning(
+                    "done イベント未受信（フォールバックdoneを送信）",
+                    conversation_id=conversation_id,
+                )
+                yield self._error_done(start_time, seq_counter)
+
             # 使用量をDB記録
             if done_data:
                 await self._record_usage(request, model, done_data)
@@ -203,7 +212,7 @@ class ExecuteService:
 
                 # session_id / agentcore_session_id をDBに保存（セッション再開用）
                 new_session_id = done_data.get("session_id")
-                new_agentcore_sid = self.agentcore.last_session_id
+                new_agentcore_sid = agentcore_metadata.get("agentcore_session_id")
                 if new_session_id or new_agentcore_sid:
                     await self.conversation_service.update_conversation(
                         conversation_id=request.conversation_id,
@@ -253,6 +262,7 @@ class ExecuteService:
         request: ExecuteRequest,
         model: Model,
         seq_counter: SequenceCounter,
+        agentcore_metadata: dict | None = None,
     ) -> AsyncGenerator[dict, None]:
         """AgentCore Runtime からSSEストリームを受信・中継"""
         # MCP サーバー設定の構築
@@ -308,6 +318,7 @@ class ExecuteService:
         async for chunk in self.agentcore.invoke_streaming(
             payload=invocation_payload,
             session_id=agentcore_session_id,
+            metadata=agentcore_metadata,
         ):
             decoded = chunk.decode("utf-8", errors="replace")
             buffer += decoded

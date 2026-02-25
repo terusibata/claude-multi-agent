@@ -142,8 +142,6 @@ async def health_check(db: AsyncSession = Depends(get_db)) -> HealthResponse:
 
     データベース、S3の接続状態を確認します。
     """
-    import asyncio
-
     db_health = await check_database_health(db)
 
     # S3は同期APIなので別途実行

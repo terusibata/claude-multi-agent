@@ -2,7 +2,6 @@
 アプリケーション設定
 環境変数からの読み込みと設定値の管理を行う
 """
-import re
 from functools import lru_cache
 from urllib.parse import urlparse
 

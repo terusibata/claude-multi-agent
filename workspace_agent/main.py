@@ -9,7 +9,6 @@ AgentCore サービスコントラクト:
 
 ポート 8080 で HTTP リスン
 """
-import asyncio
 import base64
 import json
 import os

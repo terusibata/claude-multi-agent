@@ -178,6 +178,16 @@ async def execute_streaming(request: InvocationRequest) -> AsyncIterator[str]:
     except Exception as e:
         logger.error("SDK実行エラー: %s (type=%s)", str(e), type(e).__name__, exc_info=True)
         yield _format_sse("error", {"message": f"{type(e).__name__}: {e}"})
+        # エラー後にも done イベントを送信してストリームを正常に終端させる
+        yield _format_sse("done", {
+            "subtype": "error_during_execution",
+            "result": None,
+            "session_id": None,
+            "num_turns": 0,
+            "duration_ms": 0,
+            "cost_usd": 0,
+            "usage": {},
+        })
 
 
 def _message_to_sse_events(

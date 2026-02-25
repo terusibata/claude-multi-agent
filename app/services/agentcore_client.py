@@ -27,6 +27,10 @@ class AgentCoreClient:
 
     invoke_agent_runtime API を使用して AgentCore Runtime にリクエストを送信し、
     SSE ストリーミングレスポンスを返す。
+
+    注意: このクラスはアプリケーション全体で共有されるシングルトンとして使用される。
+    リクエスト固有の状態（セッションIDなど）はインスタンスに保持せず、
+    呼び出し元から渡される metadata dict に格納する（並行リクエスト安全）。
     """
 
     def __init__(
@@ -38,9 +42,6 @@ class AgentCoreClient:
         self._runtime_arn = runtime_arn or settings.agentcore_runtime_arn
         self._aws_region = aws_region or settings.aws_region
         self._client = None
-
-        # 直近の invoke で返された AgentCore セッションID
-        self.last_session_id: str | None = None
 
         if not self._runtime_arn:
             logger.warning(
@@ -65,15 +66,16 @@ class AgentCoreClient:
         self,
         payload: dict,
         session_id: str | None = None,
+        metadata: dict | None = None,
     ) -> AsyncIterator[bytes]:
         """
         AgentCore Runtime にリクエストを送信し、SSEストリームを返す
 
-        呼び出し後、self.last_session_id に AgentCore セッションIDが格納される。
-
         Args:
             payload: invocation ペイロード（JSON シリアライズされる）
             session_id: AgentCore セッションID（コンテナ親和性用）
+            metadata: 呼び出し元に返すメタデータ辞書（並行リクエスト安全）。
+                      指定された場合、"agentcore_session_id" キーにセッションIDが格納される。
 
         Yields:
             SSEストリームのバイトチャンク
@@ -106,10 +108,11 @@ class AgentCoreClient:
         # boto3 は同期APIのためスレッドプールで実行
         response = await loop.run_in_executor(None, _invoke)
 
-        # レスポンスからセッションIDを取得し、インスタンスに保存
+        # レスポンスからセッションIDを取得し、呼び出し元のmetadataに格納
         new_session_id = response.get("runtimeSessionId")
         if new_session_id:
-            self.last_session_id = new_session_id
+            if metadata is not None:
+                metadata["agentcore_session_id"] = new_session_id
             logger.info(
                 "AgentCore セッションID取得",
                 session_id=new_session_id,
