@@ -11,13 +11,10 @@ logger = structlog.get_logger(__name__)
 
 from app.database import get_pool_status
 from app.infrastructure.metrics import (
-    get_active_connections,
     get_db_pool_gauge,
     get_metrics_registry,
     get_workspace_host_cpu_percent,
-    get_workspace_warm_pool_size,
 )
-from app.infrastructure.redis import get_pool_info
 
 
 async def metrics_handler(app_state) -> PlainTextResponse:
@@ -37,28 +34,13 @@ async def metrics_handler(app_state) -> PlainTextResponse:
     except Exception:
         logger.debug("メトリクス収集失敗", target="db_pool", exc_info=True)
 
-    # Redisプール状態を更新
+    # ホストCPUメトリクス更新
     try:
-        redis_info = get_pool_info()
-        if redis_info.get("initialized"):
-            connections_gauge = get_active_connections()
-            connections_gauge.set(
-                redis_info.get("max_connections", 0), type="redis_max"
-            )
-    except Exception:
-        logger.debug("メトリクス収集失敗", target="redis_pool", exc_info=True)
-
-    # ワークスペースコンテナメトリクス更新
-    try:
-        orchestrator = getattr(app_state, "orchestrator", None)
-        if orchestrator:
-            pool_size = await orchestrator.warm_pool.get_pool_size()
-            get_workspace_warm_pool_size().set(pool_size)
         load = os.getloadavg()
         cpu_count = os.cpu_count() or 1
         get_workspace_host_cpu_percent().set(round(load[0] / cpu_count * 100, 1))
     except Exception:
-        logger.debug("メトリクス収集失敗", target="workspace_container", exc_info=True)
+        logger.debug("メトリクス収集失敗", target="host_cpu", exc_info=True)
 
     registry = get_metrics_registry()
     return PlainTextResponse(

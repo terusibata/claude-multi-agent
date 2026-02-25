@@ -167,6 +167,10 @@ class EventTranslator:
                     session_id=data.get("session_id"),
                 )
             ]
+        elif event_type == "file_manifest":
+            # file_manifest はホスト側で内部処理する（クライアントには転送しない）
+            # execute_service._handle_file_manifest() で処理済み
+            return []
         elif event_type == "container_recovered":
             return [
                 format_container_recovered_event(

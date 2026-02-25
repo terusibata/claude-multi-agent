@@ -160,7 +160,6 @@ class MetricsRegistry:
                 lines.append(f"# TYPE {name} histogram")
                 for key, bucket_counts in metric._counts.items():
                     label_str = self._format_labels(metric.labels, key)
-                    # observe()で既に累積カウントが保存されているため、そのまま出力
                     for bucket in sorted(bucket_counts.keys()):
                         count = bucket_counts[bucket]
                         if label_str:
@@ -240,15 +239,6 @@ def get_db_pool_gauge() -> Gauge:
     )
 
 
-def get_redis_operations() -> Counter:
-    """Redis操作カウンター"""
-    return get_metrics_registry().counter(
-        "redis_operations_total",
-        "Total number of Redis operations",
-        ["operation", "status"]
-    )
-
-
 def get_bedrock_requests() -> Counter:
     """Bedrockリクエストカウンター"""
     return get_metrics_registry().counter(
@@ -323,24 +313,8 @@ def measure_time(histogram: Histogram, **labels):
 
 
 # ============================================
-# ワークスペースコンテナ メトリクス (Phase 2)
+# ホストメトリクス
 # ============================================
-
-
-def get_workspace_active_containers() -> Gauge:
-    """アクティブコンテナ数"""
-    return get_metrics_registry().gauge(
-        "workspace_active_containers",
-        "Number of active workspace containers",
-    )
-
-
-def get_workspace_warm_pool_size() -> Gauge:
-    """WarmPoolサイズ"""
-    return get_metrics_registry().gauge(
-        "workspace_warm_pool_size",
-        "Number of containers in warm pool",
-    )
 
 
 def get_workspace_host_cpu_percent() -> Gauge:
@@ -351,96 +325,10 @@ def get_workspace_host_cpu_percent() -> Gauge:
     )
 
 
-def get_workspace_host_memory_percent() -> Gauge:
-    """ホストメモリ使用率"""
-    return get_metrics_registry().gauge(
-        "workspace_host_memory_percent",
-        "Host memory usage percent",
-    )
-
-
-def get_workspace_container_startup() -> Histogram:
-    """コンテナ起動時間 (SLO: P95 < 10s)"""
-    return get_metrics_registry().histogram(
-        "workspace_container_startup_seconds",
-        "Container startup time in seconds",
-        buckets=[0.5, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0, 15.0, 20.0, 30.0],
-    )
-
-
-def get_workspace_proxy_request_duration() -> Histogram:
-    """Proxyリクエスト処理時間 (SLO: P95 < 100ms)"""
-    return get_metrics_registry().histogram(
-        "workspace_proxy_request_duration_seconds",
-        "Proxy request duration in seconds",
-        ["method"],
-        [0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 1.0, 5.0],
-    )
-
-
-def get_workspace_warm_pool_acquire() -> Histogram:
-    """WarmPool取得時間"""
-    return get_metrics_registry().histogram(
-        "workspace_warm_pool_acquire_seconds",
-        "Time to acquire a container from warm pool",
-        buckets=[0.01, 0.05, 0.1, 0.5, 1.0, 3.0, 5.0, 10.0, 20.0],
-    )
-
-
-def get_workspace_requests_total() -> Counter:
-    """コンテナリクエスト総数"""
-    return get_metrics_registry().counter(
-        "workspace_requests_total",
-        "Total workspace execution requests",
-        ["status"],
-    )
-
-
-def get_workspace_container_crashes() -> Counter:
-    """コンテナクラッシュ数"""
-    return get_metrics_registry().counter(
-        "workspace_container_crashes_total",
-        "Total container crashes",
-    )
-
-
 def get_workspace_s3_sync_errors() -> Counter:
     """S3同期エラー数"""
     return get_metrics_registry().counter(
         "workspace_s3_sync_errors_total",
         "Total S3 sync errors",
         ["direction"],
-    )
-
-
-def get_workspace_proxy_blocked() -> Counter:
-    """Proxyドメインブロック数"""
-    return get_metrics_registry().counter(
-        "workspace_proxy_blocked_total",
-        "Total proxy domain blocked requests",
-    )
-
-
-def get_workspace_warm_pool_exhausted() -> Counter:
-    """WarmPool枯渇回数"""
-    return get_metrics_registry().counter(
-        "workspace_warm_pool_exhausted_total",
-        "Total warm pool exhaustion events",
-    )
-
-
-def get_workspace_seccomp_violations() -> Counter:
-    """seccomp違反検出数"""
-    return get_metrics_registry().counter(
-        "workspace_seccomp_violations_total",
-        "Total seccomp violation detections",
-    )
-
-
-def get_workspace_gc_cycles() -> Counter:
-    """GCサイクル数"""
-    return get_metrics_registry().counter(
-        "workspace_gc_cycles_total",
-        "Total GC cycles",
-        ["result"],
     )

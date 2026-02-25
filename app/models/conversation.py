@@ -34,6 +34,9 @@ class Conversation(Base):
     # SDKセッションID（resume用）
     session_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
+    # AgentCore セッションID（コンテナ親和性用）
+    agentcore_session_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
     # テナントID
     tenant_id: Mapped[str] = mapped_column(
         String(100),

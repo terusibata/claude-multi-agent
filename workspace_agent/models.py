@@ -1,12 +1,25 @@
 """
 ワークスペースエージェント リクエスト/レスポンスモデル
-ホスト側Backendと通信するためのスキーマ定義（UDS / HTTP両対応）
+AgentCore Runtime の /invocations エンドポイント向けスキーマ定義
 """
 from pydantic import BaseModel, Field
 
 
-class ExecuteRequest(BaseModel):
-    """エージェント実行リクエスト"""
+class WorkspaceSyncConfig(BaseModel):
+    """S3ワークスペース同期設定"""
+
+    enabled: bool = False
+    s3_bucket: str = ""
+    s3_prefix: str = "workspaces/"
+    tenant_id: str = ""
+    conversation_id: str = ""
+
+
+class InvocationRequest(BaseModel):
+    """AgentCore /invocations リクエスト
+
+    AgentCoreの /invocations エンドポイントは単一のPOSTで全情報を受け取る。
+    """
 
     user_input: str
     system_prompt: str = ""
@@ -18,19 +31,11 @@ class ExecuteRequest(BaseModel):
     setting_sources: list[str] | None = None
     mcp_server_configs: list[dict] | None = None
 
-
-class ExecRequest(BaseModel):
-    """コンテナ内コマンド実行リクエスト（ECSモード用）"""
-
-    cmd: list[str]
-    timeout: int = 60
-
-
-class ExecResponse(BaseModel):
-    """コンテナ内コマンド実行レスポンス"""
-
-    exit_code: int
-    output: str
+    # AgentCore 固有フィールド
+    workspace_sync: WorkspaceSyncConfig | None = None
+    skill_files: dict[str, str] | None = None  # base64エンコードされたスキルファイル群
+    aws_region: str = "us-west-2"
+    bedrock_model_id: str = ""
 
 
 class HealthResponse(BaseModel):

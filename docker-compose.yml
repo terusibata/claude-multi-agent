@@ -13,33 +13,17 @@ x-backend-base: &backend-base
   depends_on:
     db:
       condition: service_healthy
-    redis:
-      condition: service_healthy
   restart: unless-stopped
-  # Docker Socket GID: entrypoint.shがランタイムで自動検出・同期する。
-  # group_addはPID 1プロセスへの補助的な付与（defense-in-depth）。
-  group_add:
-    - ${DOCKER_GID:-999}
 
 x-backend-env: &backend-env
-  # Redis設定
-  REDIS_URL: redis://redis:6379/0
-  # スキル・ワークスペース設定
+  # スキル設定
   SKILLS_BASE_PATH: /skills
-  WORKSPACE_TEMP_DIR: /var/lib/aiagent/workspaces
-  # コンテナ隔離設定
-  DOCKER_SOCKET_PATH: unix:///var/run/docker.sock
-  WORKSPACE_SOCKET_BASE_PATH: /var/run/workspace-sockets
-  WORKSPACE_SOCKET_HOST_PATH: ${WORKSPACE_SOCKET_HOST_PATH:-/var/run/workspace-sockets}
-  CONTAINER_IMAGE: ${CONTAINER_IMAGE:-workspace-base:latest}
+  # AgentCore Runtime設定
+  AGENTCORE_RUNTIME_ARN: ${AGENTCORE_RUNTIME_ARN:-}
+  AGENTCORE_IDLE_TIMEOUT: ${AGENTCORE_IDLE_TIMEOUT:-900}
 
 x-backend-volumes: &backend-volumes
   - skills_data:/skills
-  - workspaces_data:/var/lib/aiagent/workspaces
-  # Docker Socket（コンテナ管理用）
-  - /var/run/docker.sock:/var/run/docker.sock
-  # ワークスペースSocket（ホストバインドマウント: DinD環境でパス整合性を保証）
-  - ${WORKSPACE_SOCKET_HOST_PATH:-/var/run/workspace-sockets}:/var/run/workspace-sockets
 
 # =============================================================================
 # サービス定義
@@ -66,27 +50,6 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # Redis（分散ロック、レート制限、キャッシュ用）
-  redis:
-    image: redis:7-alpine
-    container_name: ai-agent-redis
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-}", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-    command: >
-      redis-server
-      --appendonly yes
-      --maxmemory 256mb
-      --maxmemory-policy allkeys-lru
-      ${REDIS_PASSWORD:+--requirepass ${REDIS_PASSWORD}}
-
   # AIエージェントバックエンド（開発環境）
   backend:
     <<: *backend-base
@@ -98,15 +61,11 @@ services:
     environment:
       <<: *backend-env
       DATABASE_URL: postgresql+asyncpg://${DB_USER:-aiagent}:${DB_PASSWORD:-aiagent_password}@db:5432/${DB_NAME:-aiagent}
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       APP_ENV: ${APP_ENV:-development}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
       - ./app:/app/app  # 開発用ホットリロード
       - skills_data:/skills
-      - workspaces_data:/var/lib/aiagent/workspaces
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ${WORKSPACE_SOCKET_HOST_PATH:-/var/run/workspace-sockets}:/var/run/workspace-sockets
     ports:
       - "${APP_PORT:-8000}:8000"
     networks:
@@ -128,7 +87,6 @@ services:
     environment:
       <<: *backend-env
       DATABASE_URL: postgresql+asyncpg://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
       APP_ENV: production
       LOG_LEVEL: ${LOG_LEVEL:-WARNING}
       API_KEYS: ${API_KEYS}
@@ -197,11 +155,7 @@ services:
 volumes:
   postgres_data:
     driver: local
-  redis_data:
-    driver: local
   skills_data:
-    driver: local
-  workspaces_data:
     driver: local
   prometheus_data:
     driver: local

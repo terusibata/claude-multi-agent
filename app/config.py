@@ -27,30 +27,6 @@ class Settings(BaseSettings):
     db_command_timeout: int = 60  # 秒
 
     # ============================================
-    # Redis設定
-    # ============================================
-    redis_url: str = "redis://localhost:6379/0"
-    redis_max_connections: int = 20
-    redis_socket_timeout: float = 5.0
-    redis_socket_connect_timeout: float = 5.0
-    # Redis認証（本番環境では設定必須）
-    redis_password: str | None = None
-
-    @property
-    def redis_url_with_auth(self) -> str:
-        """認証情報付きRedis URL"""
-        if self.redis_password:
-            # redis://host:port/db -> redis://:password@host:port/db
-            if "://:@" not in self.redis_url and "://:" not in self.redis_url:
-                return self.redis_url.replace("://", f"://:{self.redis_password}@")
-        return self.redis_url
-
-    @property
-    def redis_url_masked(self) -> str:
-        """パスワードをマスクしたRedis URL"""
-        return re.sub(r"://:[^@]+@", "://***@", self.redis_url_with_auth)
-
-    # ============================================
     # AWS Bedrock設定
     # ============================================
     claude_code_use_bedrock: str = "1"
@@ -68,6 +44,16 @@ class Settings(BaseSettings):
     anthropic_sonnet_model: str = "global.anthropic.claude-sonnet-4-5-20250929-v1:0"
     anthropic_haiku_model: str = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
     claude_code_subagent_model: str = "haiku"
+
+    # ============================================
+    # AgentCore Runtime設定
+    # ============================================
+    agentcore_runtime_arn: str = ""  # AgentCore Runtime ARN
+    agentcore_idle_timeout: int = 900  # セッションアイドルタイムアウト（秒）
+
+    # SSEアイドルタイムアウト（秒）
+    # AgentCoreのSSEストリーミング最大60分に対応
+    event_timeout: int = 3660  # 61分（AgentCore上限+マージン）
 
     # ============================================
     # アプリケーション設定
@@ -88,6 +74,11 @@ class Settings(BaseSettings):
     s3_bucket_name: str = ""
     s3_workspace_prefix: str = "workspaces/"
     workspace_temp_dir: str = "/var/lib/aiagent/workspaces"
+
+    @property
+    def s3_prefix(self) -> str:
+        """S3ワークスペースプレフィックスを取得"""
+        return self.s3_workspace_prefix
 
     # S3チャンク設定（メモリ最適化）
     s3_chunk_size: int = 8 * 1024 * 1024  # 8MB
@@ -115,98 +106,9 @@ class Settings(BaseSettings):
     # API認証キー（本番環境では必須）
     api_keys: str = ""
 
-    # レート制限
-    rate_limit_enabled: bool = True
-    rate_limit_requests: int = 100
-    rate_limit_period: int = 60
-
     # HSTS設定（プライベートネットワーク内のHTTP通信では無効にすること）
-    # デフォルトはFalse。HTTPS終端がある環境では HSTS_ENABLED=true を設定
     hsts_enabled: bool = False
     hsts_max_age: int = 31536000  # 1年
-
-    # ============================================
-    # コンテナ隔離設定
-    # ============================================
-    container_image: str = "workspace-base:latest"
-    container_cpu_quota: int = 200000  # 2 cores (CpuPeriod=100000)
-    container_memory_limit: int = 2 * 1024 ** 3  # 2GB
-    container_pids_limit: int = 256  # SDK CLIサブプロセス + socat を考慮
-    container_disk_limit: str = ""  # ディスク制限（本番: "5G"、xfs+pquota必須）
-    container_inactive_ttl: int = 3600  # 60分
-    container_absolute_ttl: int = 28800  # 8時間
-    container_execution_timeout: int = 600  # 10分
-    container_grace_period: int = 30  # 秒
-
-    # SSEアイドルタイムアウト（秒）
-    # container_execution_timeout より大きく設定し、httpxタイムアウトが先に発火するようにする。
-    # このタイムアウトは「httpx完了後の後処理がスタックした場合」の安全ネット。
-    # 階層: container_execution_timeout(600s) < event_timeout(720s) < Lock TTL(900s)
-    event_timeout: int = 720  # 12分
-    container_healthcheck_interval: int = 30  # 秒
-    container_gc_interval: int = 60  # GCループ間隔（秒）
-
-    # ============================================
-    # コンテナマネージャー設定
-    # ============================================
-    container_manager_type: str = "docker"  # "docker" or "ecs"
-
-    # ============================================
-    # WarmPool設定
-    # ============================================
-    warm_pool_min_size: int = 2
-    warm_pool_max_size: int = 10
-    warm_pool_ttl: int = 1800  # 30分
-
-    # ECS用WarmPool設定（container_manager_type=ecsの場合に使用）
-    # 本番環境では環境変数で適切な値にオーバーライドすること
-    ecs_warm_pool_min_size: int = 2
-    ecs_warm_pool_max_size: int = 20
-
-    # ============================================
-    # ECS設定（container_manager_type=ecsの場合に使用）
-    # ============================================
-    ecs_cluster: str = ""
-    ecs_task_definition: str = ""
-    ecs_subnets: str = ""  # カンマ区切り
-    ecs_security_groups: str = ""  # カンマ区切り
-    ecs_capacity_provider: str = ""
-    ecs_agent_port: int = 9000
-    ecs_proxy_admin_port: int = 8081
-    proxy_port: int = 8080  # コンテナ内→Proxy通信ポート (Docker: socat / ECS: サイドカー)
-    ecs_run_task_concurrency: int = 10  # RunTask API同時呼び出し上限
-
-    @property
-    def ecs_subnets_list(self) -> list[str]:
-        """ECSサブネットをリストとして取得"""
-        return [s.strip() for s in self.ecs_subnets.split(",") if s.strip()]
-
-    @property
-    def ecs_security_groups_list(self) -> list[str]:
-        """ECSセキュリティグループをリストとして取得"""
-        return [s.strip() for s in self.ecs_security_groups.split(",") if s.strip()]
-
-    # ============================================
-    # Proxy設定
-    # ============================================
-    proxy_domain_whitelist: str = "pypi.org,files.pythonhosted.org,registry.npmjs.org,api.anthropic.com,bedrock-runtime.us-east-1.amazonaws.com,bedrock-runtime.us-west-2.amazonaws.com,bedrock-runtime.ap-northeast-1.amazonaws.com"
-    proxy_log_all_requests: bool = True
-
-    # ============================================
-    # セキュリティ強化設定 (Phase 2/5)
-    # ============================================
-    seccomp_profile_path: str = "deployment/seccomp/workspace-seccomp.json"
-    userns_remap_enabled: bool = False  # userns-remap有効化（Docker daemon設定と連動）
-    apparmor_profile_name: str = ""  # AppArmorプロファイル名（本番: "workspace-container"、要ホスト側ロード）
-
-    # ============================================
-    # Docker設定
-    # ============================================
-    docker_socket_path: str = "unix:///var/run/docker.sock"
-    workspace_socket_base_path: str = "/var/run/workspace-sockets"
-    # Docker-in-Docker環境でホスト側のパスが異なる場合に指定
-    # 未設定時は workspace_socket_base_path と同じ値を使用
-    workspace_socket_host_path: str = ""
 
     # ============================================
     # メトリクス設定
@@ -276,12 +178,6 @@ class Settings(BaseSettings):
                     "本番環境ではワイルドカード(*)のCORSオリジンは使用できません。"
                 )
 
-            # 本番環境ではRedisパスワードが必須
-            if not self.redis_password:
-                raise ValueError(
-                    "本番環境ではREDIS_PASSWORDの設定が必須です。"
-                )
-
         return self
 
     # ============================================
@@ -307,16 +203,6 @@ class Settings(BaseSettings):
     def api_keys_list(self) -> list[str]:
         """APIキーをリストとして取得"""
         return [key.strip() for key in self.api_keys.split(",") if key.strip()]
-
-    @property
-    def proxy_domain_whitelist_list(self) -> list[str]:
-        """Proxyドメインホワイトリストをリストとして取得"""
-        return [d.strip() for d in self.proxy_domain_whitelist.split(",") if d.strip()]
-
-    @property
-    def resolved_socket_host_path(self) -> str:
-        """コンテナBind mount用のホスト側ソケットパスを取得"""
-        return self.workspace_socket_host_path or self.workspace_socket_base_path
 
     @property
     def is_production(self) -> bool:

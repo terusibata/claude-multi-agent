@@ -1,6 +1,6 @@
 """
 API共通依存関係
-テナント・モデル検証、オーケストレーター取得などの共通ロジック
+テナント・モデル検証、AgentCoreクライアント取得などの共通ロジック
 """
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,7 +13,7 @@ from app.models.mcp_server import McpServer
 from app.models.model import Model
 from app.models.simple_chat import SimpleChat
 from app.models.tenant import Tenant
-from app.services.container.orchestrator import ContainerOrchestrator
+from app.services.agentcore_client import AgentCoreClient
 from app.services.conversation_service import ConversationService
 from app.services.mcp_server_service import McpServerService
 from app.services.model_service import ModelService
@@ -25,9 +25,9 @@ from app.utils.error_handler import raise_not_found
 logger = structlog.get_logger(__name__)
 
 
-def get_orchestrator(request: Request) -> ContainerOrchestrator:
-    """アプリケーション状態からオーケストレーターを取得"""
-    return request.app.state.orchestrator
+def get_agentcore_client(request: Request) -> AgentCoreClient:
+    """アプリケーション状態からAgentCoreクライアントを取得"""
+    return request.app.state.agentcore_client
 
 
 # --- テナント ---

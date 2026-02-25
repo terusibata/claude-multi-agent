@@ -2,6 +2,8 @@
 Claude Agent SDK クライアントラッパー
 コンテナ内でSDKを起動し、SSEストリームを生成する
 
+AgentCore Runtime版: プロキシチェーンを使用せず、実行ロールで直接Bedrockにアクセス
+
 SDK API (claude-agent-sdk >= 0.1.33):
   - query(prompt, options) -> AsyncIterator[Message]
   - Message = UserMessage | AssistantMessage | SystemMessage | ResultMessage
@@ -14,69 +16,28 @@ https://platform.claude.com/docs/en/agent-sdk/custom-tools
 import json
 import logging
 import os
-import socket as sock
 from collections.abc import AsyncIterator
 
-from workspace_agent.models import ExecuteRequest
+from workspace_agent.models import InvocationRequest
 
 logger = logging.getLogger(__name__)
 
 
-def _check_proxy_chain() -> str | None:
-    """プロキシチェーン疎通確認。問題なければ None、エラー時はメッセージを返す。
-
-    UDS モード (Docker): proxy.sock → socat → TCP 8080 の全チェーン確認
-    HTTP モード (ECS):   TCP 8080 のみ確認（サイドカーが直接リスン）
-    """
-    listen_mode = os.environ.get("AGENT_LISTEN_MODE", "uds")
-
-    if listen_mode == "uds":
-        # UDS モード: proxy.sock の存在・接続確認
-        proxy_path = "/var/run/ws/proxy.sock"
-        if not os.path.exists(proxy_path):
-            return f"proxy.sock not found at {proxy_path}"
-
-        try:
-            s = sock.socket(sock.AF_UNIX, sock.SOCK_STREAM)
-            s.settimeout(3)
-            s.connect(proxy_path)
-            s.close()
-        except Exception as e:
-            return f"proxy.sock connection failed: {e}"
-
-    # TCP 8080 チェック（両モード共通: UDS→socat経由 or サイドカー直接）
-    try:
-        s = sock.socket(sock.AF_INET, sock.SOCK_STREAM)
-        s.settimeout(3)
-        s.connect(("127.0.0.1", 8080))
-        s.close()
-    except Exception as e:
-        return f"TCP 8080 proxy connection failed: {e}"
-
-    return None
-
-
-def _build_sdk_options(request: ExecuteRequest):
+def _build_sdk_options(request: InvocationRequest):
     """SDK実行オプションを ClaudeAgentOptions として組み立てる"""
     from claude_agent_sdk import ClaudeAgentOptions
 
-    # Bedrock + Proxy 経由の環境変数を明示的に渡す
+    # AgentCore 実行ロールで直接Bedrockにアクセス（プロキシ不要）
     env = {
         "CLAUDE_CODE_USE_BEDROCK": os.environ.get("CLAUDE_CODE_USE_BEDROCK", "1"),
-        "CLAUDE_CODE_SKIP_BEDROCK_AUTH": os.environ.get("CLAUDE_CODE_SKIP_BEDROCK_AUTH", "1"),
-        "AWS_REGION": os.environ.get("AWS_REGION", "us-west-2"),
-        "ANTHROPIC_BEDROCK_BASE_URL": os.environ.get("ANTHROPIC_BEDROCK_BASE_URL", "http://127.0.0.1:8080"),
-        "HTTP_PROXY": os.environ.get("HTTP_PROXY", "http://127.0.0.1:8080"),
-        "HTTPS_PROXY": os.environ.get("HTTPS_PROXY", "http://127.0.0.1:8080"),
-        # NO_PROXY: CLIがBedrock Base URLにアクセスする際にProxy経由のループを防止
-        "NO_PROXY": os.environ.get("NO_PROXY", "localhost,127.0.0.1"),
+        "AWS_REGION": request.aws_region or os.environ.get("AWS_REGION", "us-west-2"),
         # NODE_OPTIONS を明示的にクリア（CLIバイナリ=standalone ELFが壊れるのを防止）
         "NODE_OPTIONS": "",
         # 基本環境変数
         "HOME": os.environ.get("HOME", "/home/appuser"),
         "TMPDIR": "/tmp",
         "CLAUDE_CONFIG_DIR": os.environ.get("CLAUDE_CONFIG_DIR", "/home/appuser/.claude"),
-        # バージョンチェックスキップ（NetworkMode:none コンテナ用）
+        # バージョンチェックスキップ
         "CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK": "1",
     }
 
@@ -145,7 +106,7 @@ async def _create_streaming_prompt(user_input: str):
     }
 
 
-async def execute_streaming(request: ExecuteRequest) -> AsyncIterator[str]:
+async def execute_streaming(request: InvocationRequest) -> AsyncIterator[str]:
     """
     Claude Agent SDK を実行し、SSEイベント文字列を生成する
 
@@ -157,22 +118,6 @@ async def execute_streaming(request: ExecuteRequest) -> AsyncIterator[str]:
     Yields:
         SSEイベント文字列
     """
-    # プリフライトチェック: proxy chain の疎通確認（SDK初期化30秒タイムアウトを回避）
-    preflight_error = _check_proxy_chain()
-    if preflight_error:
-        logger.error("プリフライトチェック失敗: %s", preflight_error)
-        yield _format_sse("error", {"message": f"Proxy chain check failed: {preflight_error}"})
-        yield _format_sse("done", {
-            "subtype": "error_during_execution",
-            "result": None,
-            "session_id": None,
-            "num_turns": 0,
-            "duration_ms": 0,
-            "cost_usd": 0,
-            "usage": {},
-        })
-        return
-
     try:
         from claude_agent_sdk import query
     except ImportError:
