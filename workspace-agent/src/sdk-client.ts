@@ -152,28 +152,33 @@ function messageToSSEEvents(
     const resultMsg = message as SDKResultMessage;
 
     // ★ modelUsage からモデル別トークン数を抽出（移行の核心）
+    // UsageInfo 仕様準拠のフィールド名を使用:
+    //   cache_creation_5m_tokens / cache_creation_1h_tokens / cache_read_tokens
+    // SDK の cacheCreationInputTokens は 5m/1h 区分なし → 保守的に全量を 1h として扱う
     const modelUsageData: Record<string, ModelTokenUsage> = {};
     if (resultMsg.modelUsage) {
       for (const [modelName, usage] of Object.entries(resultMsg.modelUsage)) {
         modelUsageData[modelName] = {
           input_tokens: usage.inputTokens,
           output_tokens: usage.outputTokens,
-          cache_read_input_tokens: usage.cacheReadInputTokens,
-          cache_creation_input_tokens: usage.cacheCreationInputTokens,
+          cache_creation_5m_tokens: 0,
+          cache_creation_1h_tokens: usage.cacheCreationInputTokens,
+          cache_read_tokens: usage.cacheReadInputTokens,
           web_search_requests: usage.webSearchRequests,
-          // costUSD は Anthropic API 単価なので含めない（AWS 単価は Host API で計算）
         };
       }
     }
 
-    // ★ usage を snake_case に変換（Python 側 normalize_usage が snake_case を期待）
+    // ★ usage を UsageInfo 仕様準拠の snake_case に変換
+    // Python 側 normalize_usage が cache_creation_5m_tokens キー存在で冪等判定する
     const rawUsage = resultMsg.usage as Record<string, unknown> | undefined;
     const usageData: Record<string, number> = {};
     if (rawUsage) {
       usageData.input_tokens = (rawUsage.inputTokens as number) ?? (rawUsage.input_tokens as number) ?? 0;
       usageData.output_tokens = (rawUsage.outputTokens as number) ?? (rawUsage.output_tokens as number) ?? 0;
-      usageData.cache_read_input_tokens = (rawUsage.cacheReadInputTokens as number) ?? (rawUsage.cache_read_input_tokens as number) ?? 0;
-      usageData.cache_creation_input_tokens = (rawUsage.cacheCreationInputTokens as number) ?? (rawUsage.cache_creation_input_tokens as number) ?? 0;
+      usageData.cache_creation_5m_tokens = 0;
+      usageData.cache_creation_1h_tokens = (rawUsage.cacheCreationInputTokens as number) ?? (rawUsage.cache_creation_1h_tokens as number) ?? 0;
+      usageData.cache_read_tokens = (rawUsage.cacheReadInputTokens as number) ?? (rawUsage.cache_read_tokens as number) ?? 0;
     }
 
     events.push(

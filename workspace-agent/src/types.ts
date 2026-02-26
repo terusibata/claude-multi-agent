@@ -43,12 +43,13 @@ export type InvocationRequest = z.infer<typeof InvocationRequestSchema>;
 // SSE イベント型
 // =============================================================================
 
-/** モデル別使用量（Host API に送信） */
+/** モデル別使用量（Host API に送信 — UsageInfo 仕様準拠） */
 export interface ModelTokenUsage {
   input_tokens: number;
   output_tokens: number;
-  cache_read_input_tokens: number;
-  cache_creation_input_tokens: number;
+  cache_creation_5m_tokens: number;
+  cache_creation_1h_tokens: number;
+  cache_read_tokens: number;
   web_search_requests: number;
 }
 

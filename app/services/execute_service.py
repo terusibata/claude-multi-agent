@@ -537,10 +537,10 @@ class ExecuteService:
                 for sdk_model_name, tokens in model_usage.items():
                     m_input = tokens.get("input_tokens", 0)
                     m_output = tokens.get("output_tokens", 0)
-                    m_cache_read = tokens.get("cache_read_input_tokens", 0)
+                    m_cache_read = tokens.get("cache_read_tokens", 0)
                     # SDK の cacheCreationInputTokens は 5分/1時間 の区分なし
-                    # 保守的に全量を 1h キャッシュとして扱う
-                    m_cache_creation = tokens.get("cache_creation_input_tokens", 0)
+                    # TS agent が保守的に全量を cache_creation_1h_tokens として送信
+                    m_cache_creation = tokens.get("cache_creation_1h_tokens", 0)
 
                     # SDK モデル名から DB の Model レコードを検索
                     target_model = await self.model_service.find_by_sdk_model_name(
