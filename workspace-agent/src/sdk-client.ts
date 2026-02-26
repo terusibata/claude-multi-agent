@@ -50,6 +50,29 @@ function buildSdkOptions(request: InvocationRequest): Options {
     CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK: "1",
   };
 
+  // SDK の Options.env を明示指定すると process.env は子プロセスに継承されない
+  // （Node.js spawn の仕様: env 指定時は親の環境変数を継承しない）
+  // AWS 認証に必要な環境変数を選択的に転送する
+  // ※ AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY は意図的に渡さない
+  //   → AgentCore Execution Role による認証を使用するため
+  const awsCredentialEnvKeys = [
+    // コンテナ認証（ECS Task Role / AgentCore Execution Role）
+    "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+    "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+    "AWS_CONTAINER_AUTHORIZATION_TOKEN",
+    // Web Identity Token（EKS 等）
+    "AWS_WEB_IDENTITY_TOKEN_FILE",
+    "AWS_ROLE_ARN",
+    "AWS_ROLE_SESSION_NAME",
+    // デフォルトリージョン
+    "AWS_DEFAULT_REGION",
+  ];
+  for (const key of awsCredentialEnvKeys) {
+    if (process.env[key]) {
+      env[key] = process.env[key]!;
+    }
+  }
+
   const options: Options = {
     model: request.model || undefined,
     cwd: request.cwd,
