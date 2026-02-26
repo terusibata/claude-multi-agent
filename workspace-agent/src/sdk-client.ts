@@ -166,6 +166,16 @@ function messageToSSEEvents(
       }
     }
 
+    // ★ usage を snake_case に変換（Python 側 normalize_usage が snake_case を期待）
+    const rawUsage = resultMsg.usage as Record<string, unknown> | undefined;
+    const usageData: Record<string, number> = {};
+    if (rawUsage) {
+      usageData.input_tokens = (rawUsage.inputTokens as number) ?? (rawUsage.input_tokens as number) ?? 0;
+      usageData.output_tokens = (rawUsage.outputTokens as number) ?? (rawUsage.output_tokens as number) ?? 0;
+      usageData.cache_read_input_tokens = (rawUsage.cacheReadInputTokens as number) ?? (rawUsage.cache_read_input_tokens as number) ?? 0;
+      usageData.cache_creation_input_tokens = (rawUsage.cacheCreationInputTokens as number) ?? (rawUsage.cache_creation_input_tokens as number) ?? 0;
+    }
+
     events.push(
       formatSSE("done", {
         subtype: resultMsg.is_error ? "error_during_execution" : "success",
@@ -174,7 +184,7 @@ function messageToSSEEvents(
         num_turns: resultMsg.num_turns,
         duration_ms: resultMsg.duration_ms,
         cost_usd: resultMsg.total_cost_usd,
-        usage: resultMsg.usage ?? {},
+        usage: usageData,
         // ★ model_usage を追加 — Host API でモデル別 AWS コスト計算に使用
         ...(Object.keys(modelUsageData).length > 0 && { model_usage: modelUsageData }),
       }),

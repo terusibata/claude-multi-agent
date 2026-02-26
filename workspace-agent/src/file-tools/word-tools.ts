@@ -563,8 +563,9 @@ export const getDocumentContentHandler = localFileToolHandler(
   },
   async ({ content, filename, args }): Promise<ToolResult> => {
     const heading = (args.heading as string) || undefined;
-    const startParagraph = args.start_paragraph as number | undefined;
-    const endParagraph = args.end_paragraph as number | undefined;
+    // 0 は「未指定」として扱う（段落番号は1始まり、Zodデフォルト0対策）
+    const startParagraph = (args.start_paragraph as number) || null;
+    const endParagraph = (args.end_paragraph as number) || null;
     const maxParagraphs =
       (args.max_paragraphs as number) || DEFAULT_MAX_PARAGRAPHS;
     const includeTables = args.include_tables !== false;
