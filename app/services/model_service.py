@@ -189,6 +189,27 @@ class ModelService:
             "usage_logs": usage_log_count,
         }
 
+    async def find_by_sdk_model_name(self, sdk_model_name: str) -> Model | None:
+        """
+        SDK の modelUsage キー名（例: "claude-sonnet-4-5-20250929"）から
+        Model レコードを検索する。
+
+        bedrock_model_id に sdk_model_name が含まれるモデルを検索。
+        例: sdk_model_name="claude-sonnet-4-5-20250929"
+            → bedrock_model_id="us.anthropic.claude-sonnet-4-5-20250929-v1:0" がマッチ
+
+        Args:
+            sdk_model_name: SDK が返すモデル名
+
+        Returns:
+            マッチするモデル定義（見つからない場合は None）
+        """
+        query = select(Model).where(
+            Model.bedrock_model_id.contains(sdk_model_name)
+        )
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none()
+
     async def get_active_models(self) -> list[Model]:
         """
         有効なモデル定義を取得
