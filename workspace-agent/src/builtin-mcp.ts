@@ -148,12 +148,12 @@ function createFileToolsServer(): McpServerConfig | null {
       schema: { file_path: z.string() },
     },
     read_pdf_pages: {
-      description: "PDFの指定ページのテキストを読み取る",
-      schema: { file_path: z.string(), start_page: z.number().default(1), end_page: z.number().default(0) },
+      description: "PDFの指定ページのテキストを読み取る（pages例: '1-5', '1,3,5'）",
+      schema: { file_path: z.string(), pages: z.string().default("1-10") },
     },
     convert_pdf_to_images: {
-      description: "PDFページを画像に変換する（図表確認用）",
-      schema: { file_path: z.string(), page_numbers: z.string().default(""), dpi: z.number().default(150) },
+      description: "PDFページを画像に変換する（図表確認用）（pages例: '1-3'）",
+      schema: { file_path: z.string(), pages: z.string().default("1"), dpi: z.number().default(150) },
     },
     get_document_info: {
       description: "Word文書の基本情報（段落数、セクション等）を取得する",
@@ -176,11 +176,10 @@ function createFileToolsServer(): McpServerConfig | null {
       schema: { file_path: z.string() },
     },
     get_slides_content: {
-      description: "PowerPointスライドのテキスト内容を取得する",
+      description: "PowerPointスライドのテキスト内容を取得する（slides例: '1-5', '1,3,5'）",
       schema: {
         file_path: z.string(),
-        start_slide: z.number().default(0),
-        end_slide: z.number().default(0),
+        slides: z.string().default("1-10"),
       },
     },
     search_presentation: {

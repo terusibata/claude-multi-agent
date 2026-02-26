@@ -195,11 +195,29 @@ function messageToSSEEvents(
       for (const block of msgContent) {
         if (typeof block === "object" && block !== null && "type" in block && block.type === "tool_result") {
           const toolResult = block as { tool_use_id: string; content?: unknown; is_error?: boolean };
+          // content は string | ContentBlock[] の可能性がある
+          let contentStr = "";
+          if (toolResult.content) {
+            if (typeof toolResult.content === "string") {
+              contentStr = toolResult.content;
+            } else if (Array.isArray(toolResult.content)) {
+              contentStr = toolResult.content
+                .map((b: unknown) => {
+                  if (typeof b === "object" && b !== null && "text" in b) {
+                    return (b as { text: string }).text;
+                  }
+                  return JSON.stringify(b);
+                })
+                .join("\n");
+            } else {
+              contentStr = JSON.stringify(toolResult.content);
+            }
+          }
           events.push(
             formatSSE("tool_result", {
               tool_use_id: toolResult.tool_use_id,
               tool_name: toolNameMap.get(toolResult.tool_use_id) ?? "",
-              content: toolResult.content ? String(toolResult.content) : "",
+              content: contentStr,
               is_error: toolResult.is_error ?? false,
             }),
           );

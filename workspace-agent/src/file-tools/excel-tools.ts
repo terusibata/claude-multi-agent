@@ -392,7 +392,7 @@ async function getSheetCsv(
     .map((row) => row.map(csvEscape).join(","))
     .join("\n");
 
-  const csvMarkdown = `\`\`\`csv\n${csvContent}\`\`\``;
+  const csvMarkdown = `\`\`\`csv\n${csvContent}\n\`\`\``;
 
   const hasMore = actualEndRow < areaMaxRow;
 

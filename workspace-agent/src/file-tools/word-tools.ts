@@ -317,9 +317,7 @@ async function getDocumentContent(
             break;
           }
         }
-        if (!found) {
-          actualEnd = totalParagraphs;
-        }
+        // actualEnd defaults to totalParagraphs if no next heading found
         break;
       }
     }

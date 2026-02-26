@@ -208,7 +208,9 @@ class ModelService:
             Model.bedrock_model_id.contains(sdk_model_name)
         )
         result = await self.db.execute(query)
-        return result.scalar_one_or_none()
+        # scalar_one_or_none() は複数マッチ時に例外を投げるため
+        # scalars().first() で最初のマッチを返す（リージョン違いで複数ヒット対策）
+        return result.scalars().first()
 
     async def get_active_models(self) -> list[Model]:
         """
