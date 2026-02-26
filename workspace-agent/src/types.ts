@@ -53,18 +53,6 @@ export interface ModelTokenUsage {
   web_search_requests: number;
 }
 
-/** done イベントデータ */
-export interface DoneEventData {
-  subtype: string;
-  result: string | null;
-  session_id: string | null;
-  num_turns: number;
-  duration_ms: number;
-  cost_usd: number;
-  usage: Record<string, number>;
-  model_usage?: Record<string, ModelTokenUsage>;
-}
-
 /** ヘルスチェックレスポンス */
 export interface HealthResponse {
   status: string;

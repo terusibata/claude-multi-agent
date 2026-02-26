@@ -154,15 +154,17 @@ function messageToSSEEvents(
     // ★ modelUsage からモデル別トークン数を抽出（移行の核心）
     // UsageInfo 仕様準拠のフィールド名を使用:
     //   cache_creation_5m_tokens / cache_creation_1h_tokens / cache_read_tokens
-    // SDK の cacheCreationInputTokens は 5m/1h 区分なし → 保守的に全量を 1h として扱う
+    // Claude Code はデフォルトで 5分キャッシュ（type: "ephemeral"）を使用。
+    // 1時間キャッシュは ENABLE_PROMPT_CACHING_1H_BEDROCK 環境変数が設定された場合のみ。
+    // SDK の cacheCreationInputTokens は 5m/1h 区分なし → 全量を 5m として扱う
     const modelUsageData: Record<string, ModelTokenUsage> = {};
     if (resultMsg.modelUsage) {
       for (const [modelName, usage] of Object.entries(resultMsg.modelUsage)) {
         modelUsageData[modelName] = {
           input_tokens: usage.inputTokens,
           output_tokens: usage.outputTokens,
-          cache_creation_5m_tokens: 0,
-          cache_creation_1h_tokens: usage.cacheCreationInputTokens,
+          cache_creation_5m_tokens: usage.cacheCreationInputTokens,
+          cache_creation_1h_tokens: 0,
           cache_read_tokens: usage.cacheReadInputTokens,
           web_search_requests: usage.webSearchRequests,
         };
@@ -176,8 +178,8 @@ function messageToSSEEvents(
     if (rawUsage) {
       usageData.input_tokens = (rawUsage.inputTokens as number) ?? (rawUsage.input_tokens as number) ?? 0;
       usageData.output_tokens = (rawUsage.outputTokens as number) ?? (rawUsage.output_tokens as number) ?? 0;
-      usageData.cache_creation_5m_tokens = 0;
-      usageData.cache_creation_1h_tokens = (rawUsage.cacheCreationInputTokens as number) ?? (rawUsage.cache_creation_1h_tokens as number) ?? 0;
+      usageData.cache_creation_5m_tokens = (rawUsage.cacheCreationInputTokens as number) ?? (rawUsage.cache_creation_5m_tokens as number) ?? 0;
+      usageData.cache_creation_1h_tokens = 0;
       usageData.cache_read_tokens = (rawUsage.cacheReadInputTokens as number) ?? (rawUsage.cache_read_tokens as number) ?? 0;
     }
 

@@ -538,9 +538,10 @@ class ExecuteService:
                     m_input = tokens.get("input_tokens", 0)
                     m_output = tokens.get("output_tokens", 0)
                     m_cache_read = tokens.get("cache_read_tokens", 0)
-                    # SDK の cacheCreationInputTokens は 5分/1時間 の区分なし
-                    # TS agent が保守的に全量を cache_creation_1h_tokens として送信
-                    m_cache_creation = tokens.get("cache_creation_1h_tokens", 0)
+                    # Claude Code はデフォルトで 5分キャッシュ（type: "ephemeral"）を使用
+                    # 1時間キャッシュは ENABLE_PROMPT_CACHING_1H_BEDROCK 設定時のみ
+                    # TS agent が全量を cache_creation_5m_tokens として送信
+                    m_cache_creation = tokens.get("cache_creation_5m_tokens", 0)
 
                     # SDK モデル名から DB の Model レコードを検索
                     target_model = await self.model_service.find_by_sdk_model_name(
@@ -549,8 +550,8 @@ class ExecuteService:
                     if target_model:
                         cost = target_model.calculate_cost(
                             m_input, m_output,
-                            cache_creation_5m_tokens=0,
-                            cache_creation_1h_tokens=m_cache_creation,
+                            cache_creation_5m_tokens=m_cache_creation,
+                            cache_creation_1h_tokens=0,
                             cache_read_tokens=m_cache_read,
                         )
                         await self.usage_service.save_usage_log(
@@ -559,8 +560,8 @@ class ExecuteService:
                             model_id=target_model.model_id,
                             input_tokens=m_input,
                             output_tokens=m_output,
-                            cache_creation_5m_tokens=0,
-                            cache_creation_1h_tokens=m_cache_creation,
+                            cache_creation_5m_tokens=m_cache_creation,
+                            cache_creation_1h_tokens=0,
                             cache_read_tokens=m_cache_read,
                             cost_usd=cost,
                             conversation_id=request.conversation_id,
@@ -574,8 +575,8 @@ class ExecuteService:
                         )
                         cost = model.calculate_cost(
                             m_input, m_output,
-                            cache_creation_5m_tokens=0,
-                            cache_creation_1h_tokens=m_cache_creation,
+                            cache_creation_5m_tokens=m_cache_creation,
+                            cache_creation_1h_tokens=0,
                             cache_read_tokens=m_cache_read,
                         )
                         await self.usage_service.save_usage_log(
@@ -584,8 +585,8 @@ class ExecuteService:
                             model_id=request.model_id,
                             input_tokens=m_input,
                             output_tokens=m_output,
-                            cache_creation_5m_tokens=0,
-                            cache_creation_1h_tokens=m_cache_creation,
+                            cache_creation_5m_tokens=m_cache_creation,
+                            cache_creation_1h_tokens=0,
                             cache_read_tokens=m_cache_read,
                             cost_usd=cost,
                             conversation_id=request.conversation_id,
