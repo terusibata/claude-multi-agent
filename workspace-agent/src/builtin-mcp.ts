@@ -135,8 +135,8 @@ function createFileToolsServer(): McpServerConfig | null {
       schema: {
         file_path: z.string(),
         sheet_name: z.string().default(""),
-        start_row: z.number().default(0),
-        end_row: z.number().default(0),
+        start_row: z.number().nullable().default(null),
+        end_row: z.number().nullable().default(null),
       },
     },
     search_workbook: {
@@ -163,8 +163,8 @@ function createFileToolsServer(): McpServerConfig | null {
       description: "Word文書のテキスト内容を取得する",
       schema: {
         file_path: z.string(),
-        start_paragraph: z.number().default(0),
-        end_paragraph: z.number().default(0),
+        start_paragraph: z.number().nullable().default(null),
+        end_paragraph: z.number().nullable().default(null),
       },
     },
     search_document: {
@@ -180,6 +180,7 @@ function createFileToolsServer(): McpServerConfig | null {
       schema: {
         file_path: z.string(),
         slides: z.string().default("1-10"),
+        max_slides: z.number().default(10),
       },
     },
     search_presentation: {

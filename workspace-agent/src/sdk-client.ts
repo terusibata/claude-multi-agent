@@ -178,9 +178,20 @@ function messageToSSEEvents(
     if (rawUsage) {
       usageData.input_tokens = (rawUsage.inputTokens as number) ?? (rawUsage.input_tokens as number) ?? 0;
       usageData.output_tokens = (rawUsage.outputTokens as number) ?? (rawUsage.output_tokens as number) ?? 0;
-      usageData.cache_creation_5m_tokens = (rawUsage.cacheCreationInputTokens as number) ?? (rawUsage.cache_creation_5m_tokens as number) ?? 0;
+      // SDK の Usage 型は snake_case（cache_creation_input_tokens）、
+      // ModelUsage 型は camelCase（cacheCreationInputTokens）を使用。
+      // 両方のフォーマットに対応するため全パターンをフォールバック候補に含める
+      usageData.cache_creation_5m_tokens =
+        (rawUsage.cacheCreationInputTokens as number)
+        ?? (rawUsage.cache_creation_input_tokens as number)
+        ?? (rawUsage.cache_creation_5m_tokens as number)
+        ?? 0;
       usageData.cache_creation_1h_tokens = 0;
-      usageData.cache_read_tokens = (rawUsage.cacheReadInputTokens as number) ?? (rawUsage.cache_read_tokens as number) ?? 0;
+      usageData.cache_read_tokens =
+        (rawUsage.cacheReadInputTokens as number)
+        ?? (rawUsage.cache_read_input_tokens as number)
+        ?? (rawUsage.cache_read_tokens as number)
+        ?? 0;
     }
 
     events.push(

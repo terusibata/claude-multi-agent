@@ -553,9 +553,9 @@ export const getSheetCsvHandler = localFileToolHandler(
   },
   async ({ content, args }): Promise<ToolResult> => {
     const sheetName = (args.sheet_name as string) || "";
-    // 0 は「未指定」として扱う（行番号は1始まり、Zodデフォルト0対策）
-    const startRow = (args.start_row as number) || null;
-    const endRow = (args.end_row as number) || null;
+    // null は「未指定」（Zodデフォルト null）
+    const startRow = (args.start_row as number | null) ?? null;
+    const endRow = (args.end_row as number | null) ?? null;
     const maxRows = (args.max_rows as number) || DEFAULT_MAX_ROWS;
     const usePrintArea = args.use_print_area !== false;
 
