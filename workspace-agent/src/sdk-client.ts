@@ -23,6 +23,7 @@ import type {
 import { createLogger } from "./logger.js";
 import type { InvocationRequest, ModelTokenUsage } from "./types.js";
 import { createBuiltinMcpServers, createOpenApiMcpServers } from "./builtin-mcp.js";
+import type { S3Config } from "./builtin-mcp.js";
 
 const logger = createLogger("sdk-client");
 
@@ -108,7 +109,20 @@ function buildSdkOptions(request: InvocationRequest): Options {
   try {
     const mcpServers: Record<string, McpServerConfig> = {};
 
-    const builtinServers = createBuiltinMcpServers();
+    // present_files 時の即時S3アップロード用に S3 設定を渡す
+    const ws = request.workspace_sync;
+    const s3Config: S3Config | undefined =
+      ws?.enabled && ws.s3_bucket
+        ? {
+            s3Bucket: ws.s3_bucket,
+            s3Prefix: ws.s3_prefix,
+            tenantId: ws.tenant_id,
+            conversationId: ws.conversation_id,
+            region: request.aws_region,
+          }
+        : undefined;
+
+    const builtinServers = createBuiltinMcpServers(s3Config);
     Object.assign(mcpServers, builtinServers);
 
     // OpenAPI MCP サーバー作成（ホストから受け取った設定を使用）

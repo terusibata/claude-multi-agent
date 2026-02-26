@@ -12,6 +12,16 @@ import * as path from "node:path";
 import { createLogger } from "./logger.js";
 import { createFileToolHandlers } from "./file-tools/registry.js";
 import { OpenAPIMcpService } from "./openapi-mcp.js";
+import { uploadFilesToS3 } from "./agent-file-sync.js";
+
+/** S3 同期設定（present_files 時の即時アップロードに使用） */
+export interface S3Config {
+  s3Bucket: string;
+  s3Prefix: string;
+  tenantId: string;
+  conversationId: string;
+  region?: string;
+}
 
 const logger = createLogger("builtin-mcp");
 
@@ -21,7 +31,7 @@ const WORKSPACE_DIR = "/workspace";
 // file-presentation MCP サーバー
 // =============================================================================
 
-function createFilePresentationServer(): McpServerConfig | null {
+function createFilePresentationServer(s3Config?: S3Config): McpServerConfig | null {
   const presentFilesTool = tool(
     "present_files",
     "AIが作成・編集したファイルをユーザーに提示する。" +
@@ -73,6 +83,19 @@ function createFilePresentationServer(): McpServerConfig | null {
           }
         } catch {
           missingFiles.push({ relative_path: filePath, exists: false });
+        }
+      }
+
+      // present_files 時にファイルを即座に S3 にアップロード
+      // フロントエンドがツール結果を受信した時点でダウンロード API を呼ぶため、
+      // セッション終了を待たずに S3 に配置する必要がある
+      if (s3Config && s3Config.s3Bucket && existingFiles.length > 0) {
+        const fullPaths = existingFiles.map((f) => f.path as string);
+        try {
+          const uploaded = await uploadFilesToS3(s3Config, fullPaths);
+          logger.info({ msg: "present_files: S3即時アップロード完了", count: uploaded });
+        } catch (e) {
+          logger.error({ msg: "present_files: S3即時アップロードエラー", error: String(e) });
         }
       }
 
@@ -228,7 +251,7 @@ function createFileToolsServer(): McpServerConfig | null {
 // パブリック API
 // =============================================================================
 
-export function createBuiltinMcpServers(): Record<string, McpServerConfig> {
+export function createBuiltinMcpServers(s3Config?: S3Config): Record<string, McpServerConfig> {
   const servers: Record<string, McpServerConfig> = {};
 
   try {
@@ -239,7 +262,7 @@ export function createBuiltinMcpServers(): Record<string, McpServerConfig> {
   }
 
   try {
-    const presentationServer = createFilePresentationServer();
+    const presentationServer = createFilePresentationServer(s3Config);
     if (presentationServer) servers["file-presentation"] = presentationServer;
   } catch (e) {
     logger.error({ msg: "file-presentation MCP server creation failed", error: String(e) });
