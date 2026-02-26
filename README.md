@@ -1,11 +1,11 @@
 # Claude Multi-Agent Backend
 
-AWS Bedrock + Claude Agent SDKを利用したマルチテナント対応AIエージェントシステム
+AWS Bedrock + Claude Agent SDK + Amazon Bedrock AgentCore Runtime を利用したマルチテナント対応AIエージェントシステム
 
 ## 概要
 
-このプロジェクトは、Claude Agent SDKを活用したエージェント実行バックエンドシステムです。
-マルチテナント対応、Agent Skills管理、MCPサーバー連携などの機能を提供します。
+Claude Agent SDKを活用したエージェント実行バックエンドシステムです。
+Amazon Bedrock AgentCore Runtime 上でエージェントをFirecracker microVM内で実行し、マルチテナント対応、Agent Skills管理、MCPサーバー連携などの機能を提供します。
 
 ## 主要機能
 
@@ -22,543 +22,120 @@ AWS Bedrock + Claude Agent SDKを利用したマルチテナント対応AIエー
 
 ## アーキテクチャ
 
-本システムは **Docker モード**（ローカル開発）と **ECS モード**（本番AWS環境）の2つのコンテナ実行基盤を切り替えて動作します。
-
-### Docker モード（ローカル開発）
-
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│  クライアント (フロントエンド)                                            │
-└─────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│  FastAPI Backend                                                        │
-│  ┌───────────────────────────────────────────────────────────────────┐  │
-│  │ ミドルウェアスタック                                                │  │
-│  │ ├── トレーシング (X-Request-ID)                                   │  │
-│  │ ├── API認証 (X-API-Key / Bearer Token)                           │  │
-│  │ ├── レート制限 (Redis)                                            │  │
-│  │ ├── CORS                                                          │  │
-│  │ └── セキュリティヘッダー                                           │  │
-│  └───────────────────────────────────────────────────────────────────┘  │
-│  ┌───────────────────────────────────────────────────────────────────┐  │
-│  │ コンテナオーケストレーション                                        │  │
-│  │ ├── Orchestrator  (コンテナ割当・再利用)                           │  │
-│  │ ├── WarmPool      (事前起動プール)                                │  │
-│  │ ├── ContainerManager (Docker / ECS)                               │  │
-│  │ └── GC            (TTL/絶対期限による自動回収)                      │  │
-│  └───────────────────────────────────────────────────────────────────┘  │
-│  ┌───────────────────────────────────────────────────────────────────┐  │
-│  │ Credential Injection Proxy                                        │  │
-│  │ ├── Reverse Proxy → Bedrock API (SigV4署名注入)                   │  │
-│  │ └── Forward Proxy → 外部通信 (ドメインホワイトリスト)               │  │
-│  └───────────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────┘
-        │          │          │  Unix Socket       │
-        │          │          │  (SSE中継)          │  S3ファイル同期
-        │          │          ▼                    │
-        │          │  ┌───────────────────────┐    │
-        │          │  │ ワークスペースコンテナ   │    │
-        │          │  │ (会話ごとに1つ)         │    │
-        │          │  │  workspace_agent      │    │
-        │          │  │  ├── Claude Agent SDK  │    │
-        │          │  │  └── /workspace (作業)  │    │
-        │          │  │                       │    │
-        │          │  │  セキュリティ: 多層防御    │    │
-        │          │  │  (network:none,         │    │
-        │          │  │   seccomp, cap-drop ALL)│    │
-        │          │  └───────────────────────┘    │
-        ▼          ▼                               ▼
-┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐
-│PostgreSQL│  │  Redis   │  │AWS Bedrock│  │ Amazon S3│
-└──────────┘  └──────────┘  └──────────┘  └──────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│  クライアント (フロントエンド)                                       │
+└──────────────────────────────────────────────────────────────────┘
+                                │ SSE
+                                ▼
+┌──────────────────────────────────────────────────────────────────┐
+│  FastAPI Backend (Amazon Bedrock AgentCore)                        │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │ ミドルウェア: トレーシング, API認証, CORS, セキュリティヘッダー  │  │
+│  └────────────────────────────────────────────────────────────┘  │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │ AgentCoreClient (boto3 bedrock-agentcore)                  │  │
+│  │ ├── invoke_agent_runtime API                               │  │
+│  │ └── runtimeSessionId によるコンテナ親和性                     │  │
+│  └────────────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────────┘
+        │                │                              │
+        │ boto3          │ invoke_agent_runtime          │ S3
+        ▼                ▼                              ▼
+┌──────────┐  ┌──────────────────────────┐      ┌──────────┐
+│PostgreSQL│  │ AgentCore Runtime         │      │ Amazon S3│
+└──────────┘  │ (Firecracker microVM)     │      └──────────┘
+              │  ┌────────────────────┐  │
+              │  │ workspace_agent    │  │
+              │  │ ├── Claude Agent SDK│  │
+              │  │ ├── S3 File Sync   │  │
+              │  │ └── /workspace     │  │
+              │  └────────────────────┘  │
+              │  POST /invocations       │
+              │  GET  /ping              │
+              └──────────────────────────┘
 ```
 
-### ECS モード（本番環境）
+### 実行フロー
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│  FastAPI Backend (ECS Service / EC2)                                    │
-│  ┌───────────────────────────────────────────────────────────────────┐  │
-│  │ コンテナオーケストレーション                                        │  │
-│  │ ├── Orchestrator (統括)                                           │  │
-│  │ ├── EcsContainerManager (ECS RunTask API)                         │  │
-│  │ ├── WarmPool (min 50, max 120)                                    │  │
-│  │ └── GC (Redis SCAN + 孤立タスク検出)                               │  │
-│  └───────────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────┘
-        │                     │ HTTP (task_ip:9000)
-        │ ECS RunTask API     │
-        ▼                     ▼
-┌─────────────────────────────────────────────────────────┐
-│  ECS Task (awsvpc)                                      │
-│  ┌─────────────────────┐  ┌──────────────────────────┐  │
-│  │ workspace-agent      │  │ proxy-sidecar            │  │
-│  │ (メインコンテナ)       │  │ (サイドカー)              │  │
-│  │                     │  │                          │  │
-│  │ :9000 HTTP          │  │ :8080 Forward Proxy      │  │
-│  │ ├── /health         │  │ :8081 Admin HTTP         │  │
-│  │ ├── /execute        │  │ ├── SigV4署名注入         │  │
-│  │ ├── /exec           │  │ └── ドメインホワイトリスト  │  │
-│  │ └── /exec/binary    │  │                          │  │
-│  └─────────────────────┘  └──────────────────────────┘  │
-└─────────────────────────────────────────────────────────┘
-```
-
-> 詳細は [ECSアーキテクチャ設計書](docs/ecs-architecture.md) を参照してください。
+1. クライアントが `POST /stream` でリクエスト
+2. バックエンドが `invoke_agent_runtime` で AgentCore を呼び出し
+3. AgentCore が Firecracker microVM でコンテナを起動
+4. コンテナ内で S3 からワークスペースを復元 → SDK 実行 → S3 に同期
+5. SSE イベントがリアルタイムでクライアントに中継
+6. `runtimeSessionId` でセッション親和性を維持（同一microVMにルーティング）
 
 ## 技術スタック
 
 - **言語**: Python 3.11+
 - **フレームワーク**: FastAPI
 - **データベース**: PostgreSQL (asyncpg)
-- **キャッシュ/ロック**: Redis
 - **ORM**: SQLAlchemy 2.0
 - **マイグレーション**: Alembic
 - **AI SDK**: Claude Agent SDK
 - **AI基盤**: AWS Bedrock
+- **コンテナ実行**: Amazon Bedrock AgentCore Runtime
+- **ファイルストレージ**: Amazon S3
 
 ## ディレクトリ構成
 
 ```
 app/
 ├── core/                  # アプリケーションコア
-│   ├── app_factory.py     # アプリケーションファクトリ (create_app)
+│   ├── app_factory.py     # アプリケーションファクトリ
 │   ├── lifespan.py        # ライフサイクル管理
-│   ├── exception_handlers.py # 例外ハンドラ
-│   └── metrics_endpoint.py   # Prometheusメトリクス
+│   └── metrics_endpoint.py # Prometheusメトリクス
 ├── api/                   # APIエンドポイント
-│   ├── dependencies.py    # 共通依存性注入 (テナント・モデル検証等)
+│   ├── dependencies.py    # 共通依存性注入
 │   ├── health.py          # ヘルスチェックAPI
-│   ├── tenants.py         # テナント管理API
-│   ├── models.py          # モデル管理API
-│   ├── conversations/     # 会話API (パッケージ)
-│   │   ├── router.py      # CRUD エンドポイント
-│   │   └── streaming.py   # ストリーミング実行
-│   ├── simple_chats/      # シンプルチャットAPI (パッケージ)
-│   │   ├── router.py      # CRUD エンドポイント
-│   │   └── streaming.py   # ストリーミング実行
-│   ├── skills.py          # スキル管理API
-│   ├── mcp_servers.py     # MCPサーバー管理API
-│   ├── usage.py           # 使用状況API
-│   └── workspace.py       # ワークスペースAPI
-├── repositories/          # データアクセス層 (Repository パターン)
-│   ├── base.py            # ベースリポジトリ
-│   ├── tenant_repository.py
-│   ├── model_repository.py
-│   ├── conversation_repository.py
-│   ├── message_log_repository.py
-│   ├── usage_repository.py
-│   └── simple_chat_repository.py
+│   ├── conversations/     # 会話API
+│   └── ...
 ├── services/              # ビジネスロジック
-│   ├── execute_service.py       # エージェント実行 (コンテナ隔離)
-│   ├── tenant_service.py        # テナント管理
-│   ├── model_service.py         # モデル管理
-│   ├── conversation_service.py  # 会話管理
-│   ├── message_log_service.py   # メッセージログ管理
-│   ├── usage_service.py         # 使用量管理
-│   ├── simple_chat_service.py   # シンプルチャット管理
-│   ├── skill_service.py         # スキル管理
-│   ├── mcp_server_service.py    # MCPサーバー管理
-│   ├── openapi_mcp_service.py   # OpenAPI→MCP変換
-│   ├── bedrock_client.py        # Bedrock API クライアント
-│   ├── aws_config.py            # AWS設定
-│   ├── workspace_service.py     # ワークスペース操作
-│   ├── container/               # コンテナ管理
-│   │   ├── base.py              # 抽象基底クラス (Docker/ECS共通IF)
-│   │   ├── orchestrator.py      # コンテナオーケストレーター
-│   │   ├── lifecycle.py         # Dockerコンテナライフサイクル
-│   │   ├── ecs_manager.py       # ECS RunTaskベースのコンテナ管理
-│   │   ├── warm_pool.py         # WarmPoolマネージャー
-│   │   ├── gc.py                # コンテナGC (TTL/絶対期限)
-│   │   ├── config.py            # コンテナ作成設定 (セキュリティ制御)
-│   │   └── models.py            # コンテナデータモデル
-│   ├── proxy/                   # Credential Injection Proxy
-│   │   ├── credential_proxy.py  # Reverse/Forward Proxy (Unix Socket)
-│   │   ├── sigv4.py             # AWS SigV4 リクエスト署名
-│   │   ├── domain_whitelist.py  # ドメインホワイトリスト
-│   │   └── dns_cache.py         # DNSキャッシュ
-│   ├── builtin_tools/           # 組み込みツール
-│   │   ├── definitions.py       # ツール定義
-│   │   ├── file_presentation.py # ファイル表示
-│   │   └── server.py            # ツールサーバー
-│   └── workspace/               # ワークスペースインフラ
-│       ├── s3_storage.py        # S3ストレージバックエンド
-│       ├── file_sync.py         # ファイル同期 (S3↔コンテナ)
-│       ├── file_processors.py   # ファイル処理ディスパッチ
-│       ├── context_builder.py   # ファイルコンテキスト構築
-│       └── file_tools/          # ファイル種別プロセッサ
-│           ├── pdf_tools.py     # PDF処理
-│           ├── excel_tools.py   # Excel処理
-│           ├── word_tools.py    # Word処理
-│           ├── pptx_tools.py    # PowerPoint処理
-│           ├── image_tools.py   # 画像処理
-│           ├── registry.py      # プロセッサ登録
-│           └── utils.py         # 共通ユーティリティ
-├── infrastructure/        # インフラストラクチャ層
-│   ├── redis.py           # Redis接続管理
-│   ├── distributed_lock.py # 分散ロック
-│   ├── shutdown.py        # グレースフルシャットダウン
-│   ├── retry.py           # リトライユーティリティ
-│   ├── metrics.py         # Prometheusメトリクス
-│   └── audit_log.py       # 監査ログ
-├── middleware/            # ミドルウェア
-│   ├── auth.py            # API認証
-│   ├── rate_limit.py      # レート制限
-│   ├── security_headers.py # セキュリティヘッダー
-│   └── tracing.py         # リクエストトレーシング
+│   ├── agentcore_client.py     # AgentCore Runtime クライアント
+│   ├── execute_service.py      # エージェント実行
+│   ├── mcp_config_builder.py   # MCP設定構築
+│   ├── event_translator.py     # SSEイベント変換
+│   └── workspace/              # S3ワークスペース
+├── infrastructure/        # メトリクス、監査ログ
+├── middleware/            # 認証、セキュリティヘッダー
 ├── models/                # SQLAlchemy ORMモデル
-├── schemas/               # Pydantic リクエスト/レスポンススキーマ
-├── utils/                 # ユーティリティ (ストリーミング, セキュリティ, エラー処理)
-├── config.py              # 設定管理
-├── database.py            # データベース接続
-└── main.py                # エントリーポイント (create_app呼び出し)
-workspace-base/            # コンテナベースイメージ
-├── Dockerfile             # workspace-agent イメージ (Python 3.11 + Node.js 20)
-├── Dockerfile.proxy-sidecar # ECS Proxyサイドカーイメージ
-├── entrypoint.sh          # エントリーポイント (UDS: socat起動 / HTTP: 直接起動)
-├── proxy-sidecar-entrypoint.py # サイドカー起動スクリプト
-└── workspace-requirements.txt
-workspace_agent/           # コンテナ内エージェントサーバー
-├── main.py                # FastAPI (Unix Socket / HTTP) エントリーポイント
+└── schemas/               # Pydanticスキーマ
+workspace_agent/           # AgentCoreコンテナ内エージェント
+├── main.py                # POST /invocations, GET /ping
 ├── sdk_client.py          # Claude Agent SDK クライアント
-└── models.py              # リクエスト/レスポンスモデル
-deployment/                # デプロイメント設定
-├── docker/                # Docker デーモン設定 (userns-remap)
-├── seccomp/               # seccomp プロファイル (システムコール制限)
-├── apparmor/              # AppArmor プロファイル (ファイルアクセス制限)
-└── s3/                    # S3 ライフサイクルポリシー
-monitoring/                # 監視設定
-├── prometheus/            # Prometheus (メトリクス収集・アラート)
-└── grafana/               # Grafana (ダッシュボード)
-alembic/                   # DBマイグレーション
-docs/                      # ドキュメント
-tests/                     # テスト
+├── agent_file_sync.py     # S3ファイル同期
+└── models.py              # リクエストモデル
+workspace-base/            # コンテナイメージ
+├── Dockerfile             # ARM64, port 8080
+└── workspace-requirements.txt
 ```
 
-### アーキテクチャパターン
-
-- **Application Factory**: `app/core/app_factory.py` の `create_app()` でアプリケーションを生成
-- **Repository パターン**: `app/repositories/` でデータアクセスを抽象化し、サービス層から SQLAlchemy の直接操作を排除
-- **依存性注入**: `app/api/dependencies.py` でテナント/モデル検証等の共通ロジックを FastAPI の `Depends()` で注入
-- **Strategy パターン**: `ContainerManagerBase` 抽象基底クラスで Docker/ECS 実装を統一的に切り替え
-- **コンテナ隔離実行**: 会話ごとにコンテナを割り当て、Docker では Unix Socket、ECS では HTTP 経由で SSE イベントを中継
-
-## セットアップ
+## AWS環境構築
 
 ### 前提条件
 
-- Docker & Docker Compose
-- 現在のユーザーが `docker` グループに所属していること
-- AWS認証情報（Bedrock + S3用）
-- S3バケット（ワークスペース用、パブリックアクセスブロック推奨）
+- AWS CLI設定済み
+- S3バケット（ワークスペース用）
+- PostgreSQL（RDS推奨）
+- AgentCore Runtime作成済み
 
-### 開発環境の起動
-
-1. 環境変数を設定
+### 1. AgentCore Runtime の作成
 
 ```bash
-cp .env.example .env
+# コンテナイメージをビルド・プッシュ
+docker build --platform linux/arm64 -t workspace-base:latest -f workspace-base/Dockerfile .
+
+aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin <account>.dkr.ecr.us-west-2.amazonaws.com
+docker tag workspace-base:latest <account>.dkr.ecr.us-west-2.amazonaws.com/workspace-agent:latest
+docker push <account>.dkr.ecr.us-west-2.amazonaws.com/workspace-agent:latest
+
+# AgentCore Runtime を作成（AWS Console または CLI）
+# ポート: 8080, ヘルスチェック: GET /ping
 ```
 
-`.env` ファイルを編集して以下を設定:
+### 2. IAMポリシー
 
-- `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`: AWS認証情報
-- `S3_BUCKET_NAME`: ワークスペース用S3バケット名
-- `DB_PASSWORD`: データベースパスワード（未設定時はデフォルト値 `aiagent_password` を使用）
-
-2. Docker GID設定（通常は不要: entrypoint.shが自動検出します）
-
-自動検出が失敗する場合のみ手動設定:
-```bash
-echo "DOCKER_GID=$(getent group docker | cut -d: -f3)" >> .env
-```
-
-3. ワークスペース用ソケットディレクトリ（自動作成されます）
-
-entrypoint.shがコンテナ起動時にディレクトリの作成と権限修正を自動で行います。
-手動作成は不要です。
-
-4. ワークスペースコンテナのベースイメージをビルド
-
-```bash
-docker build -t workspace-base:latest -f workspace-base/Dockerfile .
-```
-
-5. バックエンドを起動
-
-```bash
-docker-compose up -d --build
-```
-
-DBマイグレーションはコンテナ起動時に自動実行されます。
-
-6. 起動確認
-
-```bash
-# ログでエラーがないか確認
-docker-compose logs backend
-```
-
-http://localhost:8000/docs でAPIドキュメントにアクセスできれば起動完了です。
-
-### ローカル開発（Dockerなし）
-
-```bash
-# 仮想環境を作成
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-pip install -r requirements.txt
-
-# PostgreSQLとRedisを起動（別途必要）
-
-# アプリケーション起動
-uvicorn app.main:app --reload
-```
-
-## セキュリティ
-
-本システムは内部通信用APIとして設計されていますが、以下のセキュリティ機能を備えています。
-
-### 認証
-
-```bash
-# X-API-Key ヘッダー（推奨）
-curl -H "X-API-Key: your-api-key" http://localhost:8000/api/tenants
-
-# Authorization ヘッダー
-curl -H "Authorization: Bearer your-api-key" http://localhost:8000/api/tenants
-```
-
-### 識別ヘッダー
-
-APIの種類に応じて、適切なヘッダーを送信してください。
-
-```bash
-# AI実行系API（一般ユーザー向け）- 会話、ワークスペース操作
-curl -H "X-API-Key: your-api-key" \
-     -H "X-Tenant-ID: tenant-123" \
-     -H "X-User-ID: user-456" \
-     http://localhost:8000/api/tenants/xxx/conversations
-
-# 管理系API（管理者向け）- テナント、モデル、スキル管理
-curl -H "X-API-Key: your-api-key" \
-     -H "X-Admin-ID: admin-789" \
-     http://localhost:8000/api/tenants
-```
-
-### レート制限
-
-AI実行系API（一般ユーザー向け）のみにレート制限が適用されます。管理系APIは対象外です。
-
-### セキュリティヘッダー
-
-すべてのレスポンスにOWASP推奨のセキュリティヘッダーが自動付与されます。
-
-### リクエストトレーシング
-
-すべてのリクエストに `X-Request-ID` が付与され、障害調査時に追跡可能です。
-
-詳細は [セキュリティ設定ガイド](docs/operations/security-config-guide.md) を参照してください。
-
-## API概要
-
-### ヘルスチェック・監視
-
-| メソッド | パス | 説明 |
-|---------|------|------|
-| GET | `/health` | 詳細ヘルスチェック（DB, Redis, S3接続確認） |
-| GET | `/health/live` | Kubernetes liveness probe |
-| GET | `/health/ready` | Kubernetes readiness probe |
-| GET | `/metrics` | Prometheusメトリクス（本番環境では認証必要） |
-
-### テナント管理
-
-| メソッド | パス | 説明 |
-|---------|------|------|
-| GET | `/api/tenants` | テナント一覧取得 |
-| POST | `/api/tenants` | テナント作成 |
-| GET | `/api/tenants/{tenant_id}` | テナント取得 |
-| PUT | `/api/tenants/{tenant_id}` | テナント更新 |
-| DELETE | `/api/tenants/{tenant_id}` | テナント削除 |
-
-### 会話管理・実行
-
-| メソッド | パス | 説明 |
-|---------|------|------|
-| GET | `/api/tenants/{tenant_id}/conversations` | 会話一覧取得 |
-| POST | `/api/tenants/{tenant_id}/conversations` | 会話作成 |
-| GET | `/api/tenants/{tenant_id}/conversations/{id}` | 会話詳細取得 |
-| PUT | `/api/tenants/{tenant_id}/conversations/{id}` | 会話更新 |
-| POST | `/api/tenants/{tenant_id}/conversations/{id}/stream` | ストリーミング実行 |
-| POST | `/api/tenants/{tenant_id}/conversations/{id}/archive` | アーカイブ |
-| GET | `/api/tenants/{tenant_id}/conversations/{id}/messages` | メッセージログ取得 |
-| DELETE | `/api/tenants/{tenant_id}/conversations/{id}` | 会話削除 |
-
-### モデル管理
-
-| メソッド | パス | 説明 |
-|---------|------|------|
-| GET | `/api/models` | モデル一覧取得 |
-| GET | `/api/models/{model_id}` | モデル詳細取得 |
-| POST | `/api/models` | モデル登録 |
-| PUT | `/api/models/{model_id}` | モデル定義更新 |
-| PATCH | `/api/models/{model_id}/status` | ステータス変更 |
-| DELETE | `/api/models/{model_id}` | モデル削除 |
-
-### シンプルチャット
-
-| メソッド | パス | 説明 |
-|---------|------|------|
-| GET | `/api/tenants/{tenant_id}/simple-chats` | チャット一覧取得 |
-| GET | `/api/tenants/{tenant_id}/simple-chats/{id}` | チャット詳細取得 |
-| POST | `/api/tenants/{tenant_id}/simple-chats/stream` | ストリーミング実行 (新規/継続) |
-| POST | `/api/tenants/{tenant_id}/simple-chats/{id}/archive` | アーカイブ |
-| DELETE | `/api/tenants/{tenant_id}/simple-chats/{id}` | 削除 |
-
-### スキル管理
-
-| メソッド | パス | 説明 |
-|---------|------|------|
-| GET | `/api/tenants/{tenant_id}/skills` | Skills一覧取得 |
-| GET | `/api/tenants/{tenant_id}/skills/slash-commands` | スラッシュコマンド一覧 |
-| GET | `/api/tenants/{tenant_id}/skills/{skill_id}` | Skill詳細取得 |
-| POST | `/api/tenants/{tenant_id}/skills` | Skillアップロード |
-| PUT | `/api/tenants/{tenant_id}/skills/{skill_id}` | Skillメタデータ更新 |
-| PUT | `/api/tenants/{tenant_id}/skills/{skill_id}/files` | Skillファイル更新 |
-| GET | `/api/tenants/{tenant_id}/skills/{skill_id}/files` | Skillファイル一覧 |
-| GET | `/api/tenants/{tenant_id}/skills/{skill_id}/files/{path}` | Skillファイル内容取得 |
-| DELETE | `/api/tenants/{tenant_id}/skills/{skill_id}` | Skill削除 |
-
-### MCPサーバー管理
-
-| メソッド | パス | 説明 |
-|---------|------|------|
-| GET | `/api/tenants/{tenant_id}/mcp-servers` | MCPサーバー一覧取得 |
-| GET | `/api/tenants/{tenant_id}/mcp-servers/{server_id}` | MCPサーバー詳細取得 |
-| POST | `/api/tenants/{tenant_id}/mcp-servers` | MCPサーバー登録 |
-| PUT | `/api/tenants/{tenant_id}/mcp-servers/{server_id}` | MCPサーバー更新 |
-| DELETE | `/api/tenants/{tenant_id}/mcp-servers/{server_id}` | MCPサーバー削除 |
-
-### 使用状況・コスト
-
-| メソッド | パス | 説明 |
-|---------|------|------|
-| GET | `/api/tenants/{tenant_id}/usage` | 使用状況取得 |
-| GET | `/api/tenants/{tenant_id}/usage/users/{user_id}` | ユーザー使用状況取得 |
-| GET | `/api/tenants/{tenant_id}/usage/summary` | 使用状況サマリー取得 |
-| GET | `/api/tenants/{tenant_id}/cost-report` | コストレポート取得 |
-| GET | `/api/tenants/{tenant_id}/tool-logs` | ツール実行ログ取得 |
-
-### ワークスペース（ファイル管理）
-
-| メソッド | パス | 説明 |
-|---------|------|------|
-| GET | `/api/tenants/{tenant_id}/conversations/{id}/files` | ファイル一覧取得 |
-| GET | `/api/tenants/{tenant_id}/conversations/{id}/files/download` | ファイルダウンロード |
-| GET | `/api/tenants/{tenant_id}/conversations/{id}/files/presented` | AI作成ファイル一覧 |
-
-### 基本フロー
-
-```
-1. POST /api/tenants - テナントを作成
-2. POST /api/models - モデルを登録
-3. POST /api/tenants/{tenant_id}/conversations - 会話を作成
-4. POST /api/tenants/{tenant_id}/conversations/{conversation_id}/stream - ストリーミング実行
-```
-
-## 主要な概念
-
-### テナント
-
-テナントはマルチテナント環境における組織単位です。テナントごとに以下を設定できます：
-- システムプロンプト（AIの基本的な振る舞い）
-- デフォルトモデル
-
-### 会話
-
-会話はユーザーとAIの対話の単位です。会話には以下が含まれます：
-- 使用するモデル
-- ワークスペースの有効/無効
-- メッセージ履歴
-
-### ワークスペース
-
-会話ごとに独立したファイル空間を提供します。ファイルはAmazon S3に保存されます。
-
-## 環境変数
-
-### 基本設定
-
-| 変数名 | 説明 | デフォルト |
-|--------|------|----------|
-| DATABASE_URL | PostgreSQL接続URL（本番ではデフォルトパスワード禁止） | - |
-| REDIS_URL | Redis接続URL | redis://localhost:6379/0 |
-| REDIS_PASSWORD | Redis認証パスワード（本番では推奨） | - |
-| APP_ENV | 環境（development/production） | development |
-| APP_PORT | アプリケーションポート | 8000 |
-| LOG_LEVEL | ログレベル | INFO |
-| SHUTDOWN_TIMEOUT | グレースフルシャットダウンのタイムアウト（秒） | 30.0 |
-| METRICS_ENABLED | Prometheusメトリクスの有効化 | true |
-
-### AWS設定
-
-| 変数名 | 説明 | デフォルト |
-|--------|------|----------|
-| CLAUDE_CODE_USE_BEDROCK | Bedrock使用フラグ | 1 |
-| AWS_REGION | AWSリージョン | us-west-2 |
-| AWS_ACCESS_KEY_ID | AWSアクセスキー | - |
-| AWS_SECRET_ACCESS_KEY | AWSシークレットキー | - |
-| ANTHROPIC_SONNET_MODEL | Sonnetモデル（メインエージェント用） | global.anthropic.claude-sonnet-4-5-20250929-v1:0 |
-| ANTHROPIC_HAIKU_MODEL | Haikuモデル（サブエージェント用） | global.anthropic.claude-haiku-4-5-20251001-v1:0 |
-| S3_BUCKET_NAME | ワークスペース用S3バケット名 | - |
-
-### コンテナ実行基盤設定
-
-| 変数名 | 説明 | デフォルト |
-|--------|------|----------|
-| CONTAINER_MANAGER_TYPE | コンテナ実行基盤（`docker` / `ecs`） | docker |
-| WARM_POOL_MIN_SIZE | WarmPool最小サイズ（Docker用） | 2 |
-| WARM_POOL_MAX_SIZE | WarmPool最大サイズ（Docker用） | 10 |
-
-### ECS設定（`CONTAINER_MANAGER_TYPE=ecs` 時のみ使用）
-
-| 変数名 | 説明 | デフォルト |
-|--------|------|----------|
-| ECS_CLUSTER | ECSクラスター名 | - |
-| ECS_TASK_DEFINITION | タスク定義名（family名、ARN、family:revision） | - |
-| ECS_SUBNETS | サブネットID（カンマ区切り） | - |
-| ECS_SECURITY_GROUPS | セキュリティグループID（カンマ区切り） | - |
-| ECS_CAPACITY_PROVIDER | キャパシティプロバイダー（EC2モード用、省略でFargate） | - |
-| ECS_AGENT_PORT | workspace-agentのHTTPポート | 9000 |
-| ECS_PROXY_ADMIN_PORT | Proxyサイドカーのadminポート | 8081 |
-| ECS_RUN_TASK_CONCURRENCY | RunTask API同時呼び出し上限 | 10 |
-| ECS_WARM_POOL_MIN_SIZE | WarmPool最小サイズ（ECS用） | 50 |
-| ECS_WARM_POOL_MAX_SIZE | WarmPool最大サイズ（ECS用） | 120 |
-
-### セキュリティ設定
-
-| 変数名 | 説明 | デフォルト |
-|--------|------|----------|
-| API_KEYS | APIキー（カンマ区切り、**本番では必須**） | (空) |
-| RATE_LIMIT_ENABLED | レート制限の有効化 | true |
-| RATE_LIMIT_REQUESTS | ウィンドウあたりのリクエスト数 | 100 |
-| RATE_LIMIT_PERIOD | ウィンドウサイズ（秒） | 60 |
-| CORS_ORIGINS | CORS許可オリジン（カンマ区切り） | http://localhost:3000,http://localhost:3001 |
-| HSTS_ENABLED | HSTSの有効化（HTTPS終端がある環境で有効化） | false |
-
-### 本番環境の必須設定
-
-本番環境（`APP_ENV=production`）では以下の設定が必須です：
-
-- **API_KEYS**: 16文字以上のAPIキーを設定（未設定だと起動時エラー）
-- **DATABASE_URL**: デフォルトパスワード（`aiagent_password`）は使用禁止
-- **REDIS_PASSWORD**: Redis認証の設定を推奨
-
-### AWS IAMポリシー要件
-
-AWS認証情報には **Bedrock**、**S3**、および ECS モード時は **ECS / CloudWatch Logs** の権限が必要です：
+バックエンドのIAMロールに以下の権限が必要です:
 
 ```json
 {
@@ -568,7 +145,8 @@ AWS認証情報には **Bedrock**、**S3**、および ECS モード時は **ECS
       "Effect": "Allow",
       "Action": [
         "bedrock:InvokeModel",
-        "bedrock:InvokeModelWithResponseStream"
+        "bedrock:InvokeModelWithResponseStream",
+        "bedrock-agentcore:InvokeAgentRuntime"
       ],
       "Resource": "*"
     },
@@ -585,34 +163,119 @@ AWS認証情報には **Bedrock**、**S3**、および ECS モード時は **ECS
         "arn:aws:s3:::your-bucket-name",
         "arn:aws:s3:::your-bucket-name/*"
       ]
-    },
-    {
-      "Sid": "ECSMode",
-      "Effect": "Allow",
-      "Action": [
-        "ecs:RunTask",
-        "ecs:StopTask",
-        "ecs:DescribeTasks",
-        "ecs:ListTasks",
-        "iam:PassRole",
-        "logs:GetLogEvents"
-      ],
-      "Resource": "*"
     }
   ]
 }
 ```
 
-## ドキュメント
+### 3. 環境変数
 
-詳細なドキュメントは `docs/` ディレクトリを参照してください：
+```bash
+# 必須
+AGENTCORE_RUNTIME_ARN=arn:aws:bedrock-agentcore:us-west-2:123456789:runtime/xxxx
+DATABASE_URL=postgresql+asyncpg://user:pass@host:5432/dbname
+S3_BUCKET_NAME=your-workspace-bucket
+API_KEYS=your-secure-api-key
+AWS_REGION=us-west-2
+
+# オプション
+APP_ENV=production
+LOG_LEVEL=WARNING
+```
+
+## ローカル開発
+
+### Docker Compose（推奨）
+
+```bash
+# 1. 環境変数を設定
+cp .env.example .env
+# .env を編集: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, S3_BUCKET_NAME, AGENTCORE_RUNTIME_ARN
+
+# 2. バックエンドを起動
+docker-compose up -d --build
+
+# 3. 起動確認
+curl http://localhost:8000/health
+```
+
+DBマイグレーションはコンテナ起動時に自動実行されます。
+
+### ローカル開発（Dockerなし）
+
+```bash
+# 仮想環境を作成
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+# PostgreSQLを起動（別途必要）
+
+# アプリケーション起動
+uvicorn app.main:app --reload
+```
+
+## セキュリティ
+
+### 認証
+
+```bash
+# X-API-Key ヘッダー
+curl -H "X-API-Key: your-api-key" http://localhost:8000/api/tenants
+
+# Authorization ヘッダー
+curl -H "Authorization: Bearer your-api-key" http://localhost:8000/api/tenants
+```
+
+### 識別ヘッダー
+
+```bash
+# AI実行系API（一般ユーザー向け）
+curl -H "X-API-Key: key" -H "X-Tenant-ID: tenant-123" -H "X-User-ID: user-456" \
+  http://localhost:8000/api/tenants/xxx/conversations
+
+# 管理系API（管理者向け）
+curl -H "X-API-Key: key" -H "X-Admin-ID: admin-789" \
+  http://localhost:8000/api/tenants
+```
+
+## API概要
+
+### ヘルスチェック
+
+| メソッド | パス | 説明 |
+|---------|------|------|
+| GET | `/health` | 詳細ヘルスチェック（DB, S3接続確認） |
+| GET | `/health/live` | Liveness probe |
+| GET | `/health/ready` | Readiness probe |
+| GET | `/metrics` | Prometheusメトリクス |
+
+### 主要エンドポイント
+
+| メソッド | パス | 説明 |
+|---------|------|------|
+| POST | `/api/tenants` | テナント作成 |
+| POST | `/api/tenants/{id}/conversations` | 会話作成 |
+| POST | `/api/tenants/{id}/conversations/{cid}/stream` | ストリーミング実行 |
+| GET | `/api/tenants/{id}/conversations` | 会話一覧 |
+| POST | `/api/tenants/{id}/skills` | Skillアップロード |
+| POST | `/api/tenants/{id}/mcp-servers` | MCPサーバー登録 |
+| GET | `/api/tenants/{id}/usage` | 使用状況取得 |
+
+### 基本フロー
+
+```
+1. POST /api/tenants              → テナントを作成
+2. POST /api/models               → モデルを登録
+3. POST /api/tenants/{id}/conversations  → 会話を作成
+4. POST /api/tenants/{id}/conversations/{cid}/stream → ストリーミング実行
+```
+
+## ドキュメント
 
 - [API仕様書](docs/api-specification/) - エンドポイントの詳細仕様
 - [使い方ガイド](docs/usage-guide.md) - 基本的な使い方
-- [ECSアーキテクチャ設計書](docs/ecs-architecture.md) - AWS ECS移行の設計・構成・運用
-- [デプロイメント設定](docs/deployment-guide.md) - コンテナセキュリティ、S3ライフサイクル
-- [セキュリティ設定](docs/operations/security-config-guide.md) - 認証、レート制限、セキュリティヘッダー
-- [監視ガイド](docs/operations/monitoring-guide.md) - メトリクス、アラート
+- [Skills・MCPセットアップ](docs/container-skills-mcp-setup.md) - Skills/MCPサーバーの設定
 
 ## ライセンス
 

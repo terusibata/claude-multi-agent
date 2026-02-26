@@ -1,17 +1,15 @@
 """
 MCP設定構築サービス
 
-テナントのMCPサーバー設定を構築し、コンテナ用にプロキシ経由の設定に変換する。
-セキュリティ上、認証トークンはプロキシ側に保持しコンテナには渡さない。
+テナントのMCPサーバー設定を構築する。
+AgentCore移行後はプロキシ経由ではなく、ヘッダー付きでコンテナに直接渡す。
+Firecracker隔離により、トークンがコンテナ内に存在しても安全。
 """
 import re
 
 import structlog
 
-from app.config import get_settings
-from app.services.container.orchestrator import ContainerOrchestrator
 from app.services.mcp_server_service import McpServerService
-from app.services.proxy.credential_proxy import McpHeaderRule
 from app.schemas.execute import ExecuteRequest
 
 logger = structlog.get_logger(__name__)
@@ -23,14 +21,15 @@ class McpConfigBuilder:
     def __init__(
         self,
         mcp_server_service: McpServerService,
-        orchestrator: ContainerOrchestrator,
     ):
         self._mcp_server_service = mcp_server_service
-        self._orchestrator = orchestrator
-        self._proxy_port = get_settings().proxy_port
 
     async def build_mcp_server_configs(self, request: ExecuteRequest) -> list[dict]:
-        """テナントのアクティブ MCP サーバー設定をシリアライズしてコンテナに渡す形式に変換"""
+        """テナントのアクティブ MCP サーバー設定をシリアライズしてコンテナに渡す形式に変換
+
+        AgentCore移行後: resolve_headers() 後のヘッダをそのまま含めて返却。
+        プロキシ経由への書き換えは不要（Firecracker隔離で安全）。
+        """
         try:
             mcp_servers, _ = await self._mcp_server_service.get_all_by_tenant(
                 request.tenant_id, status="active"
@@ -71,65 +70,6 @@ class McpConfigBuilder:
             else:
                 resolved[key] = value
         return resolved
-
-    async def extract_mcp_headers_to_proxy(
-        self,
-        mcp_server_configs: list[dict],
-        container_id: str,
-    ) -> list[dict]:
-        """MCPサーバー設定からヘッダーを抽出してプロキシに登録し、コンテナ用設定を返す
-
-        トークンを含むヘッダーはプロキシ側に保持し、コンテナには渡さない。
-        コンテナに渡すMCP設定ではbase_urlをプロキシローカルに書き換える。
-
-        Args:
-            mcp_server_configs: ヘッダー解決済みのMCPサーバー設定リスト
-            container_id: コンテナID（プロキシルール登録用）
-
-        Returns:
-            コンテナ用MCPサーバー設定リスト（ヘッダーなし、base_urlはプロキシローカル）
-        """
-        if not mcp_server_configs:
-            return []
-
-        # プロキシに登録するMCPヘッダールールを構築
-        proxy_rules: dict[str, McpHeaderRule] = {}
-        container_configs: list[dict] = []
-
-        for config in mcp_server_configs:
-            server_name = config["server_name"]
-            original_base_url = config.get("base_url", "")
-            headers = config.get("headers", {})
-
-            if original_base_url:
-                # プロキシルールに登録（ヘッダー有無問わずプロキシ経由に統一）
-                proxy_rules[server_name] = McpHeaderRule(
-                    real_base_url=original_base_url,
-                    headers=headers,
-                )
-                # コンテナ用設定: base_urlをプロキシローカルに書き換え、ヘッダーなし
-                container_configs.append(
-                    {
-                        "server_name": server_name,
-                        "openapi_spec": config["openapi_spec"],
-                        "base_url": f"http://127.0.0.1:{self._proxy_port}/mcp/{server_name}",
-                    }
-                )
-            else:
-                # base_url なし（無効な設定）→ そのまま渡す
-                container_configs.append(
-                    {
-                        "server_name": server_name,
-                        "openapi_spec": config["openapi_spec"],
-                        "base_url": "",
-                    }
-                )
-
-        # プロキシにMCPヘッダールールを登録
-        if proxy_rules:
-            await self._orchestrator.update_mcp_header_rules(container_id, proxy_rules)
-
-        return container_configs
 
     @staticmethod
     def compute_allowed_tools(

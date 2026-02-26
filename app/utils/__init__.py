@@ -6,6 +6,5 @@
   - app.utils.exceptions: アプリケーション例外クラス
   - app.utils.error_handler: API層エラーハンドリング
   - app.utils.security: セキュリティバリデーション
-  - app.utils.tool_summary: ツール実行結果サマリー生成
   - app.utils.timezone: タイムゾーンユーティリティ
 """

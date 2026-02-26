@@ -16,10 +16,7 @@ psycopg2-binary==2.9.11
 pydantic==2.12.5
 pydantic-settings==2.12.0
 
-# Claude Agent SDK
-claude-agent-sdk==0.1.23
-
-# AWS SDK
+# AWS SDK（boto3 >= 1.39.8 で bedrock-agentcore サービスをサポート）
 boto3==1.42.27
 botocore==1.42.27
 
@@ -37,15 +34,5 @@ python-pptx==0.6.0
 pymupdf==1.24.0
 Pillow==10.0.0
 
-# Redis
-redis==5.2.1
-
 # ロギング
 structlog==25.5.0
-
-# HTTPクライアント
-httpx==0.28.1
-
-# コンテナオーケストレーション
-aiodocker==0.23.0
-aiobotocore>=2.12.0

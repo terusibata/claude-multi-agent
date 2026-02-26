@@ -75,6 +75,7 @@ class ConversationService:
         conversation_id: str,
         tenant_id: str,
         session_id: str | None = None,
+        agentcore_session_id: str | None = None,
         title: str | None = None,
         status: str | None = None,
         workspace_enabled: bool | None = None,
@@ -87,6 +88,8 @@ class ConversationService:
 
         if session_id is not None:
             conversation.session_id = session_id
+        if agentcore_session_id is not None:
+            conversation.agentcore_session_id = agentcore_session_id
         if title is not None:
             conversation.title = title
         if status is not None:

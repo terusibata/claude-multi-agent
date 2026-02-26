@@ -1,9 +1,10 @@
-"""初期スキーマ作成
+"""初期スキーマ作成（統合版）
 
 Revision ID: 0001
 Revises:
-Create Date: 2025-01-08
+Create Date: 2025-02-25
 
+全テーブルを一括作成する統合マイグレーション。
 """
 from typing import Sequence, Union
 
@@ -33,6 +34,10 @@ def upgrade() -> None:
         sa.Column('cache_creation_5m_price', sa.DECIMAL(10, 6), nullable=False, server_default='0'),
         sa.Column('cache_creation_1h_price', sa.DECIMAL(10, 6), nullable=False, server_default='0'),
         sa.Column('cache_read_price', sa.DECIMAL(10, 6), nullable=False, server_default='0'),
+        sa.Column('context_window', sa.Integer(), nullable=False, server_default='200000'),
+        sa.Column('max_output_tokens', sa.Integer(), nullable=False, server_default='64000'),
+        sa.Column('supports_extended_context', sa.Boolean(), nullable=False, server_default='false'),
+        sa.Column('extended_context_window', sa.Integer(), nullable=True),
         sa.Column('status', sa.String(20), nullable=False, server_default='active'),
         sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.func.now(), onupdate=sa.func.now()),
@@ -72,7 +77,7 @@ def upgrade() -> None:
     )
 
     # ===========================================
-    # MCPサーバーテーブル
+    # MCPサーバーテーブル（OpenAPIタイプのみ）
     # ===========================================
     op.create_table(
         'mcp_servers',
@@ -80,14 +85,9 @@ def upgrade() -> None:
         sa.Column('tenant_id', sa.String(100), sa.ForeignKey('tenants.tenant_id'), nullable=False, index=True),
         sa.Column('name', sa.String(200), nullable=False),
         sa.Column('display_name', sa.String(300), nullable=True),
-        sa.Column('type', sa.String(20), nullable=False),
-        sa.Column('url', sa.String(500), nullable=True),
-        sa.Column('command', sa.String(500), nullable=True),
-        sa.Column('args', postgresql.JSON, nullable=True),
         sa.Column('env', postgresql.JSON, nullable=True),
         sa.Column('headers_template', postgresql.JSON, nullable=True),
         sa.Column('allowed_tools', postgresql.JSON, nullable=True),
-        sa.Column('tools', postgresql.JSON, nullable=True),
         sa.Column('description', sa.Text, nullable=True),
         sa.Column('openapi_spec', postgresql.JSON, nullable=True),
         sa.Column('openapi_base_url', sa.String(500), nullable=True),
@@ -103,6 +103,7 @@ def upgrade() -> None:
         'conversations',
         sa.Column('conversation_id', postgresql.UUID(as_uuid=False), primary_key=True),
         sa.Column('session_id', sa.String(200), nullable=True),
+        sa.Column('agentcore_session_id', sa.String(200), nullable=True),
         sa.Column('tenant_id', sa.String(100), sa.ForeignKey('tenants.tenant_id'), nullable=False, index=True),
         sa.Column('user_id', sa.String(100), nullable=False, index=True),
         sa.Column('model_id', sa.String(100), sa.ForeignKey('models.model_id'), nullable=False),
@@ -111,6 +112,10 @@ def upgrade() -> None:
         sa.Column('workspace_enabled', sa.Boolean, nullable=False, server_default='false'),
         sa.Column('workspace_path', sa.String(500), nullable=True),
         sa.Column('workspace_created_at', sa.DateTime(timezone=True), nullable=True),
+        sa.Column('total_input_tokens', sa.Integer(), nullable=False, server_default='0'),
+        sa.Column('total_output_tokens', sa.Integer(), nullable=False, server_default='0'),
+        sa.Column('estimated_context_tokens', sa.Integer(), nullable=False, server_default='0'),
+        sa.Column('context_limit_reached', sa.Boolean(), nullable=False, server_default='false'),
         sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.func.now(), onupdate=sa.func.now()),
     )
@@ -124,6 +129,7 @@ def upgrade() -> None:
         sa.Column('conversation_id', postgresql.UUID(as_uuid=False), sa.ForeignKey('conversations.conversation_id', ondelete='CASCADE'), nullable=False, index=True),
         sa.Column('file_path', sa.String(1000), nullable=False),
         sa.Column('original_name', sa.String(500), nullable=False),
+        sa.Column('original_relative_path', sa.String(1000), nullable=True),
         sa.Column('file_size', sa.BigInteger, nullable=False, server_default='0'),
         sa.Column('mime_type', sa.String(200), nullable=True),
         sa.Column('version', sa.Integer, nullable=False, server_default='1'),
@@ -161,6 +167,7 @@ def upgrade() -> None:
         sa.Column('model_id', sa.String(100), sa.ForeignKey('models.model_id'), nullable=False),
         sa.Column('session_id', sa.String(200), nullable=True),
         sa.Column('conversation_id', postgresql.UUID(as_uuid=False), sa.ForeignKey('conversations.conversation_id'), nullable=True),
+        sa.Column('simple_chat_id', postgresql.UUID(as_uuid=False), nullable=True),
         sa.Column('input_tokens', sa.Integer, nullable=False, server_default='0'),
         sa.Column('output_tokens', sa.Integer, nullable=False, server_default='0'),
         sa.Column('cache_creation_5m_tokens', sa.Integer, nullable=False, server_default='0'),
@@ -169,6 +176,36 @@ def upgrade() -> None:
         sa.Column('total_tokens', sa.Integer, nullable=False, server_default='0'),
         sa.Column('cost_usd', sa.DECIMAL(10, 6), nullable=False, server_default='0'),
         sa.Column('executed_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
+    )
+
+    # ===========================================
+    # シンプルチャットテーブル
+    # ===========================================
+    op.create_table(
+        'simple_chats',
+        sa.Column('chat_id', postgresql.UUID(as_uuid=False), primary_key=True),
+        sa.Column('tenant_id', sa.String(100), sa.ForeignKey('tenants.tenant_id'), nullable=False, index=True),
+        sa.Column('user_id', sa.String(100), nullable=False, index=True),
+        sa.Column('model_id', sa.String(100), sa.ForeignKey('models.model_id'), nullable=False),
+        sa.Column('application_type', sa.String(100), nullable=False),
+        sa.Column('system_prompt', sa.Text, nullable=False),
+        sa.Column('title', sa.String(500), nullable=True),
+        sa.Column('status', sa.String(20), nullable=False, server_default='active'),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.func.now(), onupdate=sa.func.now()),
+    )
+
+    # ===========================================
+    # シンプルチャットメッセージテーブル
+    # ===========================================
+    op.create_table(
+        'simple_chat_messages',
+        sa.Column('message_id', postgresql.UUID(as_uuid=False), primary_key=True),
+        sa.Column('chat_id', postgresql.UUID(as_uuid=False), sa.ForeignKey('simple_chats.chat_id', ondelete='CASCADE'), nullable=False, index=True),
+        sa.Column('message_seq', sa.Integer, nullable=False),
+        sa.Column('role', sa.String(20), nullable=False),
+        sa.Column('content', sa.Text, nullable=False),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
     )
 
     # ===========================================
@@ -196,10 +233,18 @@ def upgrade() -> None:
     op.create_index('ix_conversations_created_at', 'conversations', ['created_at'])
     op.create_index('ix_usage_logs_tenant_executed', 'usage_logs', ['tenant_id', 'executed_at'])
     op.create_index('ix_tool_logs_executed_at', 'tool_execution_logs', ['executed_at'])
+    op.create_index('ix_simple_chats_tenant_user', 'simple_chats', ['tenant_id', 'user_id'])
+    op.create_index('ix_simple_chats_created_at', 'simple_chats', ['created_at'])
+    op.create_index('ix_simple_chats_application_type', 'simple_chats', ['application_type'])
+    op.create_index('ix_simple_chat_messages_chat_seq', 'simple_chat_messages', ['chat_id', 'message_seq'])
 
 
 def downgrade() -> None:
     # インデックス削除
+    op.drop_index('ix_simple_chat_messages_chat_seq')
+    op.drop_index('ix_simple_chats_application_type')
+    op.drop_index('ix_simple_chats_created_at')
+    op.drop_index('ix_simple_chats_tenant_user')
     op.drop_index('ix_tool_logs_executed_at')
     op.drop_index('ix_usage_logs_tenant_executed')
     op.drop_index('ix_conversations_created_at')
@@ -208,6 +253,8 @@ def downgrade() -> None:
 
     # テーブル削除（依存関係の順序で）
     op.drop_table('tool_execution_logs')
+    op.drop_table('simple_chat_messages')
+    op.drop_table('simple_chats')
     op.drop_table('usage_logs')
     op.drop_table('messages_log')
     op.drop_table('conversation_files')

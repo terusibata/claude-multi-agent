@@ -23,9 +23,9 @@
 
 - **フレームワーク**: FastAPI (Python)
 - **データベース**: PostgreSQL (非同期SQLAlchemy)
-- **キャッシュ**: Redis
 - **ストレージ**: AWS S3
 - **LLM**: AWS Bedrock (Claude)
+- **コンテナ実行**: Amazon Bedrock AgentCore Runtime
 - **ストリーミング**: Server-Sent Events (SSE)
 
 ---

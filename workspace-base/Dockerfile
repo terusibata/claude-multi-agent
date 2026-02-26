@@ -1,10 +1,10 @@
-FROM python:3.11-slim AS workspace-base
+FROM --platform=linux/arm64 python:3.13-slim AS workspace-base
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl git build-essential libffi-dev socat && rm -rf /var/lib/apt/lists/*
+    curl git build-essential libffi-dev && rm -rf /var/lib/apt/lists/*
 
-# Node.js 20 (SDK CLIのサブプロセスで使用)
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+# Node.js 24 LTS (SDK CLIのサブプロセスで使用)
+RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
     && apt-get install -y nodejs && rm -rf /var/lib/apt/lists/*
 
 RUN python -m venv /opt/venv
@@ -21,28 +21,16 @@ COPY workspace_agent/ /opt/workspace_agent/
 # PYTHONPATH: /opt配下のworkspace_agentモジュールをインポート可能にする
 ENV PYTHONPATH="/opt:$PYTHONPATH"
 
-# エントリポイントスクリプト
-COPY workspace-base/entrypoint.sh /opt/entrypoint.sh
-RUN chmod +x /opt/entrypoint.sh
-
-# /var/run/ws を事前作成（手動テスト用の安全策。本番ではBind mountで上書きされる）
-RUN mkdir -p /var/run/ws
-
-RUN useradd -m -u 1000 appuser && mkdir -p /workspace && chown appuser:appuser /workspace \
-    && chown appuser:appuser /var/run/ws
+RUN useradd -m -u 1000 appuser && mkdir -p /workspace && chown appuser:appuser /workspace
 USER appuser
 WORKDIR /workspace
 
-# デフォルトリスンモード（Docker=uds, ECS=http に環境変数で切替）
-ENV AGENT_LISTEN_MODE="uds" AGENT_HTTP_PORT="9000"
+# ランタイムディレクトリ作成
+RUN mkdir -p /home/appuser/.claude /tmp/claude-1000
 
-# HEALTHCHECKはリスンモードで条件分岐
-# UDSモード: agent.sock 経由, HTTPモード: TCP直接
+EXPOSE 8080
+
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-  CMD if [ "$AGENT_LISTEN_MODE" = "http" ]; then \
-        curl -sf http://localhost:${AGENT_HTTP_PORT}/health || exit 1; \
-      else \
-        curl -sf --unix-socket /var/run/ws/agent.sock http://localhost/health || exit 1; \
-      fi
+  CMD curl -sf http://localhost:8080/ping || exit 1
 
-ENTRYPOINT ["/opt/entrypoint.sh"]
+CMD ["python", "-m", "workspace_agent.main"]

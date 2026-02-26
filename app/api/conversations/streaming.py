@@ -12,13 +12,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 from sse_starlette.sse import EventSourceResponse
 
-from app.api.dependencies import get_active_tenant, get_model_with_fallback, get_orchestrator
+from app.api.dependencies import get_active_tenant, get_model_with_fallback, get_agentcore_client
 from app.config import get_settings
 from app.database import get_db
 from app.models.model import Model
 from app.models.tenant import Tenant
 from app.schemas.execute import ExecuteRequest, StreamRequest
-from app.services.container.orchestrator import ContainerOrchestrator
+from app.services.agentcore_client import AgentCoreClient
 from app.services.conversation_service import ConversationService
 from app.services.execute_service import ExecuteService
 from app.services.workspace_service import WorkspaceService
@@ -36,10 +36,10 @@ async def _background_execution(
     tenant: Tenant,
     model: Model,
     event_queue: asyncio.Queue,
-    orchestrator: ContainerOrchestrator,
+    agentcore_client: AgentCoreClient,
 ) -> None:
     """
-    バックグラウンドでコンテナ隔離エージェントを実行し、イベントをキューに送信。
+    バックグラウンドでAgentCore Runtime経由でエージェントを実行し、イベントをキューに送信。
     独立したDBセッションを使用する。
     """
     # 循環インポート回避のため遅延インポート
@@ -47,7 +47,7 @@ async def _background_execution(
 
     async with async_session_maker() as db:
         try:
-            execute_service = ExecuteService(db, orchestrator)
+            execute_service = ExecuteService(db, agentcore_client)
             async for event in execute_service.execute_streaming(
                 request=request,
                 tenant=tenant,
@@ -76,15 +76,10 @@ async def _event_generator(
     request: ExecuteRequest,
     tenant: Tenant,
     model: Model,
-    orchestrator: ContainerOrchestrator,
+    agentcore_client: AgentCoreClient,
 ) -> AsyncIterator[dict]:
     """
-    SSEイベントジェネレータ（コンテナ隔離版）
-
-    タイムアウト階層:
-      container_execution_timeout (600s) - httpx絶対タイムアウト（先に発火）
-        < event_timeout (720s)           - SSEアイドルタイムアウト（安全ネット）
-          < Lock TTL (900s)              - 分散ロック自動失効（最終安全ネット）
+    SSEイベントジェネレータ（AgentCore Runtime版）
 
     クライアント切断 vs アイドルタイムアウトの動作差異:
       - CancelledError（ブラウザ閉じ）→ バックグラウンド継続（結果保存のため）
@@ -98,7 +93,7 @@ async def _event_generator(
     last_event_time = start_time
 
     background_task = asyncio.create_task(
-        _background_execution(request, tenant, model, event_queue, orchestrator)
+        _background_execution(request, tenant, model, event_queue, agentcore_client)
     )
 
     try:
@@ -142,9 +137,6 @@ async def _event_generator(
                     break
 
                 # アイドルタイムアウト判定
-                # 通常は container_execution_timeout (httpx) が先に発火し、
-                # エラーイベントがキュー経由で届くため、ここには到達しない。
-                # ここに到達するのは後処理スタック等の異常時のみ。
                 time_since_last_event = current_time - last_event_time
                 if time_since_last_event >= event_timeout_seconds:
                     logger.error(
@@ -153,10 +145,6 @@ async def _event_generator(
                         event_timeout=event_timeout_seconds,
                         conversation_id=request.conversation_id,
                     )
-                    # アイドルタイムアウト: バックグラウンドタスクをキャンセルして
-                    # リソース（コンテナ、ロック、DB接続）を即座に解放する。
-                    # ※ CancelledError（ブラウザ閉じ）とは異なり、ここでは
-                    #   明らかにスタックしているためキャンセルが正しい。
                     background_task.cancel()
                     try:
                         await background_task
@@ -174,9 +162,7 @@ async def _event_generator(
                 continue
 
     except asyncio.CancelledError:
-        # クライアント切断（ブラウザ閉じ/ネットワーク断）:
-        # バックグラウンドタスクはキャンセルせず継続させる。
-        # ExecuteService が DB記録・ファイル同期・ロック解放を最後まで完了する。
+        # クライアント切断: バックグラウンドタスクは継続
         logger.info(
             "クライアント切断（バックグラウンド実行は継続）",
             conversation_id=request.conversation_id,
@@ -213,7 +199,7 @@ async def stream_conversation(
     ),
     tenant: Tenant = Depends(get_active_tenant),
     db: AsyncSession = Depends(get_db),
-    orchestrator: ContainerOrchestrator = Depends(get_orchestrator),
+    agentcore_client: AgentCoreClient = Depends(get_agentcore_client),
 ):
     """
     既存の会話でストリーミング実行を開始します（ファイル添付対応）。
@@ -284,7 +270,7 @@ async def stream_conversation(
             request=execute_request,
             tenant=tenant,
             model=model,
-            orchestrator=orchestrator,
+            agentcore_client=agentcore_client,
         ),
         media_type="text/event-stream",
     )

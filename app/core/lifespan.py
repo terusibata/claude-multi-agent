@@ -2,23 +2,18 @@
 アプリケーションライフサイクル管理
 起動時・終了時の処理を定義
 
-CONTAINER_MANAGER_TYPE 環境変数で docker / ecs を切替。
+AgentCore Runtime 版: エージェント実行は AgentCore に委任。
 """
 import asyncio
 from contextlib import asynccontextmanager
 
 import structlog
 from fastapi import FastAPI
-from redis.asyncio import Redis
 
 from app.config import get_settings
 from app.database import close_db
-from app.infrastructure.redis import close_redis_pool, get_redis_pool
 from app.infrastructure.shutdown import get_shutdown_manager
-from app.services.container.base import ContainerManagerBase
-from app.services.container.gc import ContainerGarbageCollector
-from app.services.container.orchestrator import ContainerOrchestrator
-from app.services.container.warm_pool import WarmPoolManager
+from app.services.agentcore_client import AgentCoreClient
 
 logger = structlog.get_logger(__name__)
 
@@ -103,98 +98,6 @@ async def _recover_skills_from_s3(settings) -> None:
         )
 
 
-def _create_container_manager(settings, redis: Redis) -> tuple[ContainerManagerBase, object | None]:
-    """container_manager_type に応じたマネージャーを生成
-
-    Returns:
-        (lifecycle, docker_client) — ECSモードでは docker_client=None
-    """
-    if settings.container_manager_type == "ecs":
-        # ECSモード必須設定の検証
-        missing = []
-        if not settings.ecs_cluster:
-            missing.append("ECS_CLUSTER")
-        if not settings.ecs_task_definition:
-            missing.append("ECS_TASK_DEFINITION")
-        if not settings.ecs_subnets:
-            missing.append("ECS_SUBNETS")
-        if missing:
-            raise ValueError(
-                f"ECSモードには以下の設定が必須です: {', '.join(missing)}"
-            )
-
-        from app.services.container.ecs_manager import EcsContainerManager
-        lifecycle = EcsContainerManager(redis)
-        logger.info(
-            "ECSコンテナマネージャー初期化完了",
-            cluster=settings.ecs_cluster,
-            task_definition=settings.ecs_task_definition,
-        )
-        return lifecycle, None
-    else:
-        import aiodocker
-        from app.services.container.lifecycle import DockerContainerManager
-        docker_client = aiodocker.Docker(url=settings.docker_socket_path)
-        lifecycle = DockerContainerManager(docker_client)
-        logger.info("Dockerコンテナマネージャー初期化完了", socket=settings.docker_socket_path)
-        return lifecycle, docker_client
-
-
-async def _init_container_stack(app: FastAPI, settings) -> tuple:
-    """
-    コンテナ隔離スタックを初期化
-
-    Returns:
-        (docker_client, redis, orchestrator, gc)
-        ※ ECSモードでは docker_client=None
-    """
-    redis_pool = await get_redis_pool()
-    redis = Redis(connection_pool=redis_pool)
-
-    lifecycle, docker_client = _create_container_manager(settings, redis)
-
-    warm_pool = WarmPoolManager(lifecycle, redis)
-    orchestrator = ContainerOrchestrator(lifecycle, warm_pool, redis)
-
-    # アプリケーション状態に保存（APIエンドポイントから参照）
-    app.state.orchestrator = orchestrator
-    app.state.docker_client = docker_client
-
-    # GC（ガベージコレクター）- Proxy停止コールバックを渡す（BUG-12修正）
-    gc = ContainerGarbageCollector(
-        lifecycle,
-        redis,
-        proxy_stop_callback=orchestrator.stop_proxy,
-    )
-    app.state.gc = gc
-
-    # WarmPoolプリヒート
-    try:
-        created = await warm_pool.preheat()
-        pool_size = await warm_pool.get_pool_size()
-        logger.info("WarmPoolプリヒート完了", pool_size=pool_size, created=created)
-    except Exception as e:
-        logger.error("WarmPoolプリヒートエラー", error=str(e))
-
-    # GCループ開始
-    try:
-        await gc.start(interval=settings.container_gc_interval)
-        logger.info("コンテナGC開始", interval=settings.container_gc_interval)
-    except Exception as e:
-        logger.error("GC開始エラー", error=str(e))
-
-    manager_type = settings.container_manager_type
-    logger.info(
-        "コンテナ隔離スタック初期化完了",
-        manager_type=manager_type,
-        warm_pool_min=settings.ecs_warm_pool_min_size if manager_type == "ecs" else settings.warm_pool_min_size,
-        warm_pool_max=settings.ecs_warm_pool_max_size if manager_type == "ecs" else settings.warm_pool_max_size,
-        container_image=settings.container_image,
-    )
-
-    return docker_client, redis, orchestrator, gc
-
-
 def _log_security_status(settings) -> None:
     """セキュリティ設定のログ出力"""
     if settings.api_keys_list:
@@ -205,70 +108,8 @@ def _log_security_status(settings) -> None:
             reason="API_KEYSが設定されていません",
         )
 
-    if settings.rate_limit_enabled:
-        logger.info(
-            "レート制限が有効化されています",
-            requests=settings.rate_limit_requests,
-            period=settings.rate_limit_period,
-        )
-
     if settings.metrics_enabled:
         logger.info("メトリクス収集が有効化されています")
-
-
-async def _shutdown_container_stack(
-    docker_client, redis, orchestrator, gc
-) -> None:
-    """コンテナスタックのシャットダウン"""
-    # GC停止
-    try:
-        await gc.stop()
-        logger.info("コンテナGC停止完了")
-    except Exception as e:
-        logger.error("GC停止エラー", error=str(e))
-
-    # 全コンテナ破棄
-    try:
-        await orchestrator.destroy_all()
-        logger.info("全コンテナ破棄完了")
-    except Exception as e:
-        logger.error("コンテナ破棄エラー", error=str(e))
-
-    # Dockerクライアントクローズ（Docker モードのみ）
-    if docker_client is not None:
-        try:
-            await docker_client.close()
-            logger.info("Dockerクライアントクローズ完了")
-        except Exception as e:
-            logger.error("Dockerクライアントクローズエラー", error=str(e))
-
-    # ECSクライアントクローズ
-    lifecycle = orchestrator.lifecycle
-    if hasattr(lifecycle, "close"):
-        try:
-            await lifecycle.close()
-            logger.info("ECSクライアントクローズ完了")
-        except Exception as e:
-            logger.error("ECSクライアントクローズエラー", error=str(e))
-
-    # Redisクライアントクローズ
-    try:
-        await redis.aclose()
-    except Exception:
-        logger.debug("シャットダウンクリーンアップ失敗", exc_info=True)
-
-
-async def _shutdown_resources() -> None:
-    """共通リソースのシャットダウン"""
-    try:
-        await close_db()
-    except Exception as e:
-        logger.error("DBクローズエラー", error=str(e))
-
-    try:
-        await close_redis_pool()
-    except Exception as e:
-        logger.error("Redisクローズエラー", error=str(e))
 
 
 @asynccontextmanager
@@ -276,12 +117,9 @@ async def lifespan(app: FastAPI):
     """
     アプリケーションのライフサイクル管理
 
-    コンテナ隔離アーキテクチャ:
-      - CONTAINER_MANAGER_TYPE=docker → aiodocker + DockerContainerManager
-      - CONTAINER_MANAGER_TYPE=ecs → aiobotocore + EcsContainerManager
-      - WarmPoolManager（プレウォーム済みコンテナプール）
-      - ContainerOrchestrator（会話→コンテナマッピング）
-      - ContainerGarbageCollector（TTL超過コンテナ回収）
+    AgentCore Runtime アーキテクチャ:
+      - AgentCoreClient (boto3) で invoke_agent_runtime を呼び出し
+      - エージェント実行は AgentCore Runtime に委任
     """
     from app import __version__
 
@@ -292,7 +130,6 @@ async def lifespan(app: FastAPI):
         "アプリケーション起動中...",
         version=__version__,
         environment=settings.app_env,
-        container_manager_type=settings.container_manager_type,
     )
 
     # シグナルハンドラーを設定
@@ -302,9 +139,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("シグナルハンドラー設定エラー", error=str(e))
 
-    # コンテナ隔離スタック初期化
-    docker_client, redis, orchestrator, gc = await _init_container_stack(
-        app, settings
+    # AgentCore クライアント初期化
+    agentcore_client = AgentCoreClient()
+    app.state.agentcore_client = agentcore_client
+
+    logger.info(
+        "AgentCoreクライアント初期化完了",
+        runtime_arn=settings.agentcore_runtime_arn or "(未設定)",
     )
 
     _log_security_status(settings)
@@ -324,7 +165,10 @@ async def lifespan(app: FastAPI):
     logger.info("アプリケーション終了中...")
 
     await shutdown_manager.graceful_shutdown()
-    await _shutdown_container_stack(docker_client, redis, orchestrator, gc)
-    await _shutdown_resources()
+
+    try:
+        await close_db()
+    except Exception as e:
+        logger.error("DBクローズエラー", error=str(e))
 
     logger.info("アプリケーション終了完了")

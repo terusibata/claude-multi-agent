@@ -1,7 +1,7 @@
 """
 ヘルスチェックエンドポイント
 
-Kubernetes/ECS対応のヘルスチェック実装
+AgentCore Runtime対応のヘルスチェック実装
 """
 from datetime import datetime, timezone
 from enum import Enum
@@ -15,7 +15,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import __version__
 from app.config import get_settings
 from app.database import get_db
-from app.infrastructure.redis import check_redis_health
 
 logger = structlog.get_logger(__name__)
 
@@ -67,26 +66,6 @@ async def check_database_health(db: AsyncSession) -> ComponentHealth:
         )
 
 
-async def check_redis_component_health() -> ComponentHealth:
-    """Redisヘルスチェック"""
-    import time
-    start = time.perf_counter()
-
-    healthy, error, _latency = await check_redis_health()
-    latency = (time.perf_counter() - start) * 1000
-
-    if healthy:
-        return ComponentHealth(
-            status=HealthStatus.HEALTHY,
-            latency_ms=round(latency, 2),
-        )
-    else:
-        return ComponentHealth(
-            status=HealthStatus.UNHEALTHY,
-            message=error,
-        )
-
-
 async def check_s3_health() -> ComponentHealth:
     """S3ヘルスチェック"""
     import time
@@ -122,48 +101,6 @@ async def check_s3_health() -> ComponentHealth:
         return ComponentHealth(
             status=HealthStatus.UNHEALTHY,
             message=str(e),
-        )
-
-
-async def check_container_system_health() -> ComponentHealth:
-    """コンテナ隔離システムのヘルスチェック"""
-    import time
-
-    start = time.perf_counter()
-
-    try:
-        from app.main import app as main_app
-
-        orchestrator = getattr(main_app.state, "orchestrator", None)
-        if orchestrator is None:
-            return ComponentHealth(
-                status=HealthStatus.UNHEALTHY,
-                message="Orchestrator未初期化",
-            )
-
-        # WarmPoolサイズ確認
-        pool_size = await orchestrator.warm_pool.get_pool_size()
-        latency = (time.perf_counter() - start) * 1000
-
-        if pool_size == 0:
-            return ComponentHealth(
-                status=HealthStatus.DEGRADED,
-                message=f"WarmPool空（補充中の可能性あり）",
-                latency_ms=round(latency, 2),
-            )
-
-        return ComponentHealth(
-            status=HealthStatus.HEALTHY,
-            message=f"WarmPool: {pool_size}コンテナ待機中",
-            latency_ms=round(latency, 2),
-        )
-    except Exception as e:
-        latency = (time.perf_counter() - start) * 1000
-        logger.error("コンテナシステムヘルスチェック失敗", error=str(e))
-        return ComponentHealth(
-            status=HealthStatus.UNHEALTHY,
-            message=str(e),
-            latency_ms=round(latency, 2),
         )
 
 
@@ -203,29 +140,16 @@ async def health_check(db: AsyncSession = Depends(get_db)) -> HealthResponse:
     """
     詳細ヘルスチェック
 
-    データベース、Redis、S3の接続状態を確認します。
+    データベース、S3の接続状態を確認します。
     """
-    # 各コンポーネントのヘルスチェックを並列実行
-    import asyncio
-
-    db_health_task = check_database_health(db)
-    redis_health_task = check_redis_component_health()
-    container_health_task = check_container_system_health()
-
-    db_health, redis_health, container_health = await asyncio.gather(
-        db_health_task,
-        redis_health_task,
-        container_health_task,
-    )
+    db_health = await check_database_health(db)
 
     # S3は同期APIなので別途実行
     s3_health = await check_s3_health()
 
     checks = {
         "database": db_health,
-        "redis": redis_health,
         "s3": s3_health,
-        "container_system": container_health,
     }
 
     overall_status = determine_overall_status(checks)
@@ -242,7 +166,7 @@ async def health_check(db: AsyncSession = Depends(get_db)) -> HealthResponse:
 @router.get(
     "/health/live",
     summary="Liveness Probe",
-    description="Kubernetesのliveness probe用エンドポイント",
+    description="Liveness probe用エンドポイント",
 )
 async def liveness_probe():
     """
@@ -257,7 +181,7 @@ async def liveness_probe():
 @router.get(
     "/health/ready",
     summary="Readiness Probe",
-    description="Kubernetesのreadiness probe用エンドポイント",
+    description="Readiness probe用エンドポイント",
 )
 async def readiness_probe(db: AsyncSession = Depends(get_db)):
     """

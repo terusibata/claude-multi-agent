@@ -20,4 +20,3 @@ ruff==0.9.10
 
 # 型スタブ
 types-PyYAML
-types-redis

@@ -18,7 +18,6 @@ from app.core.exception_handlers import register_exception_handlers
 from app.core.lifespan import lifespan
 from app.core.metrics_endpoint import metrics_handler
 from app.middleware.auth import AuthMiddleware
-from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.middleware.tracing import TracingMiddleware
 
@@ -56,9 +55,8 @@ def _register_middleware(app: FastAPI, settings) -> None:
     ミドルウェアを登録
 
     適用順序は逆順になる点に注意:
-      5. TracingMiddleware（最も外側、リクエスト時に最初に適用）
-      4. AuthMiddleware
-      3. RateLimitMiddleware
+      4. TracingMiddleware（最も外側、リクエスト時に最初に適用）
+      3. AuthMiddleware
       2. CORSMiddleware
       1. SecurityHeadersMiddleware（最も内側、レスポンス時に最後に適用）
     """
@@ -79,26 +77,16 @@ def _register_middleware(app: FastAPI, settings) -> None:
         expose_headers=[
             "X-Request-ID",
             "X-Process-Time",
-            "X-RateLimit-Limit",
-            "X-RateLimit-Remaining",
-            "X-RateLimit-Reset",
         ],
     )
 
-    # 3. レート制限
-    app.add_middleware(
-        RateLimitMiddleware,
-        requests_per_window=settings.rate_limit_requests,
-        window_seconds=settings.rate_limit_period,
-    )
-
-    # 4. API認証
+    # 3. API認証
     app.add_middleware(
         AuthMiddleware,
         api_keys=settings.api_keys_list,
     )
 
-    # 5. リクエストトレーシング（最も外側）
+    # 4. リクエストトレーシング（最も外側）
     app.add_middleware(
         TracingMiddleware,
         log_requests=True,
