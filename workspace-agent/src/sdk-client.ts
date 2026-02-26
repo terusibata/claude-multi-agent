@@ -39,7 +39,17 @@ function formatSSE(eventType: string, data: Record<string, unknown>): string {
 // =============================================================================
 
 function buildSdkOptions(request: InvocationRequest): Options {
+  // SDK の Options.env を明示指定すると process.env は子プロセスに継承されない
+  // （Node.js spawn の仕様: env 指定時は親の環境変数を継承しない）
+  //
+  // セキュリティ方針:
+  //   - ホワイトリスト方式で必要な環境変数のみ転送
+  //   - AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY は意図的に渡さない
+  //     → AgentCore Execution Role による認証を使用するため
+  //   - コンテナ認証用の環境変数（AWS_CONTAINER_CREDENTIALS_* 等）は転送する
+  //     → AgentCore が注入した Execution Role の一時認証情報を CLI サブプロセスで使用
   const env: Record<string, string> = {
+    // Bedrock 有効化
     CLAUDE_CODE_USE_BEDROCK: process.env.CLAUDE_CODE_USE_BEDROCK ?? "1",
     AWS_REGION: request.aws_region || process.env.AWS_REGION || "us-west-2",
     // NODE_OPTIONS を明示的にクリア（CLI バイナリが壊れるのを防止）
@@ -48,14 +58,12 @@ function buildSdkOptions(request: InvocationRequest): Options {
     TMPDIR: "/tmp",
     CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR ?? "/home/appuser/.claude",
     CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK: "1",
+    // CLI が Bash ツールでコマンドを実行する際に必要
+    PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
   };
 
-  // SDK の Options.env を明示指定すると process.env は子プロセスに継承されない
-  // （Node.js spawn の仕様: env 指定時は親の環境変数を継承しない）
-  // AWS 認証に必要な環境変数を選択的に転送する
-  // ※ AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY は意図的に渡さない
-  //   → AgentCore Execution Role による認証を使用するため
-  const awsCredentialEnvKeys = [
+  // AgentCore Execution Role 等のコンテナ認証用環境変数を選択的に転送
+  const passthroughEnvKeys = [
     // コンテナ認証（ECS Task Role / AgentCore Execution Role）
     "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
     "AWS_CONTAINER_CREDENTIALS_FULL_URI",
@@ -66,8 +74,13 @@ function buildSdkOptions(request: InvocationRequest): Options {
     "AWS_ROLE_SESSION_NAME",
     // デフォルトリージョン
     "AWS_DEFAULT_REGION",
+    // Bedrock API Key 認証
+    "AWS_BEARER_TOKEN_BEDROCK",
+    // ロケール（git diff 等の出力に影響）
+    "LANG",
+    "LC_ALL",
   ];
-  for (const key of awsCredentialEnvKeys) {
+  for (const key of passthroughEnvKeys) {
     if (process.env[key]) {
       env[key] = process.env[key]!;
     }
