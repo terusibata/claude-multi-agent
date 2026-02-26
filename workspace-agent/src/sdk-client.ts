@@ -98,6 +98,13 @@ function buildSdkOptions(request: InvocationRequest): Options {
     stderr: (line: string) => {
       logger.warn({ msg: "CLI stderr", line: line.trimEnd() });
     },
+    // インタラクティブ系ツールを無効化
+    // 本アーキテクチャは一方向 SSE ストリーム（ホスト→クライアント）のため、
+    // ユーザー入力を待つツールは動作しない
+    disallowedTools: [
+      "AskUserQuestion",  // ユーザーへの質問（WebSocket/双方向通信が必要）
+      "ExitPlanMode",     // プランモード終了（ユーザー承認が必要）
+    ],
   };
 
   // セッション再開
