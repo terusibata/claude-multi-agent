@@ -29,7 +29,7 @@ Amazon Bedrock AgentCore Runtime 上でエージェントをFirecracker microVM�
                                 │ SSE
                                 ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│  FastAPI Backend (ECS / EC2 / Lambda)                             │
+│  FastAPI Backend (Amazon Bedrock AgentCore)                        │
 │  ┌────────────────────────────────────────────────────────────┐  │
 │  │ ミドルウェア: トレーシング, API認証, CORS, セキュリティヘッダー  │  │
 │  └────────────────────────────────────────────────────────────┘  │

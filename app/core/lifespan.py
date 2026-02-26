@@ -2,7 +2,7 @@
 アプリケーションライフサイクル管理
 起動時・終了時の処理を定義
 
-AgentCore Runtime 版: Docker/ECS/Redis/WarmPool/GC は不要。
+AgentCore Runtime 版: エージェント実行は AgentCore に委任。
 """
 import asyncio
 from contextlib import asynccontextmanager
@@ -119,7 +119,7 @@ async def lifespan(app: FastAPI):
 
     AgentCore Runtime アーキテクチャ:
       - AgentCoreClient (boto3) で invoke_agent_runtime を呼び出し
-      - Redis/Docker/ECS/WarmPool/GC は不要
+      - エージェント実行は AgentCore Runtime に委任
     """
     from app import __version__
 

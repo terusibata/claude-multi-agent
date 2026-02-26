@@ -1,10 +1,10 @@
-FROM --platform=linux/arm64 python:3.11-slim AS workspace-base
+FROM --platform=linux/arm64 python:3.13-slim AS workspace-base
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl git build-essential libffi-dev && rm -rf /var/lib/apt/lists/*
 
-# Node.js 20 (SDK CLIのサブプロセスで使用)
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+# Node.js 24 LTS (SDK CLIのサブプロセスで使用)
+RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
     && apt-get install -y nodejs && rm -rf /var/lib/apt/lists/*
 
 RUN python -m venv /opt/venv
