@@ -140,7 +140,7 @@ function createFileToolsServer(): McpServerConfig | null {
   const handlers = createFileToolHandlers();
 
   // ツール定義（名前 → 説明 + Zod スキーマ）
-  // NOTE: PDF/Excel/Word/PowerPoint/画像メタデータの読み取りはDefault Skills（Python）に移行済み
+  // NOTE: PDF/Excel/Word/PowerPointの読み取りはDefault Skills（Python）に移行済み
   const toolSchemas: Record<string, { description: string; schema: z.ZodRawShape }> = {
     list_workspace_files: {
       description: "ワークスペース内のファイル一覧を取得する",

@@ -2,7 +2,7 @@
  * File tools registry
  *
  * Registers tool handlers for file listing and image reading.
- * Format-specific file reading (PDF, Excel, Word, PowerPoint, Image metadata)
+ * Format-specific file reading (PDF, Excel, Word, PowerPoint)
  * is handled by Default Skills (Python scripts in default_skills/).
  *
  * Uses local filesystem (/workspace) instead of workspace_service.
@@ -37,7 +37,7 @@ export const FILE_TOOLS_PROMPT = `
 ワークスペースのファイルは以下の手順で読んでください：
 1. list_workspace_files でファイル一覧を確認
 2. 各ファイル形式に対応するスキルで読み取り
-   - PDF / Excel / Word / PowerPoint / 画像メタデータ → 対応するDefault Skillを使用
+   - PDF / Excel / Word / PowerPoint → 対応するDefault Skillを使用
 3. 画像の内容を理解する必要がある場合は read_image_file を使用（promptパラメータで知りたい内容を指定）
    - 複数画像を一括分析する場合は file_paths パラメータに配列で指定
    - 対応フォーマット: JPEG/PNG/GIF/WebP
