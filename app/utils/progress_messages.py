@@ -105,8 +105,8 @@ BUILTIN_TOOL_MESSAGES: dict[str, list[str]] = {
         "ワークスペースのファイル一覧を取得中...",
     ],
     "mcp__file-tools__read_image_file": [
-        "画像ファイルを読み込んでいます...",
         "画像を分析中...",
+        "画像の内容を読み取っています...",
     ],
 }
 
