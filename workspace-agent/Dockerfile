@@ -23,7 +23,15 @@ RUN npm run build
 FROM --platform=linux/arm64 node:24-slim AS workspace-agent
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl git && rm -rf /var/lib/apt/lists/*
+    curl git python3 python3-pip && rm -rf /var/lib/apt/lists/*
+
+# デフォルトスキル用 Python パッケージをプリインストール
+RUN pip3 install --no-cache-dir --break-system-packages \
+    PyMuPDF==1.27.1 \
+    python-docx==1.2.0 \
+    openpyxl==3.1.5 \
+    Pillow==12.1.1 \
+    python-pptx==1.0.2
 
 # エージェントアプリケーション配置
 WORKDIR /opt/workspace-agent
