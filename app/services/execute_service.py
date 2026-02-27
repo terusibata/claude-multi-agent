@@ -41,6 +41,7 @@ from app.services.event_translator import EventTranslator
 from app.services.mcp_config_builder import McpConfigBuilder
 from app.services.mcp_server_service import McpServerService
 from app.services.message_log_service import MessageLogService
+from app.services.model_service import ModelService
 from app.services.prompt_builder import build_system_prompt
 from app.services.skill_service import SkillService
 from app.services.usage_service import UsageService
@@ -72,6 +73,7 @@ class ExecuteService:
         self.usage_service = UsageService(db)
         self.skill_service = SkillService(db)
         self.mcp_server_service = McpServerService(db)
+        self.model_service = ModelService(db)
         self._event_translator = EventTranslator()
         self._mcp_config = McpConfigBuilder(self.mcp_server_service)
         self._context_manager = ContextManager(db)
@@ -520,40 +522,121 @@ class ExecuteService:
     async def _record_usage(
         self, request: ExecuteRequest, model: Model, done_data: dict
     ) -> None:
-        """使用量をDBに記録"""
+        """使用量をDBに記録
+
+        TS SDK の model_usage が含まれている場合はモデル別に正確なコスト計算を行う。
+        含まれていない場合はフォールバックとしてメインモデルで一括計算する。
+        """
         try:
-            usage = EventTranslator.normalize_usage(done_data.get("usage", {}))
-            input_tokens = usage.get("input_tokens", 0)
-            output_tokens = usage.get("output_tokens", 0)
-            cache_5m = usage.get("cache_creation_5m_tokens", 0)
-            cache_1h = usage.get("cache_creation_1h_tokens", 0)
-            cache_read = usage.get("cache_read_tokens", 0)
+            model_usage = done_data.get("model_usage")
 
-            cost = model.calculate_cost(
-                input_tokens, output_tokens, cache_5m, cache_1h, cache_read
-            )
+            if model_usage:
+                # モデル別に正確なコスト計算（TS SDK の modelUsage 対応）
+                total_input = 0
+                total_output = 0
+                for sdk_model_name, tokens in model_usage.items():
+                    m_input = tokens.get("input_tokens", 0)
+                    m_output = tokens.get("output_tokens", 0)
+                    m_cache_read = tokens.get("cache_read_tokens", 0)
+                    # Claude Code はデフォルトで 5分キャッシュ（type: "ephemeral"）を使用
+                    # 1時間キャッシュは ENABLE_PROMPT_CACHING_1H_BEDROCK 設定時のみ
+                    # TS agent が全量を cache_creation_5m_tokens として送信
+                    m_cache_creation = tokens.get("cache_creation_5m_tokens", 0)
 
-            await self.usage_service.save_usage_log(
-                tenant_id=request.tenant_id,
-                user_id=request.executor.user_id,
-                model_id=request.model_id,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                cache_creation_5m_tokens=cache_5m,
-                cache_creation_1h_tokens=cache_1h,
-                cache_read_tokens=cache_read,
-                cost_usd=cost,
-                conversation_id=request.conversation_id,
-            )
+                    # SDK モデル名から DB の Model レコードを検索
+                    target_model = await self.model_service.find_by_sdk_model_name(
+                        sdk_model_name
+                    )
+                    if target_model:
+                        cost = target_model.calculate_cost(
+                            m_input, m_output,
+                            cache_creation_5m_tokens=m_cache_creation,
+                            cache_creation_1h_tokens=0,
+                            cache_read_tokens=m_cache_read,
+                        )
+                        await self.usage_service.save_usage_log(
+                            tenant_id=request.tenant_id,
+                            user_id=request.executor.user_id,
+                            model_id=target_model.model_id,
+                            input_tokens=m_input,
+                            output_tokens=m_output,
+                            cache_creation_5m_tokens=m_cache_creation,
+                            cache_creation_1h_tokens=0,
+                            cache_read_tokens=m_cache_read,
+                            cost_usd=cost,
+                            conversation_id=request.conversation_id,
+                        )
+                    else:
+                        # DB にモデルが見つからない場合はメインモデルの単価で記録
+                        logger.warning(
+                            "モデル未検出: model_usage のモデル名が DB に見つかりません",
+                            sdk_model_name=sdk_model_name,
+                            fallback_model=request.model_id,
+                        )
+                        cost = model.calculate_cost(
+                            m_input, m_output,
+                            cache_creation_5m_tokens=m_cache_creation,
+                            cache_creation_1h_tokens=0,
+                            cache_read_tokens=m_cache_read,
+                        )
+                        await self.usage_service.save_usage_log(
+                            tenant_id=request.tenant_id,
+                            user_id=request.executor.user_id,
+                            model_id=request.model_id,
+                            input_tokens=m_input,
+                            output_tokens=m_output,
+                            cache_creation_5m_tokens=m_cache_creation,
+                            cache_creation_1h_tokens=0,
+                            cache_read_tokens=m_cache_read,
+                            cost_usd=cost,
+                            conversation_id=request.conversation_id,
+                        )
 
-            # コンテキスト状況を更新
-            await self._context_manager.update_context_status(
-                request.conversation_id,
-                request.tenant_id,
-                model,
-                input_tokens,
-                output_tokens,
-            )
+                    total_input += m_input
+                    total_output += m_output
+
+                # コンテキスト状況を更新（合計トークンで）
+                await self._context_manager.update_context_status(
+                    request.conversation_id,
+                    request.tenant_id,
+                    model,
+                    total_input,
+                    total_output,
+                )
+            else:
+                # フォールバック: 従来のメインモデル一括計算
+                usage = EventTranslator.normalize_usage(done_data.get("usage", {}))
+                input_tokens = usage.get("input_tokens", 0)
+                output_tokens = usage.get("output_tokens", 0)
+                cache_5m = usage.get("cache_creation_5m_tokens", 0)
+                cache_1h = usage.get("cache_creation_1h_tokens", 0)
+                cache_read = usage.get("cache_read_tokens", 0)
+
+                cost = model.calculate_cost(
+                    input_tokens, output_tokens, cache_5m, cache_1h, cache_read
+                )
+
+                await self.usage_service.save_usage_log(
+                    tenant_id=request.tenant_id,
+                    user_id=request.executor.user_id,
+                    model_id=request.model_id,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cache_creation_5m_tokens=cache_5m,
+                    cache_creation_1h_tokens=cache_1h,
+                    cache_read_tokens=cache_read,
+                    cost_usd=cost,
+                    conversation_id=request.conversation_id,
+                )
+
+                # コンテキスト状況を更新
+                await self._context_manager.update_context_status(
+                    request.conversation_id,
+                    request.tenant_id,
+                    model,
+                    input_tokens,
+                    output_tokens,
+                )
         except Exception as e:
             logger.error("使用量記録エラー", error=str(e))
 

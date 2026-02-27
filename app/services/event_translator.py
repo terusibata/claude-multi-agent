@@ -149,6 +149,7 @@ class EventTranslator:
                     turn_count=data.get("num_turns", 0),
                     duration_ms=data.get("duration_ms", 0),
                     session_id=data.get("session_id"),
+                    model_usage=data.get("model_usage"),
                 )
             ]
         elif event_type == "file_manifest":

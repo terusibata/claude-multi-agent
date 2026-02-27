@@ -142,6 +142,8 @@ class DoneData(BaseModel):
     cost_usd: Decimal
     num_turns: int
     duration_ms: int
+    session_id: str | None = None
+    model_usage: dict[str, Any] | None = None  # モデル別使用量
 
 
 class ExecuteResponse(BaseModel):
