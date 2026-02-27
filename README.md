@@ -124,17 +124,24 @@ workspace-agent/           # AgentCoreコンテナ内エージェント (TypeScr
 - PostgreSQL（RDS推奨）
 - AgentCore Runtime作成済み
 
-### 1. AgentCore Runtime の作成
+### 1. コンテナイメージのビルド・プッシュ
+
+workspace-agentのコードを変更した場合もこの手順でイメージを更新します。
+新規セッションから順次新しいイメージが反映されます。
 
 ```bash
-# コンテナイメージをビルド・プッシュ
+# コンテナイメージをビルド
 docker build --platform linux/arm64 -t workspace-agent:latest -f workspace-agent/Dockerfile .
 
+# ECRにプッシュ
 aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin <account>.dkr.ecr.us-west-2.amazonaws.com
 docker tag workspace-agent:latest <account>.dkr.ecr.us-west-2.amazonaws.com/workspace-agent:latest
 docker push <account>.dkr.ecr.us-west-2.amazonaws.com/workspace-agent:latest
+```
 
-# AgentCore Runtime を作成
+### 2. AgentCore Runtime の作成（初回のみ）
+
+```bash
 # ポート: 8080, ヘルスチェック: GET /ping
 # Execution Roleには Bedrock (InvokeModel) と S3 (PutObject/GetObject/ListBucket) の権限が必要
 aws bedrock-agentcore create-runtime \
@@ -145,7 +152,7 @@ aws bedrock-agentcore create-runtime \
   --runtime-role-arn arn:aws:iam::<account>:role/AgentCoreExecutionRole
 ```
 
-### 2. IAMポリシー
+### 3. IAMポリシー
 
 バックエンドのIAMロールに以下の権限が必要です:
 
@@ -180,7 +187,7 @@ aws bedrock-agentcore create-runtime \
 }
 ```
 
-### 3. AgentCore Execution Role
+### 4. AgentCore Execution Role
 
 workspace-agentコンテナ（AgentCore Runtime上）がAWSサービスにアクセスするためのIAMロールです。
 AgentCore Runtime作成時に `--runtime-role-arn` で指定します。
@@ -213,7 +220,7 @@ AgentCore Runtime作成時に `--runtime-role-arn` で指定します。
 }
 ```
 
-### 4. 環境変数
+### 5. 環境変数
 
 ```bash
 # 必須
