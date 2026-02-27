@@ -30,9 +30,8 @@ openpyxl==3.1.5
 python-docx==1.2.0
 python-pptx==1.0.2
 
-# PDF・画像処理
+# PDF処理
 pymupdf==1.27.1
-Pillow==12.1.1
 
 # ロギング
 structlog==25.5.0

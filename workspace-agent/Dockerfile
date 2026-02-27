@@ -30,7 +30,6 @@ RUN pip3 install --no-cache-dir --break-system-packages \
     PyMuPDF==1.27.1 \
     python-docx==1.2.0 \
     openpyxl==3.1.5 \
-    Pillow==12.1.1 \
     python-pptx==1.0.2
 
 # エージェントアプリケーション配置
