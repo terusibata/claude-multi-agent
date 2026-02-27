@@ -68,6 +68,10 @@ class Settings(BaseSettings):
     # Skills保存ベースパス
     skills_base_path: str = "/skills"
 
+    # デフォルトSkillsパス（コードベース内、全テナント共通）
+    # 空の場合は無効。例: /app/default_skills
+    default_skills_path: str = ""
+
     # ============================================
     # S3ワークスペース設定
     # ============================================
