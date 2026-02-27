@@ -13,6 +13,7 @@ import asyncio
 import json
 import threading
 from collections.abc import AsyncIterator
+from typing import Any
 
 import structlog
 
@@ -52,7 +53,7 @@ class AgentCoreClient:
                 "AGENTCORE_RUNTIME_ARN 未設定: AgentCore呼び出しは失敗します"
             )
 
-    def _get_client(self):
+    def _get_client(self) -> Any:
         """boto3 bedrock-agentcore クライアントを取得（スレッドセーフ・キャッシュ付き）"""
         if self._client is not None:
             return self._client

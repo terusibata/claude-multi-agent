@@ -148,8 +148,14 @@ async def _event_generator(
                     background_task.cancel()
                     try:
                         await background_task
-                    except (asyncio.CancelledError, Exception):
+                    except asyncio.CancelledError:
                         pass
+                    except Exception as cancel_error:
+                        logger.warning(
+                            "タイムアウト時のバックグラウンドタスクキャンセルでエラー",
+                            error=str(cancel_error),
+                            conversation_id=request.conversation_id,
+                        )
                     error_event = format_error_event(
                         seq=0,
                         error_type="timeout_error",
@@ -178,8 +184,14 @@ async def _event_generator(
         background_task.cancel()
         try:
             await background_task
-        except (asyncio.CancelledError, Exception):
+        except asyncio.CancelledError:
             pass
+        except Exception as cancel_error:
+            logger.warning(
+                "エラーリカバリ時のバックグラウンドタスクキャンセルでエラー",
+                error=str(cancel_error),
+                conversation_id=request.conversation_id,
+            )
         raise
 
 

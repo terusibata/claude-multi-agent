@@ -36,6 +36,9 @@ Claude Multi-Agent は、Claude Agent SDK を使用したマルチテナント�
 # データベース
 DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/dbname
 
+# AgentCore Runtime（必須）
+AGENTCORE_RUNTIME_ARN=arn:aws:bedrock-agentcore:us-west-2:123456789:runtime/xxxx
+
 # AWS Bedrock & S3
 CLAUDE_CODE_USE_BEDROCK=1
 AWS_REGION=us-west-2
@@ -55,7 +58,7 @@ SKILLS_BASE_PATH=/skills
 CORS_ORIGINS=http://localhost:3000
 ```
 
-**重要**: AWS認証情報には **Bedrock** と **S3** の両方の権限が必要です。
+**重要**: AWS認証情報には **Bedrock**、**AgentCore**、**S3** の権限が必要です。
 
 ```json
 {
@@ -65,7 +68,8 @@ CORS_ORIGINS=http://localhost:3000
       "Effect": "Allow",
       "Action": [
         "bedrock:InvokeModel",
-        "bedrock:InvokeModelWithResponseStream"
+        "bedrock:InvokeModelWithResponseStream",
+        "bedrock-agentcore:InvokeAgentRuntime"
       ],
       "Resource": "*"
     },
@@ -274,7 +278,7 @@ curl "http://localhost:8000/api/tenants/tenant-001/conversations/uuid/files"
 curl -O "http://localhost:8000/api/tenants/tenant-001/conversations/uuid/files/download?path=outputs/result.json"
 ```
 
-詳細は [workspace.md](./workspace.md) を参照してください。
+詳細は [ワークスペースAPI](./api-specification/07-workspace.md) を参照してください。
 
 ## MCPサーバー
 
@@ -334,8 +338,8 @@ curl -X POST http://localhost:8000/api/tenants/tenant-001/skills \
 スキルファイルは以下の場所に配置します：
 
 ```
-/skills/tenant_{tenant_id}/skills/{skill_name}/
-├── CLAUDE.md      # スキルの説明
+/skills/tenant_{tenant_id}/.claude/skills/{skill_name}/
+├── SKILL.md       # スキルの説明
 └── ...            # その他のファイル
 ```
 

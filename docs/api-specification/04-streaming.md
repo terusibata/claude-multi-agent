@@ -643,8 +643,6 @@ interface ErrorEvent {
 }
 
 type ErrorType =
-  | 'conversation_locked'
-  | 'sdk_not_installed'
   | 'model_validation_error'
   | 'options_error'
   | 'execution_error'
@@ -658,8 +656,6 @@ type ErrorType =
 
 | error_type | 説明 | recoverable |
 |------------|------|-------------|
-| `conversation_locked` | 会話がロック中（他で実行中） | true |
-| `sdk_not_installed` | SDKがインストールされていない | false |
 | `model_validation_error` | モデルバリデーションエラー | false |
 | `options_error` | SDK オプション構築エラー | false |
 | `execution_error` | 実行中のエラー | false |
@@ -772,11 +768,11 @@ interface ContainerRecoveredEvent {
 
 | 設定 | 値 | 説明 |
 |------|-----|------|
-| 実行タイムアウト | 600秒（10分） | コンテナ内でのエージェント実行の最大時間 |
-| イベントタイムアウト | 720秒（12分） | 実行タイムアウト後の後処理を含む安全ネット |
+| AgentCore実行上限 | 最大60分 | AgentCore Runtimeのストリーミング上限 |
+| イベントタイムアウト | 3660秒（61分） | AgentCore上限 + マージン1分の安全ネット |
 | ハートビート間隔 | 10秒 | pingイベント送信間隔 |
 
-> **タイムアウト階層**: 実行タイムアウト(600s) < イベントタイムアウト(720s) < ロックTTL(900s)
+> **タイムアウト**: AgentCore Runtimeが実行時間を管理します。バックエンド側のイベントタイムアウト（61分）は安全ネットとして設定されています。
 
 ### タイムアウト時の動作
 
