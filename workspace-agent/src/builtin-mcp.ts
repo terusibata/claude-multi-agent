@@ -140,6 +140,7 @@ function createFileToolsServer(): McpServerConfig | null {
   const handlers = createFileToolHandlers();
 
   // ツール定義（名前 → 説明 + Zod スキーマ）
+  // NOTE: PDF/Excel/Word/PowerPoint/画像メタデータの読み取りはDefault Skills（Python）に移行済み
   const toolSchemas: Record<string, { description: string; schema: z.ZodRawShape }> = {
     list_workspace_files: {
       description: "ワークスペース内のファイル一覧を取得する",
@@ -148,71 +149,6 @@ function createFileToolsServer(): McpServerConfig | null {
     read_image_file: {
       description: "画像ファイルを視覚的に読み込む（base64エンコード）",
       schema: { file_path: z.string(), max_dimension: z.number().default(1920) },
-    },
-    get_sheet_info: {
-      description: "Excelファイルのシート一覧と基本情報を取得する",
-      schema: { file_path: z.string() },
-    },
-    get_sheet_csv: {
-      description: "Excelシートの内容をCSV形式で取得する（行範囲指定可能）",
-      schema: {
-        file_path: z.string(),
-        sheet_name: z.string().default(""),
-        start_row: z.number().nullable().default(null),
-        end_row: z.number().nullable().default(null),
-      },
-    },
-    search_workbook: {
-      description: "Excelワークブック全体からキーワード検索する",
-      schema: { file_path: z.string(), query: z.string(), case_sensitive: z.boolean().default(false) },
-    },
-    inspect_pdf_file: {
-      description: "PDFファイルの基本情報（ページ数、メタデータ等）を取得する",
-      schema: { file_path: z.string() },
-    },
-    read_pdf_pages: {
-      description: "PDFの指定ページのテキストを読み取る（pages例: '1-5', '1,3,5'）",
-      schema: { file_path: z.string(), pages: z.string().default("1-10") },
-    },
-    convert_pdf_to_images: {
-      description: "PDFページを画像に変換する（図表確認用）（pages例: '1-3'）",
-      schema: { file_path: z.string(), pages: z.string().default("1"), dpi: z.number().default(150) },
-    },
-    get_document_info: {
-      description: "Word文書の基本情報（段落数、セクション等）を取得する",
-      schema: { file_path: z.string() },
-    },
-    get_document_content: {
-      description: "Word文書のテキスト内容を取得する",
-      schema: {
-        file_path: z.string(),
-        start_paragraph: z.number().nullable().default(null),
-        end_paragraph: z.number().nullable().default(null),
-      },
-    },
-    search_document: {
-      description: "Word文書内をキーワード検索する",
-      schema: { file_path: z.string(), query: z.string(), case_sensitive: z.boolean().default(false) },
-    },
-    get_presentation_info: {
-      description: "PowerPointプレゼンテーションの基本情報を取得する",
-      schema: { file_path: z.string() },
-    },
-    get_slides_content: {
-      description: "PowerPointスライドのテキスト内容を取得する（slides例: '1-5', '1,3,5'）",
-      schema: {
-        file_path: z.string(),
-        slides: z.string().default("1-10"),
-        max_slides: z.number().default(10),
-      },
-    },
-    search_presentation: {
-      description: "PowerPointプレゼンテーション内をキーワード検索する",
-      schema: { file_path: z.string(), query: z.string(), case_sensitive: z.boolean().default(false) },
-    },
-    inspect_image_file: {
-      description: "画像ファイルの基本情報（サイズ、フォーマット等）を取得する",
-      schema: { file_path: z.string() },
     },
   };
 

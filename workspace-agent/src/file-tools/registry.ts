@@ -1,8 +1,9 @@
 /**
  * File tools registry
  *
- * Registers tool handlers and provides common handlers (file listing, image reading).
- * Format-specific tools are implemented in individual modules.
+ * Registers tool handlers for file listing and image reading.
+ * Format-specific file reading (PDF, Excel, Word, PowerPoint, Image metadata)
+ * is handled by Default Skills (Python scripts in default_skills/).
  *
  * Uses local filesystem (/workspace) instead of workspace_service.
  */
@@ -17,27 +18,6 @@ import {
   WORKSPACE_ROOT,
   type ToolResult,
 } from "./utils.js";
-import { inspectImageFileHandler } from "./image-tools.js";
-import {
-  inspectPdfFileHandler,
-  readPdfPagesHandler,
-  convertPdfToImagesHandler,
-} from "./pdf-tools.js";
-import {
-  getSheetInfoHandler,
-  getSheetCsvHandler,
-  searchWorkbookHandler,
-} from "./excel-tools.js";
-import {
-  getDocumentInfoHandler,
-  getDocumentContentHandler,
-  searchDocumentHandler,
-} from "./word-tools.js";
-import {
-  getPresentationInfoHandler,
-  getSlidesContentHandler,
-  searchPresentationHandler,
-} from "./pptx-tools.js";
 
 const logger = createLogger("file-tools-registry");
 
@@ -50,22 +30,9 @@ export const FILE_TOOLS_PROMPT = `
 
 ワークスペースのファイルは以下の手順で読んでください：
 1. list_workspace_files でファイル一覧を確認
-2. 構造確認
-   - Excel: get_sheet_info
-   - PDF: inspect_pdf_file
-   - Word: get_document_info
-   - PowerPoint: get_presentation_info
-   - 画像: inspect_image_file
-3. データ取得
-   - Excel: get_sheet_csv
-   - PDF: read_pdf_pages
-   - Word: get_document_content
-   - PowerPoint: get_slides_content
-4. 検索
-   - Excel: search_workbook
-   - Word: search_document
-   - PowerPoint: search_presentation
-5. 図表など視覚的確認が必要な場合のみ convert_pdf_to_images → read_image_file
+2. 各ファイル形式に対応するスキルで読み取り
+   - PDF / Excel / Word / PowerPoint / 画像メタデータ → 対応するDefault Skillを使用
+3. 画像の視覚的確認が必要な場合のみ read_image_file を使用
 
 ※ 画像読み込みはコンテキストを消費するため、必要な場合のみ使用
 ※ テキスト/CSV/JSONファイルは従来のReadツールも使用可能
@@ -414,26 +381,7 @@ export function createFileToolHandlers(): Record<
   (args: Record<string, unknown>) => Promise<ToolResult>
 > {
   return {
-    // Common
     list_workspace_files: listWorkspaceFilesHandler,
     read_image_file: readImageFileHandler,
-    // Excel
-    get_sheet_info: getSheetInfoHandler,
-    get_sheet_csv: getSheetCsvHandler,
-    search_workbook: searchWorkbookHandler,
-    // PDF
-    inspect_pdf_file: inspectPdfFileHandler,
-    read_pdf_pages: readPdfPagesHandler,
-    convert_pdf_to_images: convertPdfToImagesHandler,
-    // Word
-    get_document_info: getDocumentInfoHandler,
-    get_document_content: getDocumentContentHandler,
-    search_document: searchDocumentHandler,
-    // PowerPoint
-    get_presentation_info: getPresentationInfoHandler,
-    get_slides_content: getSlidesContentHandler,
-    search_presentation: searchPresentationHandler,
-    // Image
-    inspect_image_file: inspectImageFileHandler,
   };
 }
