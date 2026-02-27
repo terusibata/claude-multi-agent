@@ -192,11 +192,56 @@ aws bedrock-agentcore create-runtime \
 workspace-agentコンテナ（AgentCore Runtime上）がAWSサービスにアクセスするためのIAMロールです。
 AgentCore Runtime作成時に `--runtime-role-arn` で指定します。
 
+詳細は [IAM Permissions for AgentCore Runtime](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-permissions.html) を参照してください。
+
+**信頼ポリシー (Trust Policy):**
+
 ```json
 {
   "Version": "2012-10-17",
   "Statement": [
     {
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "bedrock-agentcore.amazonaws.com"
+      },
+      "Action": "sts:AssumeRole",
+      "Condition": {
+        "StringEquals": {
+          "aws:SourceAccount": "<account>"
+        },
+        "ArnLike": {
+          "aws:SourceArn": "arn:aws:bedrock-agentcore:<region>:<account>:*"
+        }
+      }
+    }
+  ]
+}
+```
+
+**許可ポリシー (Permissions Policy):**
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ECRImageAccess",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:BatchGetImage",
+        "ecr:GetDownloadUrlForLayer"
+      ],
+      "Resource": "arn:aws:ecr:<region>:<account>:repository/workspace-agent"
+    },
+    {
+      "Sid": "ECRTokenAccess",
+      "Effect": "Allow",
+      "Action": "ecr:GetAuthorizationToken",
+      "Resource": "*"
+    },
+    {
+      "Sid": "BedrockModelInvocation",
       "Effect": "Allow",
       "Action": [
         "bedrock:InvokeModel",
@@ -205,6 +250,7 @@ AgentCore Runtime作成時に `--runtime-role-arn` で指定します。
       "Resource": "*"
     },
     {
+      "Sid": "S3WorkspaceAccess",
       "Effect": "Allow",
       "Action": [
         "s3:PutObject",
@@ -215,6 +261,46 @@ AgentCore Runtime作成時に `--runtime-role-arn` で指定します。
         "arn:aws:s3:::your-bucket-name",
         "arn:aws:s3:::your-bucket-name/*"
       ]
+    },
+    {
+      "Sid": "CloudWatchLogs",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:DescribeLogGroups"
+      ],
+      "Resource": "arn:aws:logs:<region>:<account>:log-group:*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogStream",
+        "logs:PutLogEvents",
+        "logs:DescribeLogStreams"
+      ],
+      "Resource": "arn:aws:logs:<region>:<account>:log-group:/aws/bedrock-agentcore/runtimes/*:*"
+    },
+    {
+      "Sid": "XRayTracing",
+      "Effect": "Allow",
+      "Action": [
+        "xray:PutTraceSegments",
+        "xray:PutTelemetryRecords",
+        "xray:GetSamplingRules",
+        "xray:GetSamplingTargets"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "CloudWatchMetrics",
+      "Effect": "Allow",
+      "Action": "cloudwatch:PutMetricData",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "cloudwatch:namespace": "bedrock-agentcore"
+        }
+      }
     }
   ]
 }
