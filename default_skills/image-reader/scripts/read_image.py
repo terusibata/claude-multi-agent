@@ -202,23 +202,19 @@ def parse_image(filepath: str) -> ImageInfo:
 
     # EXIF
     try:
-        exif_data = img._getexif()
+        exif_data = img.getexif()
         if exif_data:
             exif = ExifInfo()
             raw_tags: dict[str, str] = {}
 
-            for tag_id, value in exif_data.items():
-                tag_name = ExifTags.TAGS.get(tag_id, str(tag_id))
+            # IFD0 (メイン) + Exif サブIFD のタグを統合して処理
+            all_tags: dict[int, object] = dict(exif_data.items())
+            exif_ifd = exif_data.get_ifd(ExifTags.IFD.Exif)
+            if exif_ifd:
+                all_tags.update(exif_ifd)
 
-                if tag_name == "GPSInfo":
-                    # Parse GPS data
-                    gps_data = {}
-                    for gps_tag_id, gps_value in value.items():
-                        gps_tag = ExifTags.GPSTAGS.get(gps_tag_id, str(gps_tag_id))
-                        gps_data[gps_tag] = gps_value
-                    exif.gps_latitude = _format_gps_coord(gps_data, "GPSLatitudeRef", "GPSLatitude")
-                    exif.gps_longitude = _format_gps_coord(gps_data, "GPSLongitudeRef", "GPSLongitude")
-                    continue
+            for tag_id, value in all_tags.items():
+                tag_name = ExifTags.TAGS.get(tag_id, str(tag_id))
 
                 # Store raw for --exif mode
                 try:
@@ -261,6 +257,16 @@ def parse_image(filepath: str) -> ImageInfo:
                     exif.software = str(value).strip()
                 elif tag_name == "LensModel":
                     exif.lens = str(value).strip()
+
+            # GPS サブIFD を個別に処理
+            gps_ifd = exif_data.get_ifd(ExifTags.IFD.GPSInfo)
+            if gps_ifd:
+                gps_data: dict[str, object] = {}
+                for gps_tag_id, gps_value in gps_ifd.items():
+                    gps_tag = ExifTags.GPSTAGS.get(gps_tag_id, str(gps_tag_id))
+                    gps_data[gps_tag] = gps_value
+                exif.gps_latitude = _format_gps_coord(gps_data, "GPSLatitudeRef", "GPSLatitude")
+                exif.gps_longitude = _format_gps_coord(gps_data, "GPSLongitudeRef", "GPSLongitude")
 
             exif.raw_tags = raw_tags
             info.exif = exif
