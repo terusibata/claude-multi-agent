@@ -277,8 +277,11 @@ class ExecuteService:
         skill_files = await self._build_skill_files_payload(request.tenant_id)
 
         # allowed_tools の計算
+        settings = get_settings()
         allowed_tools = McpConfigBuilder.compute_allowed_tools(
-            request, mcp_server_configs
+            request,
+            mcp_server_configs,
+            has_default_skills=bool(settings.default_skills_path),
         )
 
         # システムプロンプト構築
@@ -369,33 +372,57 @@ class ExecuteService:
     async def _build_skill_files_payload(
         self, tenant_id: str
     ) -> dict[str, str] | None:
-        """テナントのスキルファイルをbase64エンコードしたdictを返却
+        """デフォルトSkills + テナントSkillsをbase64エンコードしたdictを返却
+
+        デフォルトSkillsを先に読み込み、テナントSkillsで上書きする。
+        これにより、テナントが同名スキルを持つ場合はテナント側が優先される。
 
         Returns:
             {relative_path: base64_content} または None
         """
         try:
             settings = get_settings()
+            skill_files: dict[str, str] = {}
+
+            # 1. デフォルトSkillsを読み込み（全テナント共通）
+            if settings.default_skills_path:
+                default_path = Path(settings.default_skills_path)
+                if default_path.exists():
+                    for skill_dir in default_path.iterdir():
+                        if not skill_dir.is_dir():
+                            continue
+                        for file_path in skill_dir.rglob("*"):
+                            if not file_path.is_file():
+                                continue
+                            # default_skills/excel-reader/SKILL.md
+                            #   → .claude/skills/excel-reader/SKILL.md
+                            relative = file_path.relative_to(default_path)
+                            key = str(Path(".claude") / "skills" / relative)
+                            data = file_path.read_bytes()
+                            skill_files[key] = base64.b64encode(data).decode(
+                                "ascii"
+                            )
+
+            # 2. テナントSkillsを読み込み（テナント固有、デフォルトを上書き可能）
             skills_base = Path(settings.skills_base_path)
             tenant_skills = (
                 skills_base / f"tenant_{tenant_id}" / ".claude" / "skills"
             )
 
-            if not tenant_skills.exists():
-                return None
-
-            skill_files: dict[str, str] = {}
-            for skill_dir in tenant_skills.iterdir():
-                if not skill_dir.is_dir():
-                    continue
-                for file_path in skill_dir.rglob("*"):
-                    if not file_path.is_file():
+            if tenant_skills.exists():
+                for skill_dir in tenant_skills.iterdir():
+                    if not skill_dir.is_dir():
                         continue
-                    relative = file_path.relative_to(
-                        skills_base / f"tenant_{tenant_id}"
-                    )
-                    data = file_path.read_bytes()
-                    skill_files[str(relative)] = base64.b64encode(data).decode("ascii")
+                    for file_path in skill_dir.rglob("*"):
+                        if not file_path.is_file():
+                            continue
+                        relative = file_path.relative_to(
+                            skills_base / f"tenant_{tenant_id}"
+                        )
+                        data = file_path.read_bytes()
+                        skill_files[str(relative)] = base64.b64encode(data).decode(
+                            "ascii"
+                        )
 
             return skill_files if skill_files else None
         except Exception as e:

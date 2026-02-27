@@ -506,6 +506,41 @@ class SkillService:
                 )
         return files
 
+    async def get_archive(
+        self,
+        skill_id: str,
+        tenant_id: str,
+    ) -> tuple[bytes, str] | None:
+        """
+        SkillのファイルをZIPアーカイブとして取得
+
+        Args:
+            skill_id: Skill ID
+            tenant_id: テナントID
+
+        Returns:
+            (ZIPバイナリ, スキル名) のタプル（存在しない場合はNone）
+        """
+        import io
+        import zipfile
+
+        skill = await self.get_by_id(skill_id, tenant_id)
+        if not skill:
+            return None
+
+        skill_path = Path(skill.file_path)
+        if not skill_path.exists():
+            return None
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for file_path in skill_path.rglob("*"):
+                if file_path.is_file():
+                    relative = str(file_path.relative_to(skill_path))
+                    zf.write(file_path, relative)
+
+        return buf.getvalue(), skill.name
+
     async def get_file_content(
         self,
         skill_id: str,
@@ -541,7 +576,7 @@ class SkillService:
         # パストラバーサル最終検証（resolveして確認）
         resolved_full_path = full_path.resolve()
         resolved_skill_path = skill_path.resolve()
-        if not str(resolved_full_path).startswith(str(resolved_skill_path) + "/"):
+        if not resolved_full_path.is_relative_to(resolved_skill_path):
             raise PathTraversalError(file_path)
 
         if not full_path.exists() or not full_path.is_file():

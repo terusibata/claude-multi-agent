@@ -2,9 +2,9 @@
 Agent Skills管理API
 ファイルシステムベースのSkills管理
 """
-import structlog
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_skill_or_404
@@ -19,9 +19,10 @@ from app.schemas.skill import (
 )
 from app.services.skill_service import SkillService
 from app.utils.error_handler import raise_not_found
+from app.utils.exceptions import PathTraversalError, ValidationError
+from app.utils.security import validate_zip_archive
 
 router = APIRouter()
-logger = structlog.get_logger(__name__)
 
 
 @router.get("", response_model=list[SkillResponse], summary="Skills一覧取得")
@@ -67,43 +68,6 @@ async def get_skill(
     return skill
 
 
-async def _read_upload_file_safely(file: UploadFile) -> tuple[str, str]:
-    """
-    アップロードファイルを安全に読み込む
-
-    Args:
-        file: アップロードファイル
-
-    Returns:
-        (ファイル名, ファイル内容) のタプル
-
-    Raises:
-        HTTPException: ファイル名がない場合やエンコーディングエラーの場合
-    """
-    if not file.filename:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="ファイル名が指定されていません",
-        )
-
-    try:
-        content = await file.read()
-        decoded_content = content.decode("utf-8")
-        return file.filename, decoded_content
-    except UnicodeDecodeError:
-        logger.warning("ファイルエンコーディングエラー", filename=file.filename)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"ファイル '{file.filename}' はUTF-8でエンコードされていません",
-        )
-    except OSError as e:
-        logger.error("ファイル読み込みエラー", filename=file.filename, error=str(e))
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="ファイルの読み込みに失敗しました",
-        )
-
-
 @router.post(
     "",
     response_model=SkillResponse,
@@ -115,16 +79,22 @@ async def upload_skill(
     name: str = Form(..., description="Skill名"),
     display_title: str | None = Form(None, description="表示タイトル"),
     description: str | None = Form(None, description="説明"),
-    skill_md: UploadFile = File(..., description="SKILL.mdファイル"),
-    additional_files: list[UploadFile] | None = File(default=None, description="追加ファイル"),
+    skill_archive: UploadFile = File(..., description="Skillファイル一式（ZIPアーカイブ）"),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    新しいSkillをアップロードします。
+    ZIPアーカイブから新しいSkillをアップロードします。
 
-    - **name**: Skill名（ディレクトリ名として使用）
-    - **skill_md**: SKILL.mdファイル（必須）
-    - **additional_files**: 追加のリソースファイル
+    ZIPにはSKILL.mdファイルを必ず含めてください。
+    ディレクトリ階層はそのまま保持されます。
+
+    ```bash
+    # 使用例
+    cd my-skill/
+    zip -r ../my-skill.zip .
+    curl -F "name=my-skill" -F "skill_archive=@my-skill.zip" \\
+         https://api.example.com/api/tenants/{tenant_id}/skills
+    ```
     """
     service = SkillService(db)
 
@@ -136,20 +106,20 @@ async def upload_skill(
             detail=f"Skill '{name}' は既に存在します",
         )
 
-    # ファイル内容を読み込み
-    files = {}
-
-    # SKILL.mdを読み込み
-    _, skill_md_content = await _read_upload_file_safely(skill_md)
-    files["SKILL.md"] = skill_md_content
-
-    # 追加ファイルを読み込み（空文字列やNoneをスキップ）
-    if additional_files:
-        for file in additional_files:
-            # curlで空の-Fパラメータが渡された場合をスキップ
-            if file and file.filename:
-                filename, content = await _read_upload_file_safely(file)
-                files[filename] = content
+    # ZIPファイルを読み込み・検証・展開
+    try:
+        zip_data = await skill_archive.read()
+        files = validate_zip_archive(zip_data)
+    except ValidationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    except PathTraversalError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"不正なファイルパスが含まれています: {e}",
+        )
 
     skill_data = SkillCreate(
         name=name,
@@ -181,19 +151,30 @@ async def update_skill(
 async def update_skill_files(
     tenant_id: str,
     skill_id: str,
-    files: list[UploadFile] = File(..., description="更新するファイル"),
+    skill_archive: UploadFile = File(..., description="更新ファイル一式（ZIPアーカイブ）"),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Skillのファイルを更新します。バージョンが上がります。
+    SkillのファイルをZIPアーカイブで更新します。バージョンが上がります。
+
+    ZIPに含まれるファイルで既存ファイルを上書きします。
+    ZIPに含まれないファイルはそのまま残ります。
     """
     service = SkillService(db)
 
-    # ファイル内容を読み込み
-    file_contents = {}
-    for file in files:
-        filename, content = await _read_upload_file_safely(file)
-        file_contents[filename] = content
+    try:
+        zip_data = await skill_archive.read()
+        file_contents = validate_zip_archive(zip_data, require_skill_md=False)
+    except ValidationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    except PathTraversalError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"不正なファイルパスが含まれています: {e}",
+        )
 
     skill = await service.update_files(skill_id, tenant_id, file_contents)
     if not skill:
@@ -218,6 +199,31 @@ async def delete_skill(
     deleted = await service.delete(skill_id, tenant_id)
     if not deleted:
         raise_not_found("Skill", skill_id)
+
+
+@router.get("/{skill_id}/archive", summary="Skillアーカイブダウンロード")
+async def download_skill_archive(
+    tenant_id: str,
+    skill_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    SkillのファイルをZIPアーカイブとしてダウンロードします。
+    ディレクトリ階層はそのまま保持されます。
+    """
+    service = SkillService(db)
+    result = await service.get_archive(skill_id, tenant_id)
+    if result is None:
+        raise_not_found("Skill", skill_id)
+
+    zip_data, skill_name = result
+    return Response(
+        content=zip_data,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{skill_name}.zip"',
+        },
+    )
 
 
 @router.get("/{skill_id}/files", response_model=SkillFilesResponse, summary="Skillファイル一覧")

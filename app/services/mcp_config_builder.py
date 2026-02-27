@@ -75,6 +75,8 @@ class McpConfigBuilder:
     def compute_allowed_tools(
         request: ExecuteRequest,
         mcp_server_configs: list[dict],
+        *,
+        has_default_skills: bool = False,
     ) -> list[str]:
         """コンテナに渡す allowed_tools リストを計算"""
         allowed_tools = []
@@ -88,8 +90,8 @@ class McpConfigBuilder:
             server_name = config["server_name"]
             allowed_tools.append(f"mcp__{server_name}__*")
 
-        # preferred_skills のツール
-        if request.preferred_skills:
+        # Skills: preferred_skills またはデフォルトSkillsが存在する場合に有効化
+        if request.preferred_skills or has_default_skills:
             allowed_tools.append("Skill")
 
         return allowed_tools
