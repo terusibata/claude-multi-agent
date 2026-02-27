@@ -2,7 +2,6 @@
 Agent Skills管理API
 ファイルシステムベースのSkills管理
 """
-import structlog
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import Response
@@ -24,7 +23,6 @@ from app.utils.exceptions import PathTraversalError, ValidationError
 from app.utils.security import validate_zip_archive
 
 router = APIRouter()
-logger = structlog.get_logger(__name__)
 
 
 @router.get("", response_model=list[SkillResponse], summary="Skills一覧取得")
@@ -166,7 +164,7 @@ async def update_skill_files(
 
     try:
         zip_data = await skill_archive.read()
-        file_contents = validate_zip_archive(zip_data)
+        file_contents = validate_zip_archive(zip_data, require_skill_md=False)
     except ValidationError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

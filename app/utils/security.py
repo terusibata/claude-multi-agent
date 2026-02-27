@@ -217,6 +217,7 @@ ZIP_MAX_FILE_COUNT = 50  # 1 Skillあたり最大ファイル数
 def validate_zip_archive(
     zip_data: bytes,
     *,
+    require_skill_md: bool = True,
     max_total_size: int = ZIP_MAX_TOTAL_SIZE,
     max_file_count: int = ZIP_MAX_FILE_COUNT,
 ) -> dict[str, str]:
@@ -225,6 +226,7 @@ def validate_zip_archive(
 
     Args:
         zip_data: ZIPファイルのバイナリデータ
+        require_skill_md: SKILL.mdの存在を必須とするか（新規作成時True、更新時False）
         max_total_size: 展開後の合計サイズ上限（バイト）
         max_file_count: 最大ファイル数
 
@@ -288,7 +290,7 @@ def validate_zip_archive(
             files[safe_name] = content
 
         # SKILL.md必須チェック
-        if "SKILL.md" not in files:
+        if require_skill_md and "SKILL.md" not in files:
             raise ValidationError(
                 "skill_archive",
                 "ZIPアーカイブにSKILL.mdが含まれていません",
