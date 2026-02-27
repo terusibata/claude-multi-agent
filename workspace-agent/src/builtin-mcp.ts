@@ -140,15 +140,39 @@ function createFileToolsServer(): McpServerConfig | null {
   const handlers = createFileToolHandlers();
 
   // ツール定義（名前 → 説明 + Zod スキーマ）
-  // NOTE: PDF/Excel/Word/PowerPoint/画像メタデータの読み取りはDefault Skills（Python）に移行済み
+  // NOTE: PDF/Excel/Word/PowerPointの読み取りはDefault Skills（Python）に移行済み
   const toolSchemas: Record<string, { description: string; schema: z.ZodRawShape }> = {
     list_workspace_files: {
       description: "ワークスペース内のファイル一覧を取得する",
       schema: { filter_type: z.string().default("all") },
     },
     read_image_file: {
-      description: "画像ファイルを視覚的に読み込む（base64エンコード）",
-      schema: { file_path: z.string(), max_dimension: z.number().default(1920) },
+      description:
+        "画像ファイルをAIで分析しテキストで返す（視覚的理解）。複数画像の一括分析も可能",
+      schema: {
+        file_path: z
+          .string()
+          .optional()
+          .describe("画像ファイルのパス（/workspaceからの相対パス）"),
+        file_paths: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "画像ファイルのパス（複数指定、最大20枚）",
+          ),
+        prompt: z
+          .string()
+          .default(
+            "この画像の内容を詳細に説明してください。テキストが含まれる場合は読み取ってください。",
+          )
+          .describe(
+            "何を知りたいかの指示（例: 'グラフの数値を読み取って', 'テキストをOCRして'）",
+          ),
+        max_dimension: z
+          .number()
+          .default(1568)
+          .describe("リサイズ時の最大辺(px)"),
+      },
     },
   };
 

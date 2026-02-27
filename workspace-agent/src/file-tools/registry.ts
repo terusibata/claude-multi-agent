@@ -2,7 +2,7 @@
  * File tools registry
  *
  * Registers tool handlers for file listing and image reading.
- * Format-specific file reading (PDF, Excel, Word, PowerPoint, Image metadata)
+ * Format-specific file reading (PDF, Excel, Word, PowerPoint)
  * is handled by Default Skills (Python scripts in default_skills/).
  *
  * Uses local filesystem (/workspace) instead of workspace_service.
@@ -12,12 +12,18 @@ import { readFile, stat } from "node:fs/promises";
 import { basename, join, extname, relative } from "node:path";
 import { readdir } from "node:fs/promises";
 import sharp from "sharp";
+import type { ImageFormat } from "@aws-sdk/client-bedrock-runtime";
 import { createLogger } from "../logger.js";
 import {
   guessMimeType,
   WORKSPACE_ROOT,
   type ToolResult,
 } from "./utils.js";
+import {
+  analyzeImagesWithBedrock,
+  SUPPORTED_VISION_FORMATS,
+  type ImageInput,
+} from "./bedrock-vision.js";
 
 const logger = createLogger("file-tools-registry");
 
@@ -31,10 +37,11 @@ export const FILE_TOOLS_PROMPT = `
 ワークスペースのファイルは以下の手順で読んでください：
 1. list_workspace_files でファイル一覧を確認
 2. 各ファイル形式に対応するスキルで読み取り
-   - PDF / Excel / Word / PowerPoint / 画像メタデータ → 対応するDefault Skillを使用
-3. 画像の視覚的確認が必要な場合のみ read_image_file を使用
+   - PDF / Excel / Word / PowerPoint → 対応するDefault Skillを使用
+3. 画像の内容を理解する必要がある場合は read_image_file を使用（promptパラメータで知りたい内容を指定）
+   - 複数画像を一括分析する場合は file_paths パラメータに配列で指定
+   - 対応フォーマット: JPEG/PNG/GIF/WebP
 
-※ 画像読み込みはコンテキストを消費するため、必要な場合のみ使用
 ※ テキスト/CSV/JSONファイルは従来のReadツールも使用可能
 `;
 
@@ -283,83 +290,173 @@ async function resizeImageIfNeeded(
   }
 }
 
+/** MIME type を Bedrock Converse API の ImageFormat に変換 */
+function toImageFormat(mimeType: string): ImageFormat | null {
+  const map: Record<string, ImageFormat> = {
+    "image/jpeg": "jpeg",
+    "image/jpg": "jpeg",
+    "image/png": "png",
+    "image/gif": "gif",
+    "image/webp": "webp",
+  };
+  return map[mimeType] || null;
+}
+
+/** 最大画像数（Bedrock Converse API の制限に合わせて安全マージン） */
+const MAX_IMAGES = 20;
+
 /**
- * read_image_file handler - Read image file visually
+ * read_image_file handler - AI で画像を分析しテキストで返す
+ *
+ * 単一画像（file_path）または複数画像（file_paths）を受け付け、
+ * Bedrock Converse API で分析してテキスト結果を返す。
  */
 async function readImageFileHandler(
   args: Record<string, unknown>,
 ): Promise<ToolResult> {
-  const filePath = (args.file_path as string) || "";
-  const maxDimension = (args.max_dimension as number) || 1920;
+  const maxDimension = (args.max_dimension as number) || 1568;
+  const prompt =
+    (args.prompt as string) ||
+    "この画像の内容を詳細に説明してください。テキストが含まれる場合は読み取ってください。";
 
-  try {
-    // Read from local filesystem
-    const fullPath = join(WORKSPACE_ROOT, filePath);
-    const content = await readFile(fullPath);
-    const filename = basename(fullPath);
-    const contentType = guessMimeType(fullPath);
-
-    // Check if it's an image
-    const category = getFileCategory(filename, contentType);
-    if (category !== "image") {
-      return {
-        content: [
-          {
-            type: "text",
-            text:
-              `このファイルは画像ではありません: ${filename} (${contentType})\n` +
-              "画像ファイル（JPEG/PNG/GIF/WebP）を指定してください。",
-          },
-        ],
-        is_error: true,
-      };
-    }
-
-    // Resize if needed
-    const [resizedContent, finalContentType] = await resizeImageIfNeeded(
-      content,
-      contentType,
-      maxDimension,
-    );
-
-    // Base64 encode
-    const base64Data = resizedContent.toString("base64");
-
-    // Return as image content block
-    return {
-      content: [
-        {
-          type: "image",
-          source: {
-            type: "base64",
-            media_type: finalContentType,
-            data: base64Data,
-          },
-        },
-      ],
-    };
-  } catch (e) {
-    if (
-      e instanceof Error &&
-      "code" in e &&
-      (e as NodeJS.ErrnoException).code === "ENOENT"
-    ) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `ファイルが見つかりません: ${filePath}`,
-          },
-        ],
-        is_error: true,
-      };
-    }
-    logger.error({ err: e, filePath }, "画像ファイル読み込みエラー");
+  // file_path / file_paths を正規化
+  let filePaths: string[];
+  if (args.file_paths && Array.isArray(args.file_paths)) {
+    filePaths = args.file_paths as string[];
+  } else if (args.file_path && typeof args.file_path === "string") {
+    filePaths = [args.file_path];
+  } else {
     return {
       content: [
         {
           type: "text",
-          text: `読み込みエラー: ${e instanceof Error ? e.message : String(e)}`,
+          text: "file_path（単一）または file_paths（配列）のいずれかを指定してください。",
+        },
+      ],
+      is_error: true,
+    };
+  }
+
+  if (filePaths.length === 0) {
+    return {
+      content: [
+        { type: "text", text: "画像ファイルのパスが指定されていません。" },
+      ],
+      is_error: true,
+    };
+  }
+
+  if (filePaths.length > MAX_IMAGES) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `一度に分析できる画像は最大${MAX_IMAGES}枚です（${filePaths.length}枚指定されています）。`,
+        },
+      ],
+      is_error: true,
+    };
+  }
+
+  try {
+    // 全画像を読み込み・バリデーション・リサイズ
+    const images: ImageInput[] = [];
+    const processedNames: string[] = [];
+
+    for (const fp of filePaths) {
+      const fullPath = join(WORKSPACE_ROOT, fp);
+
+      let content: Buffer;
+      try {
+        content = await readFile(fullPath);
+      } catch (e) {
+        if (
+          e instanceof Error &&
+          "code" in e &&
+          (e as NodeJS.ErrnoException).code === "ENOENT"
+        ) {
+          return {
+            content: [
+              { type: "text", text: `ファイルが見つかりません: ${fp}` },
+            ],
+            is_error: true,
+          };
+        }
+        throw e;
+      }
+
+      const filename = basename(fullPath);
+      const contentType = guessMimeType(fullPath);
+
+      // 画像カテゴリチェック
+      const category = getFileCategory(filename, contentType);
+      if (category !== "image") {
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `このファイルは画像ではありません: ${filename} (${contentType})\n` +
+                "画像ファイル（JPEG/PNG/GIF/WebP）を指定してください。",
+            },
+          ],
+          is_error: true,
+        };
+      }
+
+      // Vision API 対応フォーマットチェック
+      if (contentType && !SUPPORTED_VISION_FORMATS.has(contentType)) {
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `Vision API 非対応フォーマットです: ${filename} (${contentType})\n` +
+                "対応フォーマット: JPEG, PNG, GIF, WebP",
+            },
+          ],
+          is_error: true,
+        };
+      }
+
+      // リサイズ
+      const [resizedContent, finalContentType] = await resizeImageIfNeeded(
+        content,
+        contentType,
+        maxDimension,
+      );
+
+      const format = toImageFormat(finalContentType);
+      if (!format) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `画像フォーマットの変換に失敗しました: ${filename} (${finalContentType})`,
+            },
+          ],
+          is_error: true,
+        };
+      }
+
+      images.push({ buffer: resizedContent, format });
+      processedNames.push(fp);
+    }
+
+    // Bedrock Vision API で分析
+    const result = await analyzeImagesWithBedrock({ images, prompt });
+
+    return {
+      content: [{ type: "text", text: result.text }],
+    };
+  } catch (e) {
+    const paths = filePaths.join(", ");
+    logger.error({ err: e, filePaths: paths }, "画像分析エラー");
+    return {
+      content: [
+        {
+          type: "text",
+          text: `画像分析エラー: ${e instanceof Error ? e.message : String(e)}`,
         },
       ],
       is_error: true,

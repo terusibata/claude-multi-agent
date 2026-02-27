@@ -24,6 +24,10 @@ import { createLogger } from "./logger.js";
 import type { InvocationRequest, ModelTokenUsage } from "./types.js";
 import { createBuiltinMcpServers, createOpenApiMcpServers } from "./builtin-mcp.js";
 import type { S3Config } from "./builtin-mcp.js";
+import {
+  getAndResetVisionUsage,
+  getVisionModelId,
+} from "./file-tools/bedrock-vision.js";
 
 const logger = createLogger("sdk-client");
 
@@ -224,6 +228,27 @@ function messageToSSEEvents(
           cache_creation_1h_tokens: 0,
           cache_read_tokens: usage.cacheReadInputTokens,
           web_search_requests: usage.webSearchRequests,
+        };
+      }
+    }
+
+    // ★ Vision API (MCP tool 内 Bedrock 呼び出し) の使用量をマージ
+    // MCP tool ハンドラー内の Bedrock 呼び出しは SDK modelUsage に含まれないため、
+    // アキュムレータから取得してマージする
+    const visionUsage = getAndResetVisionUsage();
+    if (visionUsage.inputTokens > 0 || visionUsage.outputTokens > 0) {
+      const visionModelId = getVisionModelId();
+      if (modelUsageData[visionModelId]) {
+        modelUsageData[visionModelId].input_tokens += visionUsage.inputTokens;
+        modelUsageData[visionModelId].output_tokens += visionUsage.outputTokens;
+      } else {
+        modelUsageData[visionModelId] = {
+          input_tokens: visionUsage.inputTokens,
+          output_tokens: visionUsage.outputTokens,
+          cache_creation_5m_tokens: 0,
+          cache_creation_1h_tokens: 0,
+          cache_read_tokens: 0,
+          web_search_requests: 0,
         };
       }
     }

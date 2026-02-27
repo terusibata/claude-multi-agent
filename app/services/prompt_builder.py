@@ -38,9 +38,8 @@ def build_system_prompt(request: ExecuteRequest, skills_synced: bool) -> str:
         "## ファイル読み込み",
         "ワークスペースのファイルは以下の手順で読んでください：",
         "1. list_workspace_files でファイル一覧を確認",
-        "2. 各ファイル形式に対応するスキルで読み取り（PDF/Excel/Word/PowerPoint/画像メタデータ → 対応するDefault Skillを使用）",
-        "3. 画像の視覚的確認が必要な場合のみ read_image_file を使用",
-        "※ 画像読み込みはコンテキストを消費するため、必要な場合のみ使用",
+        "2. 各ファイル形式に対応するスキルで読み取り（PDF/Excel/Word/PowerPoint → 対応するDefault Skillを使用）",
+        "3. 画像の内容を理解する必要がある場合は read_image_file を使用（promptパラメータで知りたい内容を指定）",
         "※ テキスト/CSV/JSONファイルは従来のReadツールも使用可能",
     ]
 

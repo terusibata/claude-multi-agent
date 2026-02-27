@@ -124,7 +124,7 @@ class AIContextBuilder:
         type_info = []
         if type_counts[FileCategory.IMAGE] > 0:
             type_info.append(
-                f"  - 画像: {type_counts[FileCategory.IMAGE]}件 → image-readerスキルで情報確認、`read_image_file` で視覚的読み込み"
+                f"  - 画像: {type_counts[FileCategory.IMAGE]}件 → `read_image_file` で視覚的内容を分析"
             )
         if type_counts[FileCategory.PDF] > 0:
             type_info.append(
