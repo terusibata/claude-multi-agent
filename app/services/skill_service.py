@@ -576,7 +576,7 @@ class SkillService:
         # パストラバーサル最終検証（resolveして確認）
         resolved_full_path = full_path.resolve()
         resolved_skill_path = skill_path.resolve()
-        if not str(resolved_full_path).startswith(str(resolved_skill_path) + "/"):
+        if not resolved_full_path.is_relative_to(resolved_skill_path):
             raise PathTraversalError(file_path)
 
         if not full_path.exists() or not full_path.is_file():
