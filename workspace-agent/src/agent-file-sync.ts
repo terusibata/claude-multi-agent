@@ -155,6 +155,50 @@ export async function restoreFromS3(params: S3SyncParams): Promise<number> {
 }
 
 /**
+ * 指定ファイルを即座に S3 にアップロード（present_files 時のオンデマンドアップロード）
+ *
+ * present_files ツールが呼ばれた時点でフロントエンドがファイルダウンロード API を
+ * リクエストするため、セッション終了を待たずに S3 にアップロードする必要がある。
+ */
+export async function uploadFilesToS3(
+  params: S3SyncParams,
+  filePaths: string[],
+): Promise<number> {
+  const s3 = getS3Client(params.region);
+  const prefix = `${params.s3Prefix}${params.tenantId}/${params.conversationId}/`;
+  let uploaded = 0;
+
+  for (const filePath of filePaths) {
+    // 絶対パスを /workspace 相対に変換
+    const fullPath = path.isAbsolute(filePath)
+      ? filePath
+      : path.join(WORKSPACE_ROOT, filePath);
+
+    if (!fs.existsSync(fullPath) || !fs.statSync(fullPath).isFile()) {
+      logger.warn({ msg: "S3即時アップロード: ファイル不在", filePath });
+      continue;
+    }
+
+    const relative = path.relative(WORKSPACE_ROOT, fullPath);
+    if (isReservedPath(relative) || shouldExclude(relative)) continue;
+
+    const s3Key = `${prefix}${relative}`;
+    try {
+      const content = fs.readFileSync(fullPath);
+      await s3.send(
+        new PutObjectCommand({ Bucket: params.s3Bucket, Key: s3Key, Body: content }),
+      );
+      uploaded++;
+      logger.info({ msg: "S3即時アップロード完了", s3Key, bytes: content.length });
+    } catch (e) {
+      logger.error({ msg: "S3即時アップロードエラー", filePath, s3Key, error: String(e) });
+    }
+  }
+
+  return uploaded;
+}
+
+/**
  * /workspace → S3 に全ファイルをアップロード（Turn完了後）
  */
 export async function syncToS3(params: S3SyncParams): Promise<number> {
