@@ -1,7 +1,7 @@
 """
 イベント変換モジュール
 
-SDK（workspace_agent）から送信されるSSEイベントを
+AgentCore Runtime コンテナ（workspace-agent）から送信されるSSEイベントを
 ホスト側の正規形式に変換するロジックを提供する。
 
 変換対象:
@@ -38,7 +38,7 @@ class EventTranslator:
         """
         SDKイベントをホスト正規形式に変換
 
-        SDK側（workspace_agent）が送信するイベント形式:
+        AgentCore Runtime コンテナ（workspace-agent）が送信するイベント形式:
           text_delta, thinking, tool_use, tool_result, done, system, error
         を、ホスト側の正規形式:
           init, progress, assistant, thinking, tool_call, tool_result, done, error

@@ -200,7 +200,4 @@ async def track_request():
     if task:
         manager.track_task(task)
 
-    try:
-        yield
-    finally:
-        pass  # タスクは done_callback で自動的に削除される
+    yield  # タスクは done_callback で自動的に削除される
