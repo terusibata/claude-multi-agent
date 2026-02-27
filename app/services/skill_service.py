@@ -506,6 +506,41 @@ class SkillService:
                 )
         return files
 
+    async def get_archive(
+        self,
+        skill_id: str,
+        tenant_id: str,
+    ) -> tuple[bytes, str] | None:
+        """
+        SkillのファイルをZIPアーカイブとして取得
+
+        Args:
+            skill_id: Skill ID
+            tenant_id: テナントID
+
+        Returns:
+            (ZIPバイナリ, スキル名) のタプル（存在しない場合はNone）
+        """
+        import io
+        import zipfile
+
+        skill = await self.get_by_id(skill_id, tenant_id)
+        if not skill:
+            return None
+
+        skill_path = Path(skill.file_path)
+        if not skill_path.exists():
+            return None
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for file_path in skill_path.rglob("*"):
+                if file_path.is_file():
+                    relative = str(file_path.relative_to(skill_path))
+                    zf.write(file_path, relative)
+
+        return buf.getvalue(), skill.name
+
     async def get_file_content(
         self,
         skill_id: str,

@@ -5,6 +5,7 @@ Agent Skills管理API
 import structlog
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_skill_or_404
@@ -19,6 +20,8 @@ from app.schemas.skill import (
 )
 from app.services.skill_service import SkillService
 from app.utils.error_handler import raise_not_found
+from app.utils.exceptions import PathTraversalError, ValidationError
+from app.utils.security import validate_zip_archive
 
 router = APIRouter()
 logger = structlog.get_logger(__name__)
@@ -160,6 +163,68 @@ async def upload_skill(
     return await service.create(tenant_id, skill_data, files)
 
 
+@router.post(
+    "/upload",
+    response_model=SkillResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="SkillアップロードZIP",
+)
+async def upload_skill_zip(
+    tenant_id: str,
+    name: str = Form(..., description="Skill名"),
+    display_title: str | None = Form(None, description="表示タイトル"),
+    description: str | None = Form(None, description="説明"),
+    skill_archive: UploadFile = File(..., description="Skillファイル一式（ZIPアーカイブ）"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    ZIPアーカイブから新しいSkillをアップロードします。
+
+    ZIPにはSKILL.mdファイルを必ず含めてください。
+    ディレクトリ階層はそのまま保持されます。
+
+    ```bash
+    # 使用例
+    cd my-skill/
+    zip -r ../my-skill.zip .
+    curl -F "name=my-skill" -F "skill_archive=@my-skill.zip" \\
+         https://api.example.com/api/tenants/{tenant_id}/skills/upload
+    ```
+    """
+    service = SkillService(db)
+
+    # 重複チェック
+    existing = await service.get_by_name(name, tenant_id)
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Skill '{name}' は既に存在します",
+        )
+
+    # ZIPファイルを読み込み・検証・展開
+    try:
+        zip_data = await skill_archive.read()
+        files = validate_zip_archive(zip_data)
+    except ValidationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    except PathTraversalError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"不正なファイルパスが含まれています: {e}",
+        )
+
+    skill_data = SkillCreate(
+        name=name,
+        display_title=display_title,
+        description=description,
+    )
+
+    return await service.create(tenant_id, skill_data, files)
+
+
 @router.put("/{skill_id}", response_model=SkillResponse, summary="Skillメタデータ更新")
 async def update_skill(
     tenant_id: str,
@@ -218,6 +283,31 @@ async def delete_skill(
     deleted = await service.delete(skill_id, tenant_id)
     if not deleted:
         raise_not_found("Skill", skill_id)
+
+
+@router.get("/{skill_id}/archive", summary="Skillアーカイブダウンロード")
+async def download_skill_archive(
+    tenant_id: str,
+    skill_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    SkillのファイルをZIPアーカイブとしてダウンロードします。
+    ディレクトリ階層はそのまま保持されます。
+    """
+    service = SkillService(db)
+    result = await service.get_archive(skill_id, tenant_id)
+    if result is None:
+        raise_not_found("Skill", skill_id)
+
+    zip_data, skill_name = result
+    return Response(
+        content=zip_data,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{skill_name}.zip"',
+        },
+    )
 
 
 @router.get("/{skill_id}/files", response_model=SkillFilesResponse, summary="Skillファイル一覧")
