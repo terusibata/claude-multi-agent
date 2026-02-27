@@ -13,7 +13,7 @@ Agent Skills（AIエージェントの能力拡張）の管理を行うAPIです
 ### Agent Skillsとは
 
 Agent Skillsは、AIエージェントに特定の能力やドメイン知識を追加する仕組みです。
-各Skillは`SKILL.md`ファイルと追加リソースファイルで構成されます。
+各Skillは`SKILL.md`ファイルと追加リソースファイルで構成され、ZIPアーカイブとしてアップロード・ダウンロードします。
 
 ---
 
@@ -24,14 +24,13 @@ Agent Skillsは、AIエージェントに特定の能力やドメイン知識を
 | GET | `/api/tenants/{tenant_id}/skills` | Skills一覧取得 |
 | GET | `/api/tenants/{tenant_id}/skills/slash-commands` | スラッシュコマンド一覧 |
 | GET | `/api/tenants/{tenant_id}/skills/{skill_id}` | Skill詳細取得 |
-| POST | `/api/tenants/{tenant_id}/skills` | Skillアップロード（個別ファイル） |
-| POST | `/api/tenants/{tenant_id}/skills/upload` | SkillアップロードZIP |
+| POST | `/api/tenants/{tenant_id}/skills` | Skillアップロード |
 | PUT | `/api/tenants/{tenant_id}/skills/{skill_id}` | Skillメタデータ更新 |
 | PUT | `/api/tenants/{tenant_id}/skills/{skill_id}/files` | Skillファイル更新 |
 | DELETE | `/api/tenants/{tenant_id}/skills/{skill_id}` | Skill削除 |
+| GET | `/api/tenants/{tenant_id}/skills/{skill_id}/archive` | Skillアーカイブダウンロード |
 | GET | `/api/tenants/{tenant_id}/skills/{skill_id}/files` | Skillファイル一覧 |
 | GET | `/api/tenants/{tenant_id}/skills/{skill_id}/files/{path}` | Skillファイル内容取得 |
-| GET | `/api/tenants/{tenant_id}/skills/{skill_id}/archive` | Skillアーカイブダウンロード |
 
 ---
 
@@ -77,6 +76,39 @@ interface SkillFileInfo {
   size: number;           // ファイルサイズ（バイト）
   modified_at: string;    // 更新日時
 }
+```
+
+---
+
+## ZIPアーカイブの共通仕様
+
+Skillのアップロードおよびファイル更新はZIPアーカイブ形式で行います。
+
+### 制約
+
+| 項目 | 制限値 |
+|------|--------|
+| 展開後の合計サイズ | 10MB |
+| 最大ファイル数 | 50件 |
+| ファイルエンコーディング | UTF-8必須 |
+| 必須ファイル | `SKILL.md`（新規作成時） |
+
+### セキュリティ
+
+- `__MACOSX/`や`.DS_Store`等の隠しファイルは自動的に除外されます
+- パストラバーサル（`../`等）を含むエントリは拒否されます
+- ディレクトリ階層はそのまま保持されます
+
+### ZIPファイルの構造例
+
+```
+my-skill.zip
+├── SKILL.md              # 必須: スキル定義
+├── main.py               # メインスクリプト
+└── lib/
+    ├── helper.py          # サブモジュール
+    └── templates/
+        └── report.md      # テンプレートファイル
 ```
 
 ---
@@ -188,104 +220,35 @@ curl -X GET "https://api.example.com/api/tenants/acme-corp/skills/slash-commands
 
 ---
 
-## POST /api/tenants/{tenant_id}/skills
+## GET /api/tenants/{tenant_id}/skills/{skill_id}
 
-新しいSkillをアップロードします（個別ファイル形式）。
-
-階層構造を持つ複数ファイルをまとめてアップロードする場合は、[ZIPアップロード](#post-apitenantstenant_idskillsupload)の使用を推奨します。
+指定したIDのSkillを取得します。
 
 ### パスパラメータ
 
 | パラメータ | 型 | 必須 | 説明 |
 |-----------|-----|------|------|
 | `tenant_id` | string | Yes | テナントID |
-
-### リクエストボディ（multipart/form-data）
-
-| フィールド | 型 | 必須 | 説明 |
-|-----------|-----|------|------|
-| `name` | string | Yes | Skill名（英数字、ハイフン、アンダースコアのみ） |
-| `display_title` | string | No | 表示タイトル（最大300文字） |
-| `description` | string | No | 説明 |
-| `skill_md` | File | Yes | SKILL.mdファイル |
-| `additional_files` | File[] | No | 追加リソースファイル |
-
-### Skill名の制約
-
-- 英数字、ハイフン(`-`)、アンダースコア(`_`)のみ使用可能
-- パターン: `^[a-zA-Z0-9_\-]+$`
-- スペース、スラッシュ、ドット等は使用不可
+| `skill_id` | string | Yes | SkillのID |
 
 ### レスポンス
 
-**成功時 (201 Created)**
+**成功時 (200 OK)**
 
-```json
-{
-  "skill_id": "skill-003",
-  "tenant_id": "acme-corp",
-  "name": "new-skill",
-  "display_title": "新しいスキル",
-  "description": "新しいスキルの説明",
-  "version": 1,
-  "file_path": "/skills/acme-corp/new-skill",
-  "status": "active",
-  "slash_command": null,
-  "slash_command_description": null,
-  "is_user_selectable": true,
-  "created_at": "2024-01-17T09:00:00Z",
-  "updated_at": "2024-01-17T09:00:00Z"
-}
-```
-
-**エラー: 重複 (409 Conflict)**
-
-```json
-{
-  "error": {
-    "code": "CONFLICT",
-    "message": "Skill 'new-skill' は既に存在します"
-  }
-}
-```
-
-**エラー: エンコーディング (400 Bad Request)**
-
-```json
-{
-  "error": {
-    "code": "VALIDATION_ERROR",
-    "message": "ファイル 'data.txt' はUTF-8でエンコードされていません"
-  }
-}
-```
+`SkillResponse` オブジェクト
 
 ### curlの例
 
 ```bash
-# SKILL.mdのみ
-curl -X POST "https://api.example.com/api/tenants/acme-corp/skills" \
-  -H "X-API-Key: your_api_key" \
-  -F "name=data-analysis" \
-  -F "display_title=データ分析" \
-  -F "description=データファイルの分析を支援" \
-  -F "skill_md=@SKILL.md"
-
-# 追加ファイル付き
-curl -X POST "https://api.example.com/api/tenants/acme-corp/skills" \
-  -H "X-API-Key: your_api_key" \
-  -F "name=custom-skill" \
-  -F "skill_md=@SKILL.md" \
-  -F "additional_files=@templates/report.md" \
-  -F "additional_files=@examples/sample.json"
+curl -X GET "https://api.example.com/api/tenants/acme-corp/skills/skill-001" \
+  -H "X-API-Key: your_api_key"
 ```
 
 ---
 
-## POST /api/tenants/{tenant_id}/skills/upload
+## POST /api/tenants/{tenant_id}/skills
 
 ZIPアーカイブから新しいSkillをアップロードします。
-ディレクトリ階層を持つSkillファイルをまとめてアップロードする際に使用します。
 
 ### パスパラメータ
 
@@ -302,19 +265,11 @@ ZIPアーカイブから新しいSkillをアップロードします。
 | `description` | string | No | 説明 |
 | `skill_archive` | File | Yes | ZIPアーカイブファイル |
 
-### ZIPアーカイブの制約
+### Skill名の制約
 
-| 項目 | 制限値 |
-|------|--------|
-| 展開後の合計サイズ | 10MB |
-| 最大ファイル数 | 50件 |
-| ファイルエンコーディング | UTF-8必須 |
-| 必須ファイル | `SKILL.md` |
-
-- ZIPアーカイブには`SKILL.md`を必ず含めてください
-- ディレクトリ階層はそのまま保持されます
-- `__MACOSX/`や`.DS_Store`等の隠しファイルは自動的に除外されます
-- パストラバーサル（`../`等）を含むエントリは拒否されます
+- 英数字、ハイフン(`-`)、アンダースコア(`_`)のみ使用可能
+- パターン: `^[a-zA-Z0-9_\-]+$`
+- スペース、スラッシュ、ドット等は使用不可
 
 ### レスポンス
 
@@ -342,10 +297,7 @@ ZIPアーカイブから新しいSkillをアップロードします。
 
 ```json
 {
-  "error": {
-    "code": "CONFLICT",
-    "message": "Skill 'excel-reader' は既に存在します"
-  }
+  "detail": "Skill 'excel-reader' は既に存在します"
 }
 ```
 
@@ -379,72 +331,12 @@ ZIPアーカイブから新しいSkillをアップロードします。
 # Skillディレクトリをまとめてアップロード
 cd my-skill/
 zip -r ../my-skill.zip .
-curl -X POST "https://api.example.com/api/tenants/acme-corp/skills/upload" \
+curl -X POST "https://api.example.com/api/tenants/acme-corp/skills" \
   -H "X-API-Key: your_api_key" \
   -F "name=my-skill" \
   -F "display_title=カスタムスキル" \
   -F "description=カスタムスキルの説明" \
   -F "skill_archive=@../my-skill.zip"
-```
-
-### ZIPファイルの構造例
-
-```
-my-skill.zip
-├── SKILL.md              # 必須: スキル定義
-├── main.py               # メインスクリプト
-└── lib/
-    ├── helper.py          # サブモジュール
-    └── templates/
-        └── report.md      # テンプレートファイル
-```
-
----
-
-## GET /api/tenants/{tenant_id}/skills/{skill_id}/archive
-
-SkillのファイルをZIPアーカイブとしてダウンロードします。
-ディレクトリ階層はそのまま保持されます。
-
-### パスパラメータ
-
-| パラメータ | 型 | 必須 | 説明 |
-|-----------|-----|------|------|
-| `tenant_id` | string | Yes | テナントID |
-| `skill_id` | string | Yes | SkillのID |
-
-### レスポンス
-
-**成功時 (200 OK)**
-
-- Content-Type: `application/zip`
-- Content-Disposition: `attachment; filename="{skill_name}.zip"`
-
-レスポンスボディはZIPバイナリデータです。
-
-**エラー: 存在しない (404 Not Found)**
-
-```json
-{
-  "error": {
-    "code": "NOT_FOUND",
-    "message": "Skill 'skill-999' が見つかりません"
-  }
-}
-```
-
-### curlの例
-
-```bash
-# ZIPアーカイブとしてダウンロード
-curl -X GET "https://api.example.com/api/tenants/acme-corp/skills/skill-001/archive" \
-  -H "X-API-Key: your_api_key" \
-  -o skill.zip
-
-# ダウンロードして展開
-curl -X GET "https://api.example.com/api/tenants/acme-corp/skills/skill-001/archive" \
-  -H "X-API-Key: your_api_key" \
-  -o skill.zip && unzip skill.zip -d my-skill/
 ```
 
 ---
@@ -512,7 +404,10 @@ curl -X PUT "https://api.example.com/api/tenants/acme-corp/skills/skill-001" \
 
 ## PUT /api/tenants/{tenant_id}/skills/{skill_id}/files
 
-Skillのファイルを更新します。バージョンが上がります。
+SkillのファイルをZIPアーカイブで更新します。バージョンが上がります。
+
+ZIPに含まれるファイルで既存ファイルを上書きします。
+ZIPに含まれないファイルはそのまま残ります。
 
 ### パスパラメータ
 
@@ -525,7 +420,7 @@ Skillのファイルを更新します。バージョンが上がります。
 
 | フィールド | 型 | 必須 | 説明 |
 |-----------|-----|------|------|
-| `files` | File[] | Yes | 更新するファイル |
+| `skill_archive` | File | Yes | 更新ファイル一式（ZIPアーカイブ） |
 
 ### レスポンス
 
@@ -537,6 +432,8 @@ Skillのファイルを更新します。バージョンが上がります。
   "tenant_id": "acme-corp",
   "name": "data-analysis",
   "version": 3,
+  "file_path": "/skills/acme-corp/data-analysis",
+  "status": "active",
   ...
 }
 ```
@@ -544,10 +441,11 @@ Skillのファイルを更新します。バージョンが上がります。
 ### curlの例
 
 ```bash
+# 更新ファイルをZIPにまとめてアップロード
+zip -r update.zip SKILL.md main.py lib/
 curl -X PUT "https://api.example.com/api/tenants/acme-corp/skills/skill-001/files" \
   -H "X-API-Key: your_api_key" \
-  -F "files=@SKILL.md" \
-  -F "files=@templates/updated.md"
+  -F "skill_archive=@update.zip"
 ```
 
 ---
@@ -574,6 +472,51 @@ Skillを削除します（ファイルシステムからも削除）。
 ```bash
 curl -X DELETE "https://api.example.com/api/tenants/acme-corp/skills/skill-001" \
   -H "X-API-Key: your_api_key"
+```
+
+---
+
+## GET /api/tenants/{tenant_id}/skills/{skill_id}/archive
+
+SkillのファイルをZIPアーカイブとしてダウンロードします。
+ディレクトリ階層はそのまま保持されます。
+
+### パスパラメータ
+
+| パラメータ | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| `tenant_id` | string | Yes | テナントID |
+| `skill_id` | string | Yes | SkillのID |
+
+### レスポンス
+
+**成功時 (200 OK)**
+
+- Content-Type: `application/zip`
+- Content-Disposition: `attachment; filename="{skill_name}.zip"`
+
+レスポンスボディはZIPバイナリデータです。
+
+**エラー: 存在しない (404 Not Found)**
+
+```json
+{
+  "detail": "Skill 'skill-999' が見つかりません"
+}
+```
+
+### curlの例
+
+```bash
+# ZIPアーカイブとしてダウンロード
+curl -X GET "https://api.example.com/api/tenants/acme-corp/skills/skill-001/archive" \
+  -H "X-API-Key: your_api_key" \
+  -o skill.zip
+
+# ダウンロードして展開
+curl -X GET "https://api.example.com/api/tenants/acme-corp/skills/skill-001/archive" \
+  -H "X-API-Key: your_api_key" \
+  -o skill.zip && unzip skill.zip -d my-skill/
 ```
 
 ---

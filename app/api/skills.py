@@ -70,43 +70,6 @@ async def get_skill(
     return skill
 
 
-async def _read_upload_file_safely(file: UploadFile) -> tuple[str, str]:
-    """
-    アップロードファイルを安全に読み込む
-
-    Args:
-        file: アップロードファイル
-
-    Returns:
-        (ファイル名, ファイル内容) のタプル
-
-    Raises:
-        HTTPException: ファイル名がない場合やエンコーディングエラーの場合
-    """
-    if not file.filename:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="ファイル名が指定されていません",
-        )
-
-    try:
-        content = await file.read()
-        decoded_content = content.decode("utf-8")
-        return file.filename, decoded_content
-    except UnicodeDecodeError:
-        logger.warning("ファイルエンコーディングエラー", filename=file.filename)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"ファイル '{file.filename}' はUTF-8でエンコードされていません",
-        )
-    except OSError as e:
-        logger.error("ファイル読み込みエラー", filename=file.filename, error=str(e))
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="ファイルの読み込みに失敗しました",
-        )
-
-
 @router.post(
     "",
     response_model=SkillResponse,
@@ -114,62 +77,6 @@ async def _read_upload_file_safely(file: UploadFile) -> tuple[str, str]:
     summary="Skillアップロード",
 )
 async def upload_skill(
-    tenant_id: str,
-    name: str = Form(..., description="Skill名"),
-    display_title: str | None = Form(None, description="表示タイトル"),
-    description: str | None = Form(None, description="説明"),
-    skill_md: UploadFile = File(..., description="SKILL.mdファイル"),
-    additional_files: list[UploadFile] | None = File(default=None, description="追加ファイル"),
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    新しいSkillをアップロードします。
-
-    - **name**: Skill名（ディレクトリ名として使用）
-    - **skill_md**: SKILL.mdファイル（必須）
-    - **additional_files**: 追加のリソースファイル
-    """
-    service = SkillService(db)
-
-    # 重複チェック
-    existing = await service.get_by_name(name, tenant_id)
-    if existing:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Skill '{name}' は既に存在します",
-        )
-
-    # ファイル内容を読み込み
-    files = {}
-
-    # SKILL.mdを読み込み
-    _, skill_md_content = await _read_upload_file_safely(skill_md)
-    files["SKILL.md"] = skill_md_content
-
-    # 追加ファイルを読み込み（空文字列やNoneをスキップ）
-    if additional_files:
-        for file in additional_files:
-            # curlで空の-Fパラメータが渡された場合をスキップ
-            if file and file.filename:
-                filename, content = await _read_upload_file_safely(file)
-                files[filename] = content
-
-    skill_data = SkillCreate(
-        name=name,
-        display_title=display_title,
-        description=description,
-    )
-
-    return await service.create(tenant_id, skill_data, files)
-
-
-@router.post(
-    "/upload",
-    response_model=SkillResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="SkillアップロードZIP",
-)
-async def upload_skill_zip(
     tenant_id: str,
     name: str = Form(..., description="Skill名"),
     display_title: str | None = Form(None, description="表示タイトル"),
@@ -188,7 +95,7 @@ async def upload_skill_zip(
     cd my-skill/
     zip -r ../my-skill.zip .
     curl -F "name=my-skill" -F "skill_archive=@my-skill.zip" \\
-         https://api.example.com/api/tenants/{tenant_id}/skills/upload
+         https://api.example.com/api/tenants/{tenant_id}/skills
     ```
     """
     service = SkillService(db)
@@ -246,19 +153,30 @@ async def update_skill(
 async def update_skill_files(
     tenant_id: str,
     skill_id: str,
-    files: list[UploadFile] = File(..., description="更新するファイル"),
+    skill_archive: UploadFile = File(..., description="更新ファイル一式（ZIPアーカイブ）"),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Skillのファイルを更新します。バージョンが上がります。
+    SkillのファイルをZIPアーカイブで更新します。バージョンが上がります。
+
+    ZIPに含まれるファイルで既存ファイルを上書きします。
+    ZIPに含まれないファイルはそのまま残ります。
     """
     service = SkillService(db)
 
-    # ファイル内容を読み込み
-    file_contents = {}
-    for file in files:
-        filename, content = await _read_upload_file_safely(file)
-        file_contents[filename] = content
+    try:
+        zip_data = await skill_archive.read()
+        file_contents = validate_zip_archive(zip_data)
+    except ValidationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    except PathTraversalError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"不正なファイルパスが含まれています: {e}",
+        )
 
     skill = await service.update_files(skill_id, tenant_id, file_contents)
     if not skill:
