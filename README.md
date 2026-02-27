@@ -67,12 +67,12 @@ Amazon Bedrock AgentCore Runtime 上でエージェントをFirecracker microVM�
 
 ## 技術スタック
 
-- **言語**: Python 3.11+
-- **フレームワーク**: FastAPI
+- **言語**: Python 3.11+ / TypeScript (Node.js 24)
+- **フレームワーク**: FastAPI (バックエンド), Fastify (ワークスペースエージェント)
 - **データベース**: PostgreSQL (asyncpg)
 - **ORM**: SQLAlchemy 2.0
 - **マイグレーション**: Alembic
-- **AI SDK**: Claude Agent SDK
+- **AI SDK**: Claude Agent SDK (@anthropic-ai/claude-agent-sdk)
 - **AI基盤**: AWS Bedrock
 - **コンテナ実行**: Amazon Bedrock AgentCore Runtime
 - **ファイルストレージ**: Amazon S3
@@ -100,14 +100,19 @@ app/
 ├── middleware/            # 認証、セキュリティヘッダー
 ├── models/                # SQLAlchemy ORMモデル
 └── schemas/               # Pydanticスキーマ
-workspace_agent/           # AgentCoreコンテナ内エージェント
-├── main.py                # POST /invocations, GET /ping
-├── sdk_client.py          # Claude Agent SDK クライアント
-├── agent_file_sync.py     # S3ファイル同期
-└── models.py              # リクエストモデル
-workspace-base/            # コンテナイメージ
+workspace-agent/           # AgentCoreコンテナ内エージェント (TypeScript)
+├── src/
+│   ├── index.ts           # POST /invocations, GET /ping (Fastify)
+│   ├── sdk-client.ts      # Claude Agent SDK クライアント
+│   ├── agent-file-sync.ts # S3ファイル同期
+│   ├── types.ts           # リクエストスキーマ (Zod)
+│   ├── logger.ts          # ログ設定
+│   ├── builtin-mcp.ts     # ビルトインMCPサーバー
+│   ├── openapi-mcp.ts     # OpenAPI MCPサーバー
+│   └── file-tools/        # ファイル操作ツール (Excel/PDF/画像等)
 ├── Dockerfile             # ARM64, port 8080
-└── workspace-requirements.txt
+├── package.json
+└── tsconfig.json
 ```
 
 ## AWS環境構築
@@ -123,14 +128,21 @@ workspace-base/            # コンテナイメージ
 
 ```bash
 # コンテナイメージをビルド・プッシュ
-docker build --platform linux/arm64 -t workspace-base:latest -f workspace-base/Dockerfile .
+docker build --platform linux/arm64 -t workspace-agent:latest -f workspace-agent/Dockerfile .
 
 aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin <account>.dkr.ecr.us-west-2.amazonaws.com
-docker tag workspace-base:latest <account>.dkr.ecr.us-west-2.amazonaws.com/workspace-agent:latest
+docker tag workspace-agent:latest <account>.dkr.ecr.us-west-2.amazonaws.com/workspace-agent:latest
 docker push <account>.dkr.ecr.us-west-2.amazonaws.com/workspace-agent:latest
 
-# AgentCore Runtime を作成（AWS Console または CLI）
+# AgentCore Runtime を作成
 # ポート: 8080, ヘルスチェック: GET /ping
+# Execution Roleには Bedrock (InvokeModel) と S3 (PutObject/GetObject/ListBucket) の権限が必要
+aws bedrock-agentcore create-runtime \
+  --runtime-name workspace-agent \
+  --network-mode PUBLIC \
+  --auth-mode NONE \
+  --image-uri <account>.dkr.ecr.us-west-2.amazonaws.com/workspace-agent:latest \
+  --runtime-role-arn arn:aws:iam::<account>:role/AgentCoreExecutionRole
 ```
 
 ### 2. IAMポリシー
@@ -168,7 +180,40 @@ docker push <account>.dkr.ecr.us-west-2.amazonaws.com/workspace-agent:latest
 }
 ```
 
-### 3. 環境変数
+### 3. AgentCore Execution Role
+
+workspace-agentコンテナ（AgentCore Runtime上）がAWSサービスにアクセスするためのIAMロールです。
+AgentCore Runtime作成時に `--runtime-role-arn` で指定します。
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:ListBucket"
+      ],
+      "Resource": [
+        "arn:aws:s3:::your-bucket-name",
+        "arn:aws:s3:::your-bucket-name/*"
+      ]
+    }
+  ]
+}
+```
+
+### 4. 環境変数
 
 ```bash
 # 必須
@@ -201,17 +246,32 @@ curl http://localhost:8000/health
 
 DBマイグレーションはコンテナ起動時に自動実行されます。
 
+> **注意**: エージェント実行の完全なテストにはAWS上にAgentCore Runtimeが作成済みである必要があります。
+> `AGENTCORE_RUNTIME_ARN` が未設定の場合、バックエンドは起動しますがエージェント実行は失敗します。
+
 ### ローカル開発（Dockerなし）
 
 ```bash
-# 仮想環境を作成
+# 1. 仮想環境を作成
 python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
-# PostgreSQLを起動（別途必要）
+# 2. PostgreSQLを起動（例: Docker）
+docker run -d --name ai-agent-db \
+  -e POSTGRES_USER=aiagent \
+  -e POSTGRES_PASSWORD=aiagent_password \
+  -e POSTGRES_DB=aiagent \
+  -p 5432:5432 postgres:15-alpine
 
-# アプリケーション起動
+# 3. 環境変数を設定
+cp .env.example .env
+# .env を編集: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, S3_BUCKET_NAME, AGENTCORE_RUNTIME_ARN
+
+# 4. DBマイグレーション
+alembic upgrade head
+
+# 5. アプリケーション起動
 uvicorn app.main:app --reload
 ```
 
