@@ -467,6 +467,68 @@ def format_container_recovered_event(
     })
 
 
+def format_subagent_start_event(
+    seq: int,
+    agent_id: str,
+    agent_type: str,
+    description: str,
+    model: str | None = None,
+) -> dict:
+    """
+    サブエージェント開始イベントをフォーマット
+
+    Args:
+        seq: シーケンス番号
+        agent_id: エージェントID（tool_use_id）
+        agent_type: エージェントタイプ（例: "Explore"）
+        description: 説明
+        model: 使用モデル（オプション）
+
+    Returns:
+        イベントデータ
+    """
+    data: dict[str, Any] = {
+        "agent_id": agent_id,
+        "agent_type": agent_type,
+        "description": description,
+    }
+    if model:
+        data["model"] = model
+
+    return create_event("subagent_start", seq, data)
+
+
+def format_subagent_end_event(
+    seq: int,
+    agent_id: str,
+    agent_type: str,
+    status: str,
+    result_preview: str | None = None,
+) -> dict:
+    """
+    サブエージェント終了イベントをフォーマット
+
+    Args:
+        seq: シーケンス番号
+        agent_id: エージェントID
+        agent_type: エージェントタイプ
+        status: ステータス（completed / error）
+        result_preview: 結果プレビュー（オプション）
+
+    Returns:
+        イベントデータ
+    """
+    data: dict[str, Any] = {
+        "agent_id": agent_id,
+        "agent_type": agent_type,
+        "status": status,
+    }
+    if result_preview:
+        data["result_preview"] = result_preview
+
+    return create_event("subagent_end", seq, data)
+
+
 def to_sse_payload(event: dict) -> dict:
     """
     内部イベント辞書をSSE送信用ペイロードに変換

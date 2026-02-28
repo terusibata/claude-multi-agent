@@ -33,7 +33,7 @@ def build_system_prompt(request: ExecuteRequest, skills_synced: bool) -> str:
         "- **相対パスのみ使用**（例: `hello.py`）。絶対パス（/tmp/等）は禁止",
         "- ファイル作成後は `mcp__file-presentation__present_files` で提示",
         '- file_paths は配列で指定: `["hello.py"]`',
-        "- **サブエージェント（Task）がファイルを作成した場合も、その完了後に必ず `mcp__file-presentation__present_files` を呼び出してください**",
+        "- **サブエージェント（Agent）がファイルを作成した場合も、その完了後に必ず `mcp__file-presentation__present_files` を呼び出してください**",
         "",
         "## ファイル読み込み",
         "ワークスペースのファイルは以下の手順で読んでください：",
