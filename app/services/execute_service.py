@@ -185,7 +185,7 @@ class ExecuteService:
 
                 # アシスタントメッセージ永続化用にイベントを蓄積
                 _evt_type = event.get("event")
-                if _evt_type in ("assistant", "thinking", "tool_call", "tool_result"):
+                if _evt_type in ("assistant", "thinking", "tool_call", "tool_result", "subagent_start", "subagent_end"):
                     assistant_events.append(event)
 
                 yield event

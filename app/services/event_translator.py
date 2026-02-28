@@ -19,15 +19,25 @@ from app.utils.streaming import (
     format_done_event,
     format_init_event,
     format_progress_event,
+    format_subagent_end_event,
+    format_subagent_start_event,
     format_thinking_event,
     format_tool_call_event,
     format_tool_result_event,
 )
 from app.utils.progress_messages import get_initial_message
 
+# サブエージェントツール名（"Task"は SDK 内部名、"Agent"は新名称）
+_SUBAGENT_TOOL_NAMES = {"Agent", "Task"}
+
 
 class EventTranslator:
     """SDKイベントをホスト正規形式に変換するトランスレータ"""
+
+    def __init__(self) -> None:
+        # サブエージェントの agent_id → agent_type マッピング
+        # tool_use 時に記録し、tool_result 時に取り出して subagent_end に使用
+        self._subagent_types: dict[str, str] = {}
 
     def translate_event(
         self,
@@ -49,6 +59,10 @@ class EventTranslator:
         """
         event_type = raw_event.get("event", "")
         data = raw_event.get("data", {})
+
+        # parent_tool_use_id → parent_agent_id 変換
+        # サブエージェント内のイベントには SDK が parent_tool_use_id を付与する
+        parent_agent_id: str | None = data.get("parent_tool_use_id")
 
         if event_type == "system" and data.get("subtype") == "init":
             # SDK system(init) → 仕様準拠の init イベントに変換
@@ -83,10 +97,12 @@ class EventTranslator:
                     seq=seq_counter.next(),
                     progress_type="generating",
                     message=get_initial_message("generating"),
+                    parent_agent_id=parent_agent_id,
                 ),
                 format_assistant_event(
                     seq=seq_counter.next(),
                     content_blocks=[{"type": "text", "text": data.get("text", "")}],
+                    parent_agent_id=parent_agent_id,
                 ),
             ]
         elif event_type == "thinking":
@@ -96,17 +112,20 @@ class EventTranslator:
                     seq=seq_counter.next(),
                     progress_type="thinking",
                     message=get_initial_message("thinking"),
+                    parent_agent_id=parent_agent_id,
                 ),
                 format_thinking_event(
                     seq=seq_counter.next(),
                     content=data.get("content", ""),
+                    parent_agent_id=parent_agent_id,
                 ),
             ]
         elif event_type == "tool_use":
             # progress(tool, running) + tool_call
             tool_name = data.get("tool_name", "")
             tool_use_id = data.get("tool_use_id", "")
-            return [
+            tool_input = data.get("input", {})
+            events = [
                 format_progress_event(
                     seq=seq_counter.next(),
                     progress_type="tool",
@@ -114,27 +133,73 @@ class EventTranslator:
                     tool_use_id=tool_use_id,
                     tool_name=tool_name,
                     tool_status="running",
+                    parent_agent_id=parent_agent_id,
                 ),
                 format_tool_call_event(
                     seq=seq_counter.next(),
                     tool_use_id=tool_use_id,
                     tool_name=tool_name,
-                    tool_input=data.get("input", {}),
+                    tool_input=tool_input,
                     summary=f"ツール実行: {tool_name}",
+                    parent_agent_id=parent_agent_id,
                 ),
             ]
+
+            # サブエージェント検出 → subagent_start を追加
+            # メインエージェントからの tool_use のみ対象（サブエージェント内の tool_use は除外）
+            if (
+                tool_name in _SUBAGENT_TOOL_NAMES
+                and tool_use_id not in self._subagent_types
+                and not parent_agent_id
+            ):
+                agent_type = tool_input.get("subagent_type", "") if isinstance(tool_input, dict) else ""
+                description = tool_input.get("description", "") if isinstance(tool_input, dict) else ""
+                model = tool_input.get("model") if isinstance(tool_input, dict) else None
+                self._subagent_types[tool_use_id] = agent_type
+                events.append(
+                    format_subagent_start_event(
+                        seq=seq_counter.next(),
+                        agent_id=tool_use_id,
+                        agent_type=agent_type,
+                        description=description,
+                        model=model,
+                    )
+                )
+
+            return events
         elif event_type == "tool_result":
-            # tool_result のみ（結果自体がステータスを示す）
-            return [
+            tool_use_id = data.get("tool_use_id", "")
+            tool_name = data.get("tool_name", "")
+            is_error = data.get("is_error", False)
+            content = data.get("content", "")
+
+            events = [
                 format_tool_result_event(
                     seq=seq_counter.next(),
-                    tool_use_id=data.get("tool_use_id", ""),
-                    tool_name=data.get("tool_name", ""),
-                    status="error" if data.get("is_error") else "completed",
-                    content=data.get("content", ""),
-                    is_error=data.get("is_error", False),
+                    tool_use_id=tool_use_id,
+                    tool_name=tool_name,
+                    status="error" if is_error else "completed",
+                    content=content,
+                    is_error=is_error,
+                    parent_agent_id=parent_agent_id,
                 )
             ]
+
+            # サブエージェント完了検出 → subagent_end を追加
+            agent_type = self._subagent_types.pop(tool_use_id, None)
+            if agent_type is not None:
+                preview = content[:200] if isinstance(content, str) else ""
+                events.append(
+                    format_subagent_end_event(
+                        seq=seq_counter.next(),
+                        agent_id=tool_use_id,
+                        agent_type=agent_type,
+                        status="error" if is_error else "completed",
+                        result_preview=preview if preview else None,
+                    )
+                )
+
+            return events
         elif event_type == "done":
             return [
                 format_done_event(
@@ -163,6 +228,33 @@ class EventTranslator:
                     message=data.get("message", "Container recovered"),
                     recovered=data.get("recovered", True),
                     retry_recommended=data.get("retry_recommended", True),
+                )
+            ]
+        elif event_type == "subagent_start":
+            # ネイティブ subagent_start イベント（将来の SDK バージョンに備える）
+            agent_id = data.get("agent_id", "")
+            agent_type = data.get("agent_type", "")
+            self._subagent_types[agent_id] = agent_type
+            return [
+                format_subagent_start_event(
+                    seq=seq_counter.next(),
+                    agent_id=agent_id,
+                    agent_type=agent_type,
+                    description=data.get("description", ""),
+                    model=data.get("model"),
+                )
+            ]
+        elif event_type == "subagent_end":
+            # ネイティブ subagent_end イベント（将来の SDK バージョンに備える）
+            agent_id = data.get("agent_id", "")
+            self._subagent_types.pop(agent_id, None)
+            return [
+                format_subagent_end_event(
+                    seq=seq_counter.next(),
+                    agent_id=agent_id,
+                    agent_type=data.get("agent_type", ""),
+                    status=data.get("status", "completed"),
+                    result_preview=data.get("result_preview"),
                 )
             ]
         else:

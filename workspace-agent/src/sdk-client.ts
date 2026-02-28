@@ -186,6 +186,8 @@ function messageToSSEEvents(
     const assistantMsg = message as SDKAssistantMessage;
     // SDKAssistantMessage.message is a BetaMessage which has .content
     const content = assistantMsg.message?.content ?? [];
+    // サブエージェント由来のメッセージを識別するための parent_tool_use_id
+    const parentToolUseId = assistantMsg.parent_tool_use_id;
 
     // tool_use_id → tool_name マッピングを蓄積
     for (const block of content) {
@@ -196,17 +198,24 @@ function messageToSSEEvents(
 
     for (const block of content) {
       if (block.type === "text") {
-        events.push(formatSSE("text_delta", { text: block.text }));
+        events.push(formatSSE("text_delta", {
+          text: block.text,
+          ...(parentToolUseId && { parent_tool_use_id: parentToolUseId }),
+        }));
       } else if (block.type === "tool_use") {
         events.push(
           formatSSE("tool_use", {
             tool_use_id: block.id,
             tool_name: block.name,
             input: block.input,
+            ...(parentToolUseId && { parent_tool_use_id: parentToolUseId }),
           }),
         );
       } else if (block.type === "thinking") {
-        events.push(formatSSE("thinking", { content: (block as { thinking: string }).thinking }));
+        events.push(formatSSE("thinking", {
+          content: (block as { thinking: string }).thinking,
+          ...(parentToolUseId && { parent_tool_use_id: parentToolUseId }),
+        }));
       }
     }
   } else if (message.type === "result") {
@@ -300,6 +309,8 @@ function messageToSSEEvents(
   } else if (message.type === "user") {
     // SDKUserMessage.message is a MessageParam which has .content
     const userMsg = message as SDKUserMessage;
+    // サブエージェント由来のメッセージを識別するための parent_tool_use_id
+    const parentToolUseId = userMsg.parent_tool_use_id;
     const msgContent = userMsg.message?.content;
     if (Array.isArray(msgContent)) {
       for (const block of msgContent) {
@@ -329,6 +340,7 @@ function messageToSSEEvents(
               tool_name: toolNameMap.get(toolResult.tool_use_id) ?? "",
               content: contentStr,
               is_error: toolResult.is_error ?? false,
+              ...(parentToolUseId && { parent_tool_use_id: parentToolUseId }),
             }),
           );
         }

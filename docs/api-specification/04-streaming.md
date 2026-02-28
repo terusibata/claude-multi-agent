@@ -347,7 +347,7 @@ interface ToolResultEvent {
 
 ### 6. subagent_start（サブエージェント開始）
 
-サブエージェント（Taskツール）の開始を通知します。
+サブエージェント（Agentツール）の開始を通知します。
 
 ```typescript
 interface SubagentStartEvent {
