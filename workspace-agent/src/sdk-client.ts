@@ -108,6 +108,7 @@ function buildSdkOptions(request: InvocationRequest): Options {
     disallowedTools: [
       "AskUserQuestion",  // ユーザーへの質問（WebSocket/双方向通信が必要）
       "ExitPlanMode",     // プランモード終了（ユーザー承認が必要）
+      "WebSearch",        // Bedrock 環境では利用不可（Anthropic直接APIのみ対応）
     ],
   };
 
