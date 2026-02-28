@@ -17,6 +17,7 @@ import asyncio
 import base64
 import time
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import AsyncGenerator
 
@@ -159,6 +160,9 @@ class ExecuteService:
                 # done イベントからメタデータ（usage/cost）を抽出
                 if event.get("event") == "done":
                     done_data = event.get("data", {})
+
+                    # model_usage にモデルごとの cost_usd を付与
+                    await self._enrich_model_usage_with_cost(done_data, model)
 
                     # done前にcontext_statusイベントを送信
                     ctx_event = await self._context_manager.build_context_status_event(
@@ -545,6 +549,51 @@ class ExecuteService:
             )
         except Exception as e:
             logger.error("アシスタントメッセージ保存エラー", error=str(e))
+
+    async def _enrich_model_usage_with_cost(
+        self, done_data: dict, default_model: Model
+    ) -> None:
+        """model_usage の各モデルに cost_usd を付与し、合計 cost_usd を更新する
+
+        フロントエンドがモデル別の正確なコストを記録できるよう、
+        done イベントを yield する前に呼び出す。
+        """
+        model_usage = done_data.get("model_usage")
+        if not model_usage:
+            return
+
+        total_cost = Decimal("0")
+        for sdk_model_name, tokens in model_usage.items():
+            m_input = tokens.get("input_tokens", 0)
+            m_output = tokens.get("output_tokens", 0)
+            m_cache_read = tokens.get("cache_read_tokens", 0)
+            m_cache_creation = tokens.get("cache_creation_5m_tokens", 0)
+
+            target_model = await self.model_service.find_by_sdk_model_name(
+                sdk_model_name
+            )
+            if target_model:
+                cost = target_model.calculate_cost(
+                    m_input,
+                    m_output,
+                    cache_creation_5m_tokens=m_cache_creation,
+                    cache_creation_1h_tokens=0,
+                    cache_read_tokens=m_cache_read,
+                )
+            else:
+                cost = default_model.calculate_cost(
+                    m_input,
+                    m_output,
+                    cache_creation_5m_tokens=m_cache_creation,
+                    cache_creation_1h_tokens=0,
+                    cache_read_tokens=m_cache_read,
+                )
+
+            tokens["cost_usd"] = str(cost)
+            total_cost += cost
+
+        # 合計 cost_usd をモデル別コストの合算値で上書き
+        done_data["cost_usd"] = str(total_cost)
 
     async def _record_usage(
         self, request: ExecuteRequest, model: Model, done_data: dict
