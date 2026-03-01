@@ -21,10 +21,7 @@ def _make_zip(files: dict[str, str | bytes]) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for name, content in files.items():
-            if isinstance(content, bytes):
-                zf.writestr(name, content)
-            else:
-                zf.writestr(name, content)
+            zf.writestr(name, content)
     return buf.getvalue()
 
 

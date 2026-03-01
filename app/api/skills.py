@@ -170,10 +170,9 @@ async def update_skill_files(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    SkillのファイルをZIPアーカイブで更新します。バージョンが上がります。
+    SkillのファイルをZIPアーカイブで完全置換します。バージョンが上がります。
 
-    ZIPに含まれるファイルで既存ファイルを上書きします。
-    ZIPに含まれないファイルはそのまま残ります。
+    既存のファイルは全て削除され、ZIPに含まれるファイルで置き換えられます。
     """
     service = SkillService(db)
 
