@@ -136,6 +136,9 @@ class SkillService:
         self,
         tenant_id: str,
         status: str | None = None,
+        is_user_selectable: bool | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
     ) -> list[AgentSkill]:
         """
         テナントの全Skillsを取得
@@ -143,6 +146,9 @@ class SkillService:
         Args:
             tenant_id: テナントID
             status: フィルタリング用ステータス
+            is_user_selectable: ユーザー選択可能フィルター
+            limit: 取得件数上限
+            offset: 取得開始位置
 
         Returns:
             Skillsリスト
@@ -150,7 +156,13 @@ class SkillService:
         query = select(AgentSkill).where(AgentSkill.tenant_id == tenant_id)
         if status:
             query = query.where(AgentSkill.status == status)
+        if is_user_selectable is not None:
+            query = query.where(AgentSkill.is_user_selectable == is_user_selectable)
         query = query.order_by(AgentSkill.name)
+        if offset is not None:
+            query = query.offset(offset)
+        if limit is not None:
+            query = query.limit(limit)
 
         result = await self.db.execute(query)
         return list(result.scalars().all())

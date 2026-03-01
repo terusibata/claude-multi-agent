@@ -29,13 +29,22 @@ router = APIRouter()
 async def get_skills(
     tenant_id: str,
     status: str | None = Query(None, description="ステータスフィルター"),
+    is_user_selectable: bool | None = Query(None, description="ユーザー選択可能フィルター"),
+    limit: int | None = Query(None, ge=1, le=1000, description="取得件数上限"),
+    offset: int | None = Query(None, ge=0, description="取得開始位置"),
     db: AsyncSession = Depends(get_db),
 ):
     """
     テナントのAgent Skills一覧を取得します。
     """
     service = SkillService(db)
-    return await service.get_all_by_tenant(tenant_id, status=status)
+    return await service.get_all_by_tenant(
+        tenant_id,
+        status=status,
+        is_user_selectable=is_user_selectable,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get(
@@ -77,7 +86,7 @@ async def get_skill(
 async def upload_skill(
     tenant_id: str,
     name: str = Form(..., description="Skill名"),
-    display_title: str | None = Form(None, description="表示タイトル"),
+    display_title: str = Form(..., description="表示タイトル"),
     description: str | None = Form(None, description="説明"),
     slash_command: str | None = Form(None, description="スラッシュコマンド名"),
     slash_command_description: str | None = Form(None, description="スラッシュコマンドの説明"),
@@ -161,10 +170,9 @@ async def update_skill_files(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    SkillのファイルをZIPアーカイブで更新します。バージョンが上がります。
+    SkillのファイルをZIPアーカイブで完全置換します。バージョンが上がります。
 
-    ZIPに含まれるファイルで既存ファイルを上書きします。
-    ZIPに含まれないファイルはそのまま残ります。
+    既存のファイルは全て削除され、ZIPに含まれるファイルで置き換えられます。
     """
     service = SkillService(db)
 
