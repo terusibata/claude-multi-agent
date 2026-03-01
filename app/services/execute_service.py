@@ -580,6 +580,7 @@ class ExecuteService:
                     cache_creation_1h_tokens=0,
                     cache_read_tokens=m_cache_read,
                 )
+                tokens["resolved_model_id"] = target_model.model_id
             else:
                 cost = default_model.calculate_cost(
                     m_input,
@@ -588,6 +589,7 @@ class ExecuteService:
                     cache_creation_1h_tokens=0,
                     cache_read_tokens=m_cache_read,
                 )
+                tokens["resolved_model_id"] = default_model.model_id
 
             tokens["cost_usd"] = str(cost)
             total_cost += cost
