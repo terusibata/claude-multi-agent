@@ -79,6 +79,9 @@ async def upload_skill(
     name: str = Form(..., description="Skill名"),
     display_title: str | None = Form(None, description="表示タイトル"),
     description: str | None = Form(None, description="説明"),
+    slash_command: str | None = Form(None, description="スラッシュコマンド名"),
+    slash_command_description: str | None = Form(None, description="スラッシュコマンドの説明"),
+    is_user_selectable: bool = Form(True, description="ユーザーがUIから選択可能かどうか"),
     skill_archive: UploadFile = File(..., description="Skillファイル一式（ZIPアーカイブ）"),
     db: AsyncSession = Depends(get_db),
 ):
@@ -125,6 +128,9 @@ async def upload_skill(
         name=name,
         display_title=display_title,
         description=description,
+        slash_command=slash_command,
+        slash_command_description=slash_command_description,
+        is_user_selectable=is_user_selectable,
     )
 
     return await service.create(tenant_id, skill_data, files)
@@ -255,7 +261,7 @@ async def get_skill_file_content(
     Skillの特定ファイルの内容を取得します。
     """
     service = SkillService(db)
-    content = await service.get_file_content(skill_id, tenant_id, file_path)
-    if content is None:
+    result = await service.get_file_content(skill_id, tenant_id, file_path)
+    if result is None:
         raise_not_found("ファイル", file_path)
-    return {"content": content}
+    return result

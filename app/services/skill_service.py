@@ -16,7 +16,6 @@ from app.config import get_settings
 from app.models.agent_skill import AgentSkill
 from app.schemas.skill import SkillCreate, SkillFileInfo, SkillUpdate
 from app.utils.exceptions import (
-    FileEncodingError,
     FileOperationError,
     PathTraversalError,
     ValidationError,
@@ -58,7 +57,7 @@ class SkillService:
         return self._s3_backup
 
     async def _sync_to_s3(
-        self, tenant_id: str, skill_name: str, files: dict[str, str]
+        self, tenant_id: str, skill_name: str, files: dict[str, bytes]
     ) -> None:
         """スキルファイルをS3にバックアップ（best-effort）"""
         backup = self._get_s3_backup()
@@ -222,22 +221,21 @@ class SkillService:
         return sanitized
 
     def _write_file_safely(
-        self, file_path: Path, content: str
+        self, file_path: Path, content: bytes
     ) -> None:
         """
-        ファイルを安全に書き込む
+        ファイルを安全に書き込む（バイナリモード）
 
         Args:
             file_path: ファイルパス
-            content: ファイル内容
+            content: ファイル内容（raw bytes）
 
         Raises:
             FileOperationError: ファイル書き込みに失敗した場合
         """
         try:
             file_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(file_path, "w", encoding="utf-8") as f:
-                f.write(content)
+            file_path.write_bytes(content)
         except PermissionError as e:
             logger.error("ファイル書き込み権限エラー", path=str(file_path), error=str(e))
             raise FileOperationError("書き込み", str(file_path), str(e))
@@ -245,26 +243,21 @@ class SkillService:
             logger.error("ファイル書き込みエラー", path=str(file_path), error=str(e))
             raise FileOperationError("書き込み", str(file_path), str(e))
 
-    def _read_file_safely(self, file_path: Path) -> str:
+    def _read_file_safely(self, file_path: Path) -> bytes:
         """
-        ファイルを安全に読み込む
+        ファイルを安全に読み込む（バイナリモード）
 
         Args:
             file_path: ファイルパス
 
         Returns:
-            ファイル内容
+            ファイル内容（raw bytes）
 
         Raises:
             FileOperationError: ファイル読み込みに失敗した場合
-            FileEncodingError: ファイルがUTF-8でない場合
         """
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                return f.read()
-        except UnicodeDecodeError:
-            logger.error("ファイルエンコーディングエラー", path=str(file_path))
-            raise FileEncodingError(str(file_path))
+            return file_path.read_bytes()
         except PermissionError as e:
             logger.error("ファイル読み込み権限エラー", path=str(file_path), error=str(e))
             raise FileOperationError("読み込み", str(file_path), str(e))
@@ -276,7 +269,7 @@ class SkillService:
         self,
         tenant_id: str,
         skill_data: SkillCreate,
-        files: dict[str, str],
+        files: dict[str, bytes],
     ) -> AgentSkill:
         """
         Skillを作成
@@ -284,7 +277,7 @@ class SkillService:
         Args:
             tenant_id: テナントID
             skill_data: 作成データ
-            files: アップロードファイル {"filename": "content", ...}
+            files: アップロードファイル {"filename": raw_bytes, ...}
 
         Returns:
             作成されたSkill
@@ -298,7 +291,7 @@ class SkillService:
         skill_path = self._get_skill_path(tenant_id, skill_data.name)
 
         # ファイル名のバリデーションとサニタイズ
-        sanitized_files: dict[str, str] = {}
+        sanitized_files: dict[str, bytes] = {}
         for filename, content in files.items():
             sanitized_filename = self._validate_and_sanitize_filename(filename, skill_path)
             sanitized_files[sanitized_filename] = content
@@ -382,15 +375,17 @@ class SkillService:
         self,
         skill_id: str,
         tenant_id: str,
-        files: dict[str, str],
+        files: dict[str, bytes],
     ) -> AgentSkill | None:
         """
-        Skillファイルを更新
+        Skillファイルを完全置換で更新
+
+        既存ファイルを全て削除し、新しいファイルで置き換える。
 
         Args:
             skill_id: Skill ID
             tenant_id: テナントID
-            files: 更新ファイル {"filename": "content", ...}
+            files: 更新ファイル {"filename": raw_bytes, ...}
 
         Returns:
             更新されたSkill（存在しない場合はNone）
@@ -407,12 +402,20 @@ class SkillService:
         skill_path = Path(skill.file_path)
 
         # ファイル名のバリデーションとサニタイズ
-        sanitized_files: dict[str, str] = {}
+        sanitized_files: dict[str, bytes] = {}
         for filename, content in files.items():
             sanitized_filename = self._validate_and_sanitize_filename(filename, skill_path)
             sanitized_files[sanitized_filename] = content
 
-        # ファイルを保存
+        # 完全置換: 既存ファイルを全削除
+        if skill_path.exists():
+            for item in skill_path.iterdir():
+                if item.is_file():
+                    item.unlink()
+                elif item.is_dir():
+                    shutil.rmtree(item)
+
+        # 新しいファイルを書き込み
         for filename, content in sanitized_files.items():
             file_path = skill_path / filename
             self._write_file_safely(file_path, content)
@@ -422,8 +425,13 @@ class SkillService:
         await self.db.flush()
         await self.db.refresh(skill)
 
-        # S3バックアップ（best-effort）
-        await self._sync_to_s3(tenant_id, skill.name, sanitized_files)
+        # S3: 旧ファイル削除 → 新ファイル同期
+        await self._delete_from_s3(tenant_id, skill.name)
+        all_files: dict[str, bytes] = {}
+        for fp in skill_path.rglob("*"):
+            if fp.is_file():
+                all_files[str(fp.relative_to(skill_path))] = fp.read_bytes()
+        await self._sync_to_s3(tenant_id, skill.name, all_files)
 
         return skill
 
@@ -546,7 +554,7 @@ class SkillService:
         skill_id: str,
         tenant_id: str,
         file_path: str,
-    ) -> str | None:
+    ) -> dict | None:
         """
         Skillファイルの内容を取得
 
@@ -556,12 +564,12 @@ class SkillService:
             file_path: ファイルパス（Skillディレクトリからの相対パス）
 
         Returns:
-            ファイル内容（存在しない場合はNone）
+            {"content": str, "is_binary": False} or {"content": None, "is_binary": True}
+            存在しない場合はNone
 
         Raises:
             PathTraversalError: パストラバーサル攻撃を検出した場合
             FileOperationError: ファイル読み込みに失敗した場合
-            FileEncodingError: ファイルがUTF-8でない場合
         """
         skill = await self.get_by_id(skill_id, tenant_id)
         if not skill:
@@ -582,7 +590,11 @@ class SkillService:
         if not full_path.exists() or not full_path.is_file():
             return None
 
-        return self._read_file_safely(full_path)
+        raw = self._read_file_safely(full_path)
+        try:
+            return {"content": raw.decode("utf-8"), "is_binary": False}
+        except UnicodeDecodeError:
+            return {"content": None, "is_binary": True}
 
     def get_tenant_cwd(self, tenant_id: str) -> str:
         """

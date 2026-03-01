@@ -220,9 +220,9 @@ def validate_zip_archive(
     require_skill_md: bool = True,
     max_total_size: int = ZIP_MAX_TOTAL_SIZE,
     max_file_count: int = ZIP_MAX_FILE_COUNT,
-) -> dict[str, str]:
+) -> dict[str, bytes]:
     """
-    ZIPアーカイブを検証し、ファイルを展開する
+    ZIPアーカイブを検証し、ファイルをraw bytesとして展開する
 
     Args:
         zip_data: ZIPファイルのバイナリデータ
@@ -231,7 +231,7 @@ def validate_zip_archive(
         max_file_count: 最大ファイル数
 
     Returns:
-        {sanitized_path: content} のdict
+        {sanitized_path: raw_bytes} のdict
 
     Raises:
         ValidationError: ZIPが無効、サイズ超過、ファイル数超過の場合
@@ -264,7 +264,7 @@ def validate_zip_archive(
                 f"展開後のサイズが上限({size_mb:.0f}MB)を超えています",
             )
 
-        files: dict[str, str] = {}
+        files: dict[str, bytes] = {}
         for info in entries:
             filename = info.filename
 
@@ -278,16 +278,8 @@ def validate_zip_archive(
             # パストラバーサルチェック + サニタイズ
             safe_name = sanitize_filename(filename)
 
-            # UTF-8デコード
-            try:
-                content = zf.read(info.filename).decode("utf-8")
-            except UnicodeDecodeError:
-                raise ValidationError(
-                    "skill_archive",
-                    f"ファイル '{filename}' はUTF-8でエンコードされていません",
-                )
-
-            files[safe_name] = content
+            # raw bytesとして保持（バイナリファイル対応）
+            files[safe_name] = zf.read(info.filename)
 
         # SKILL.md必須チェック
         if require_skill_md and "SKILL.md" not in files:
