@@ -40,7 +40,7 @@ class SkillBase(BaseModel):
 class SkillCreate(SkillBase):
     """Agent Skills作成リクエスト"""
 
-    pass
+    display_title: str = Field(..., description="表示タイトル", max_length=300)
 
 
 class SkillUpdate(BaseModel):
