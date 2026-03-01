@@ -9,12 +9,15 @@ import zipfile
 
 import pytest
 
-from app.utils.exceptions import PathTraversalError, ValidationError
+from app.utils.exceptions import ValidationError
 from app.utils.security import validate_zip_archive
 
 
-def _make_zip(files: dict[str, str]) -> bytes:
-    """テスト用ZIPアーカイブを作成"""
+def _make_zip(files: dict[str, str | bytes]) -> bytes:
+    """テスト用ZIPアーカイブを作成
+
+    values が str の場合はテキスト、bytes の場合はバイナリとして書き込む。
+    """
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for name, content in files.items():
@@ -27,7 +30,7 @@ class TestValidateZipArchive:
 
     @pytest.mark.unit
     def test_valid_zip_with_skill_md(self):
-        """SKILL.mdを含む有効なZIPが正常に展開される"""
+        """SKILL.mdを含む有効なZIPが正常に展開される（bytes型で返却）"""
         zip_data = _make_zip({
             "SKILL.md": "# My Skill\nDescription",
             "run.py": "print('hello')",
@@ -36,7 +39,10 @@ class TestValidateZipArchive:
 
         assert "SKILL.md" in result
         assert "run.py" in result
-        assert result["SKILL.md"] == "# My Skill\nDescription"
+        # 結果は bytes 型
+        assert isinstance(result["SKILL.md"], bytes)
+        assert result["SKILL.md"] == b"# My Skill\nDescription"
+        assert result["run.py"] == b"print('hello')"
 
     @pytest.mark.unit
     def test_nested_directory_structure(self):
@@ -94,7 +100,7 @@ class TestValidateZipArchive:
     @pytest.mark.unit
     def test_file_count_limit(self):
         """ファイル数制限を超えるZIPはエラー"""
-        files = {"SKILL.md": "# Skill"}
+        files: dict[str, str | bytes] = {"SKILL.md": "# Skill"}
         for i in range(55):
             files[f"file_{i}.txt"] = f"content {i}"
 
@@ -113,19 +119,51 @@ class TestValidateZipArchive:
             validate_zip_archive(zip_data, max_total_size=10 * 1024 * 1024)
 
     @pytest.mark.unit
-    def test_non_utf8_file_raises_error(self):
-        """UTF-8でないファイルを含むZIPはエラー"""
+    def test_binary_file_accepted(self):
+        """バイナリファイルを含むZIPは正常に展開される"""
+        binary_content = bytes([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])  # PNG header
+        zip_data = _make_zip({
+            "SKILL.md": "# Skill",
+            "image.png": binary_content,
+        })
+        result = validate_zip_archive(zip_data)
+
+        assert "SKILL.md" in result
+        assert "image.png" in result
+        assert result["image.png"] == binary_content
+        assert isinstance(result["image.png"], bytes)
+
+    @pytest.mark.unit
+    def test_mixed_text_and_binary(self):
+        """テキストとバイナリが混在するZIPが正常に展開される"""
+        png_bytes = bytes(range(256))  # 全バイト値を含むバイナリ
+        zip_data = _make_zip({
+            "SKILL.md": "# My Skill",
+            "run.py": "print('hello')",
+            "data/image.png": png_bytes,
+            "config.json": '{"key": "value"}',
+        })
+        result = validate_zip_archive(zip_data)
+
+        assert len(result) == 4
+        assert result["SKILL.md"] == b"# My Skill"
+        assert result["run.py"] == b"print('hello')"
+        assert result["data/image.png"] == png_bytes
+        assert result["config.json"] == b'{"key": "value"}'
+
+    @pytest.mark.unit
+    def test_binary_file_preserved_in_zip(self):
+        """バイナリファイルがbytesとして正確に保持される"""
+        # 非UTF-8バイト列
+        raw_bytes = bytes([0x80, 0x81, 0x82, 0x83, 0xFF, 0xFE, 0x00, 0x01])
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w") as zf:
             zf.writestr("SKILL.md", "# Skill")
-            zf.writestr("binary.dat", b"\x80\x81\x82\x83".decode("latin-1"))
-        # 実際にバイナリをそのまま書き込む
-        buf2 = io.BytesIO()
-        with zipfile.ZipFile(buf2, "w") as zf:
-            zf.writestr("SKILL.md", "# Skill")
-            zf.writestr("binary.dat", bytes([0x80, 0x81, 0x82, 0x83]))
-        with pytest.raises(ValidationError):
-            validate_zip_archive(buf2.getvalue())
+            zf.writestr("binary.dat", raw_bytes)
+        result = validate_zip_archive(buf.getvalue())
+
+        assert "binary.dat" in result
+        assert result["binary.dat"] == raw_bytes
 
     @pytest.mark.unit
     def test_macosx_files_skipped(self):
@@ -162,7 +200,7 @@ class TestValidateZipArchive:
     @pytest.mark.unit
     def test_custom_limits(self):
         """カスタム制限値が適用される"""
-        files = {"SKILL.md": "# Skill"}
+        files: dict[str, str | bytes] = {"SKILL.md": "# Skill"}
         for i in range(5):
             files[f"file_{i}.txt"] = f"content {i}"
 
@@ -175,3 +213,14 @@ class TestValidateZipArchive:
         # ファイル数制限10: 6ファイルなので成功
         result = validate_zip_archive(zip_data, max_file_count=10)
         assert len(result) == 6
+
+    @pytest.mark.unit
+    def test_require_skill_md_false(self):
+        """require_skill_md=FalseでSKILL.mdなしでも成功する"""
+        zip_data = _make_zip({
+            "run.py": "print('hello')",
+        })
+        result = validate_zip_archive(zip_data, require_skill_md=False)
+
+        assert "run.py" in result
+        assert result["run.py"] == b"print('hello')"

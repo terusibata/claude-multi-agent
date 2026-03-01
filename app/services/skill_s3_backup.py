@@ -67,7 +67,7 @@ class SkillS3Backup:
         self,
         tenant_id: str,
         skill_name: str,
-        files: dict[str, str],
+        files: dict[str, bytes],
     ) -> int:
         """
         スキルファイル群をS3にアップロード
@@ -75,7 +75,7 @@ class SkillS3Backup:
         Args:
             tenant_id: テナントID
             skill_name: スキル名
-            files: {"filename": "content", ...}
+            files: {"filename": raw_bytes, ...}
 
         Returns:
             アップロードしたファイル数
@@ -88,8 +88,8 @@ class SkillS3Backup:
                     self.client.put_object,
                     Bucket=self.bucket,
                     Key=key,
-                    Body=content.encode("utf-8"),
-                    ContentType="text/plain; charset=utf-8",
+                    Body=content,
+                    ContentType="application/octet-stream",
                 )
                 uploaded += 1
                 self._metrics.inc(operation="skill_upload", status="success")
