@@ -42,7 +42,7 @@ COPY --from=builder /build/dist/ ./dist/
 RUN find node_modules -path "*/_bundled/claude" -exec chmod +x {} \; 2>/dev/null || true
 
 # ユーザー・ディレクトリ設定
-RUN useradd -m -u 1000 appuser && mkdir -p /workspace && chown appuser:appuser /workspace
+RUN userdel -r node && useradd -m -u 1000 appuser && mkdir -p /workspace && chown appuser:appuser /workspace
 USER appuser
 WORKDIR /workspace
 
