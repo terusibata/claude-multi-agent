@@ -191,7 +191,8 @@ AgentCore Runtime上のコンテナが使用する権限です。
       "Effect": "Allow",
       "Action": [
         "bedrock:InvokeModel",
-        "bedrock:InvokeModelWithResponseStream"
+        "bedrock:InvokeModelWithResponseStream",
+        "bedrock:ListFoundationModels"
       ],
       "Resource": "*"
     },
@@ -246,6 +247,20 @@ AgentCore Runtime上のコンテナが使用する権限です。
       "Condition": {
         "StringEquals": {
           "cloudwatch:namespace": "bedrock-agentcore"
+        }
+      }
+    },
+    {
+      "Sid": "MarketplaceSubscription",
+      "Effect": "Allow",
+      "Action": [
+        "aws-marketplace:ViewSubscriptions",
+        "aws-marketplace:Subscribe"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+            "aws:CalledViaLast": "bedrock.amazonaws.com"
         }
       }
     }
