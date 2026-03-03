@@ -56,7 +56,7 @@ function buildSdkOptions(request: InvocationRequest): Options {
   const env: Record<string, string> = {
     // Bedrock 有効化
     CLAUDE_CODE_USE_BEDROCK: process.env.CLAUDE_CODE_USE_BEDROCK ?? "1",
-    AWS_REGION: request.aws_region || process.env.AWS_REGION || "us-west-2",
+    AWS_REGION: request.aws_region || process.env.AWS_REGION || "ap-northeast-1",
     // NODE_OPTIONS を明示的にクリア（CLI バイナリが壊れるのを防止）
     NODE_OPTIONS: "",
     HOME: process.env.HOME ?? "/home/appuser",

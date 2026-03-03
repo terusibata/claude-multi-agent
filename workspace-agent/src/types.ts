@@ -32,7 +32,7 @@ export const InvocationRequestSchema = z.object({
   // AgentCore 固有フィールド
   workspace_sync: WorkspaceSyncConfigSchema.nullable().default(null),
   skill_files: z.record(z.string(), z.string()).nullable().default(null),
-  aws_region: z.string().default("us-west-2"),
+  aws_region: z.string().default("ap-northeast-1"),
   bedrock_model_id: z.string().default(""),
 });
 

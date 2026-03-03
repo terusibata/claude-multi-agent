@@ -37,11 +37,11 @@ Claude Multi-Agent は、Claude Agent SDK を使用したマルチテナント�
 DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/dbname
 
 # AgentCore Runtime（必須）
-AGENTCORE_RUNTIME_ARN=arn:aws:bedrock-agentcore:us-west-2:123456789:runtime/xxxx
+AGENTCORE_RUNTIME_ARN=arn:aws:bedrock-agentcore:ap-northeast-1:123456789:runtime/xxxx
 
 # AWS Bedrock & S3
 CLAUDE_CODE_USE_BEDROCK=1
-AWS_REGION=us-west-2
+AWS_REGION=ap-northeast-1
 AWS_ACCESS_KEY_ID=your-access-key
 AWS_SECRET_ACCESS_KEY=your-secret-key
 
@@ -116,7 +116,7 @@ curl -X POST http://localhost:8000/api/models \
     "model_id": "claude-sonnet-4",
     "display_name": "Claude Sonnet 4",
     "bedrock_model_id": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-    "model_region": "us-west-2",
+    "model_region": "ap-northeast-1",
     "input_token_price": "3.00",
     "output_token_price": "15.00"
   }'
