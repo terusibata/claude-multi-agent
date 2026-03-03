@@ -66,7 +66,7 @@ function isReservedPath(filePath: string): boolean {
 
 function getS3Client(region?: string): S3Client {
   return new S3Client({
-    region: region || process.env.AWS_REGION || "us-west-2",
+    region: region || process.env.AWS_REGION || "ap-northeast-1",
   });
 }
 

@@ -134,9 +134,9 @@ workspace-agentのコードを変更した場合もこの手順でイメージ�
 docker build --platform linux/arm64 -t workspace-agent:latest -f workspace-agent/Dockerfile .
 
 # ECRにプッシュ
-aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin <account>.dkr.ecr.us-west-2.amazonaws.com
-docker tag workspace-agent:latest <account>.dkr.ecr.us-west-2.amazonaws.com/workspace-agent:latest
-docker push <account>.dkr.ecr.us-west-2.amazonaws.com/workspace-agent:latest
+aws ecr get-login-password --region ap-northeast-1 | docker login --username AWS --password-stdin <account>.dkr.ecr.ap-northeast-1.amazonaws.com
+docker tag workspace-agent:latest <account>.dkr.ecr.ap-northeast-1.amazonaws.com/workspace-agent:latest
+docker push <account>.dkr.ecr.ap-northeast-1.amazonaws.com/workspace-agent:latest
 ```
 
 ### 2. AgentCore Runtime の作成（初回のみ）
@@ -144,12 +144,12 @@ docker push <account>.dkr.ecr.us-west-2.amazonaws.com/workspace-agent:latest
 ```bash
 # ポート: 8080, ヘルスチェック: GET /ping
 # Execution Roleには Bedrock (InvokeModel) と S3 (PutObject/GetObject/ListBucket) の権限が必要
-aws bedrock-agentcore create-runtime \
-  --runtime-name workspace-agent \
-  --network-mode PUBLIC \
-  --auth-mode NONE \
-  --image-uri <account>.dkr.ecr.us-west-2.amazonaws.com/workspace-agent:latest \
-  --runtime-role-arn arn:aws:iam::<account>:role/AgentCoreExecutionRole
+aws bedrock-agentcore-control create-agent-runtime \
+  --agent-runtime-name workspace-agent \
+  --agent-runtime-artifact '{"containerConfiguration": {"containerUri": "<account>.dkr.ecr.ap-northeast-1.amazonaws.com/workspace-agent:latest"}}' \
+  --network-configuration '{"networkMode": "PUBLIC"}' \
+  --role-arn arn:aws:iam::<account>:role/AgentCoreExecutionRole \
+  --region ap-northeast-1
 ```
 
 ### 3. IAMポリシー
@@ -211,7 +211,7 @@ AgentCore Runtime作成時に `--runtime-role-arn` で指定します。
           "aws:SourceAccount": "<account>"
         },
         "ArnLike": {
-          "aws:SourceArn": "arn:aws:bedrock-agentcore:<region>:<account>:*"
+          "aws:SourceArn": "arn:aws:bedrock-agentcore:ap-northeast-1:<account>:*"
         }
       }
     }
@@ -232,7 +232,7 @@ AgentCore Runtime作成時に `--runtime-role-arn` で指定します。
         "ecr:BatchGetImage",
         "ecr:GetDownloadUrlForLayer"
       ],
-      "Resource": "arn:aws:ecr:<region>:<account>:repository/workspace-agent"
+      "Resource": "arn:aws:ecr:ap-northeast-1:<account>:repository/workspace-agent"
     },
     {
       "Sid": "ECRTokenAccess",
@@ -269,7 +269,7 @@ AgentCore Runtime作成時に `--runtime-role-arn` で指定します。
         "logs:CreateLogGroup",
         "logs:DescribeLogGroups"
       ],
-      "Resource": "arn:aws:logs:<region>:<account>:log-group:*"
+      "Resource": "arn:aws:logs:ap-northeast-1:<account>:log-group:*"
     },
     {
       "Effect": "Allow",
@@ -278,7 +278,7 @@ AgentCore Runtime作成時に `--runtime-role-arn` で指定します。
         "logs:PutLogEvents",
         "logs:DescribeLogStreams"
       ],
-      "Resource": "arn:aws:logs:<region>:<account>:log-group:/aws/bedrock-agentcore/runtimes/*:*"
+      "Resource": "arn:aws:logs:ap-northeast-1:<account>:log-group:/aws/bedrock-agentcore/runtimes/*:*"
     },
     {
       "Sid": "XRayTracing",
@@ -310,11 +310,11 @@ AgentCore Runtime作成時に `--runtime-role-arn` で指定します。
 
 ```bash
 # 必須
-AGENTCORE_RUNTIME_ARN=arn:aws:bedrock-agentcore:us-west-2:123456789:runtime/xxxx
+AGENTCORE_RUNTIME_ARN=arn:aws:bedrock-agentcore:ap-northeast-1:123456789:runtime/xxxx
 DATABASE_URL=postgresql+asyncpg://user:pass@host:5432/dbname
 S3_BUCKET_NAME=your-workspace-bucket
 API_KEYS=your-secure-api-key
-AWS_REGION=us-west-2
+AWS_REGION=ap-northeast-1
 
 # オプション
 APP_ENV=production

@@ -77,7 +77,7 @@ export async function analyzeImagesWithBedrock(params: {
   region?: string;
 }): Promise<VisionResult> {
   const modelId = getVisionModelId();
-  const region = params.region || process.env.AWS_REGION || "us-west-2";
+  const region = params.region || process.env.AWS_REGION || "ap-northeast-1";
 
   const client = new BedrockRuntimeClient({ region });
 

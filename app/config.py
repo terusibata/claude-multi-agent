@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     # AWS Bedrock設定
     # ============================================
     claude_code_use_bedrock: str = "1"
-    aws_region: str = "us-west-2"
+    aws_region: str = "ap-northeast-1"
     aws_access_key_id: str | None = None
     aws_secret_access_key: str | None = None
     aws_session_token: str | None = None

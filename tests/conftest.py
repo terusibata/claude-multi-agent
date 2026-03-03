@@ -104,7 +104,7 @@ async def sample_model(client: AsyncClient) -> dict:
         "model_id": "test-claude-sonnet",
         "display_name": "Claude Sonnet (Test)",
         "bedrock_model_id": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-        "model_region": "us-west-2",
+        "model_region": "ap-northeast-1",
         "input_token_price": "3.0",
         "output_token_price": "15.0",
         "cache_creation_5m_price": "3.75",

@@ -13,7 +13,7 @@
 | S3バケット | `claude-multi-agent-workspaces`（※ 任意の名前に変更可） |
 | ECRリポジトリ | `workspace-agent` |
 | AgentCore Runtime | `workspace-agent` |
-| リージョン | `us-west-1` |
+| リージョン | `ap-northeast-1` |
 
 > **⚠️ 注意**: 以下の手順中の `123456789012` はすべて自分のAWSアカウントIDに置き換えてください。アカウントIDはコンソール右上のアカウント名をクリックすると確認できます。
 
@@ -29,7 +29,7 @@
 | 項目 | 値 |
 |------|-----|
 | バケット名 | `claude-multi-agent-workspaces` |
-| AWSリージョン | `us-west-1` |
+| AWSリージョン | `ap-northeast-1` |
 | オブジェクト所有者 | ACL無効（推奨）のまま |
 | パブリックアクセスをすべてブロック | ✅ チェックのまま |
 
@@ -49,7 +49,7 @@
 | リポジトリ名 | `workspace-agent` |
 
 4. その他はデフォルトのまま → **リポジトリを作成**
-5. 作成後、リポジトリのURIを控えておく（`123456789012.dkr.ecr.us-west-1.amazonaws.com/workspace-agent`）
+5. 作成後、リポジトリのURIを控えておく（`123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/workspace-agent`）
 
 ---
 
@@ -81,7 +81,7 @@
       "Action": [
         "bedrock-agentcore:InvokeAgentRuntime"
       ],
-      "Resource": "arn:aws:bedrock-agentcore:us-west-1:123456789012:*"
+      "Resource": "arn:aws:bedrock-agentcore:ap-northeast-1:123456789012:*"
     },
     {
       "Sid": "S3WorkspaceAccess",
@@ -117,7 +117,7 @@
         "ecr:UploadLayerPart",
         "ecr:CompleteLayerUpload"
       ],
-      "Resource": "arn:aws:ecr:us-west-1:123456789012:repository/workspace-agent"
+      "Resource": "arn:aws:ecr:ap-northeast-1:123456789012:repository/workspace-agent"
     }
   ]
 }
@@ -178,7 +178,7 @@ AgentCore Runtime上のコンテナが使用する権限です。
         "ecr:BatchGetImage",
         "ecr:GetDownloadUrlForLayer"
       ],
-      "Resource": "arn:aws:ecr:us-west-1:123456789012:repository/workspace-agent"
+      "Resource": "arn:aws:ecr:ap-northeast-1:123456789012:repository/workspace-agent"
     },
     {
       "Sid": "ECRTokenAccess",
@@ -216,7 +216,7 @@ AgentCore Runtime上のコンテナが使用する権限です。
         "logs:CreateLogGroup",
         "logs:DescribeLogGroups"
       ],
-      "Resource": "arn:aws:logs:us-west-1:123456789012:log-group:*"
+      "Resource": "arn:aws:logs:ap-northeast-1:123456789012:log-group:*"
     },
     {
       "Sid": "CloudWatchLogStreams",
@@ -226,7 +226,7 @@ AgentCore Runtime上のコンテナが使用する権限です。
         "logs:PutLogEvents",
         "logs:DescribeLogStreams"
       ],
-      "Resource": "arn:aws:logs:us-west-1:123456789012:log-group:/aws/bedrock-agentcore/runtimes/*:*"
+      "Resource": "arn:aws:logs:ap-northeast-1:123456789012:log-group:/aws/bedrock-agentcore/runtimes/*:*"
     },
     {
       "Sid": "XRayTracing",
@@ -296,7 +296,7 @@ AgentCore Runtime上のコンテナが使用する権限です。
           "aws:SourceAccount": "123456789012"
         },
         "ArnLike": {
-          "aws:SourceArn": "arn:aws:bedrock-agentcore:us-west-1:123456789012:*"
+          "aws:SourceArn": "arn:aws:bedrock-agentcore:ap-northeast-1:123456789012:*"
         }
       }
     }
@@ -334,7 +334,7 @@ aws configure
 |-----------|--------|
 | AWS Access Key ID | STEP 4で取得したアクセスキーID |
 | AWS Secret Access Key | STEP 4で取得したシークレットアクセスキー |
-| Default region name | `us-west-1` |
+| Default region name | `ap-northeast-1` |
 | Default output format | `json` |
 
 ### 接続テスト
@@ -347,10 +347,10 @@ aws sts get-caller-identity
 aws s3 ls s3://claude-multi-agent-workspaces/
 
 # ECRログイン確認
-aws ecr get-login-password --region us-west-1 | docker login --username AWS --password-stdin 123456789012.dkr.ecr.us-west-1.amazonaws.com
+aws ecr get-login-password --region ap-northeast-1 | docker login --username AWS --password-stdin 123456789012.dkr.ecr.ap-northeast-1.amazonaws.com
 
 # Bedrockモデル一覧の確認
-aws bedrock list-foundation-models --region us-west-1 --query "modelSummaries[?contains(modelId, 'claude')].[modelId]" --output table
+aws bedrock list-foundation-models --region ap-northeast-1 --query "modelSummaries[?contains(modelId, 'claude')].[modelId]" --output table
 ```
 
 ---
@@ -363,19 +363,18 @@ docker build --platform linux/arm64 -t workspace-agent:latest -f workspace-agent
 
 # 2. ECRにタグ付け
 docker tag workspace-agent:latest \
-  123456789012.dkr.ecr.us-west-1.amazonaws.com/workspace-agent:latest
+  123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/workspace-agent:latest
 
 # 3. ECRにプッシュ
-docker push 123456789012.dkr.ecr.us-west-1.amazonaws.com/workspace-agent:latest
+docker push 123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/workspace-agent:latest
 
 # 4. AgentCore Runtimeを作成（初回のみ）
-aws bedrock-agentcore create-runtime \
-  --runtime-name workspace-agent \
-  --network-mode PUBLIC \
-  --auth-mode NONE \
-  --image-uri 123456789012.dkr.ecr.us-west-1.amazonaws.com/workspace-agent:latest \
-  --runtime-role-arn arn:aws:iam::123456789012:role/AgentCoreExecutionRole \
-  --region us-west-1
+aws bedrock-agentcore-control create-agent-runtime \
+  --agent-runtime-name workspace-agent \
+  --agent-runtime-artifact '{"containerConfiguration": {"containerUri": "123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/workspace-agent:latest"}}' \
+  --network-configuration '{"networkMode": "PUBLIC"}' \
+  --role-arn arn:aws:iam::123456789012:role/AgentCoreExecutionRole \
+  --region ap-northeast-1
 ```
 
 > 作成が成功すると `runtimeArn` が返されます。これを `.env` の `AGENTCORE_RUNTIME_ARN` に設定します。
@@ -388,8 +387,8 @@ aws bedrock-agentcore create-runtime \
 # 必須
 AWS_ACCESS_KEY_ID=AKIAXXXXXXXXXXXXXXXX        # STEP 4で取得
 AWS_SECRET_ACCESS_KEY=xxxxxxxxxxxxxxxxxxxxxxxx  # STEP 4で取得
-AWS_REGION=us-west-1
-AGENTCORE_RUNTIME_ARN=arn:aws:bedrock-agentcore:us-west-1:123456789012:runtime/xxxx  # STEP 8で取得
+AWS_REGION=ap-northeast-1
+AGENTCORE_RUNTIME_ARN=arn:aws:bedrock-agentcore:ap-northeast-1:123456789012:runtime/xxxx  # STEP 8で取得
 DATABASE_URL=postgresql+asyncpg://aiagent:aiagent_password@localhost:5432/aiagent
 S3_BUCKET_NAME=claude-multi-agent-workspaces
 API_KEYS=your-secure-api-key-here
@@ -443,7 +442,7 @@ curl -X POST http://localhost:8000/api/tenants \
 │  │   ├── CloudWatch Logs                        │
 │  │   ├── X-Ray                                  │
 │  │   └── CloudWatch Metrics                     │
-│  └── ARN → aws bedrock-agentcore create-runtime │
+│  └── ARN → bedrock-agentcore-control create-agent-runtime │
 └─────────────────────────────────────────────────┘
 ```
 
