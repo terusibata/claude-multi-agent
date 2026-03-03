@@ -10,7 +10,7 @@
 | IAMポリシー（バックエンド用） | `ClaudeAgentBackendPolicy` |
 | IAMロール（AgentCore用） | `AgentCoreExecutionRole` |
 | IAMポリシー（AgentCore用） | `AgentCoreExecutionPolicy` |
-| S3バケット | `claude-multi-agent-workspaces`（※ 任意の名前に変更可） |
+| S3バケット | `claude-multi-agent-workspace`（※ 任意の名前に変更可） |
 | ECRリポジトリ | `workspace-agent` |
 | AgentCore Runtime | `workspace-agent` |
 | リージョン | `ap-northeast-1` |
@@ -28,7 +28,7 @@
 
 | 項目 | 値 |
 |------|-----|
-| バケット名 | `claude-multi-agent-workspaces` |
+| バケット名 | `claude-multi-agent-workspace` |
 | AWSリージョン | `ap-northeast-1` |
 | オブジェクト所有者 | ACL無効（推奨）のまま |
 | パブリックアクセスをすべてブロック | ✅ チェックのまま |
@@ -76,14 +76,6 @@
       "Resource": "*"
     },
     {
-      "Sid": "AgentCoreAccess",
-      "Effect": "Allow",
-      "Action": [
-        "bedrock-agentcore:InvokeAgentRuntime"
-      ],
-      "Resource": "arn:aws:bedrock-agentcore:ap-northeast-1:123456789012:*"
-    },
-    {
       "Sid": "S3WorkspaceAccess",
       "Effect": "Allow",
       "Action": [
@@ -93,8 +85,8 @@
         "s3:ListBucket"
       ],
       "Resource": [
-        "arn:aws:s3:::claude-multi-agent-workspaces",
-        "arn:aws:s3:::claude-multi-agent-workspaces/*"
+        "arn:aws:s3:::claude-multi-agent-workspace",
+        "arn:aws:s3:::claude-multi-agent-workspace/*"
       ]
     },
     {
@@ -118,6 +110,17 @@
         "ecr:CompleteLayerUpload"
       ],
       "Resource": "arn:aws:ecr:ap-northeast-1:123456789012:repository/workspace-agent"
+    },
+    {
+      "Sid": "PassRoleToAgentCore",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::123456789012:role/AgentCoreExecutionRole",
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "bedrock-agentcore.amazonaws.com"
+        }
+      }
     }
   ]
 }
@@ -140,7 +143,7 @@
 ### 許可の設定
 
 5. **ポリシーを直接アタッチする** を選択
-6. 検索窓に `ClaudeAgentBackendPolicy` と入力
+6. 検索窓に `ClaudeAgentBackendPolicy` と `BedrockAgentCoreFullAccess` 入力
 7. 表示されたポリシーに ✅ チェックを入れる
 8. **次へ** をクリック
 9. 内容を確認 → **ユーザーを作成**
@@ -205,8 +208,8 @@ AgentCore Runtime上のコンテナが使用する権限です。
         "s3:ListBucket"
       ],
       "Resource": [
-        "arn:aws:s3:::claude-multi-agent-workspaces",
-        "arn:aws:s3:::claude-multi-agent-workspaces/*"
+        "arn:aws:s3:::claude-multi-agent-workspace",
+        "arn:aws:s3:::claude-multi-agent-workspace/*"
       ]
     },
     {
@@ -344,7 +347,7 @@ aws configure
 aws sts get-caller-identity
 
 # S3バケットの確認
-aws s3 ls s3://claude-multi-agent-workspaces/
+aws s3 ls s3://claude-multi-agent-workspace/
 
 # ECRログイン確認
 aws ecr get-login-password --region ap-northeast-1 | docker login --username AWS --password-stdin 123456789012.dkr.ecr.ap-northeast-1.amazonaws.com
@@ -370,7 +373,7 @@ docker push 123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/workspace-agent:la
 
 # 4. AgentCore Runtimeを作成（初回のみ）
 aws bedrock-agentcore-control create-agent-runtime \
-  --agent-runtime-name workspace-agent \
+  --agent-runtime-name workspace_agent \
   --agent-runtime-artifact '{"containerConfiguration": {"containerUri": "123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/workspace-agent:latest"}}' \
   --network-configuration '{"networkMode": "PUBLIC"}' \
   --role-arn arn:aws:iam::123456789012:role/AgentCoreExecutionRole \
@@ -390,7 +393,7 @@ AWS_SECRET_ACCESS_KEY=xxxxxxxxxxxxxxxxxxxxxxxx  # STEP 4で取得
 AWS_REGION=ap-northeast-1
 AGENTCORE_RUNTIME_ARN=arn:aws:bedrock-agentcore:ap-northeast-1:123456789012:runtime/xxxx  # STEP 8で取得
 DATABASE_URL=postgresql+asyncpg://aiagent:aiagent_password@localhost:5432/aiagent
-S3_BUCKET_NAME=claude-multi-agent-workspaces
+S3_BUCKET_NAME=claude-multi-agent-workspace
 API_KEYS=your-secure-api-key-here
 
 # オプション
@@ -427,7 +430,7 @@ curl -X POST http://localhost:8000/api/tenants \
 │  ├── ClaudeAgentBackendPolicy                   │
 │  │   ├── Bedrock: InvokeModel                   │
 │  │   ├── AgentCore: InvokeAgentRuntime          │
-│  │   ├── S3: claude-multi-agent-workspaces (CRUD)      │
+│  │   ├── S3: claude-multi-agent-workspace (CRUD)      │
 │  │   └── ECR: workspace-agent (Push/Pull)       │
 │  └── アクセスキー → .env                         │
 └─────────────────────────────────────────────────┘
@@ -438,7 +441,7 @@ curl -X POST http://localhost:8000/api/tenants \
 │  ├── AgentCoreExecutionPolicy                   │
 │  │   ├── ECR: workspace-agent (Pull)            │
 │  │   ├── Bedrock: InvokeModel                   │
-│  │   ├── S3: claude-multi-agent-workspaces (Read/Write)│
+│  │   ├── S3: claude-multi-agent-workspace (Read/Write)│
 │  │   ├── CloudWatch Logs                        │
 │  │   ├── X-Ray                                  │
 │  │   └── CloudWatch Metrics                     │
@@ -452,7 +455,7 @@ curl -X POST http://localhost:8000/api/tenants \
 
 手順中のすべての `123456789012` を自分のAWSアカウントIDに一括置換してください。
 
-S3バケット名 `claude-multi-agent-workspaces` を変更する場合は、以下の4箇所すべてで置換が必要です。
+S3バケット名 `claude-multi-agent-workspace` を変更する場合は、以下の4箇所すべてで置換が必要です。
 
 1. STEP 1 ― S3バケット作成時のバケット名
 2. STEP 3 ― `ClaudeAgentBackendPolicy` 内の S3 Resource
