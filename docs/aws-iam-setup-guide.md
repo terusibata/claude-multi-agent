@@ -79,7 +79,12 @@
       "Sid": "AgentCoreAccess",
       "Effect": "Allow",
       "Action": [
-        "bedrock-agentcore:InvokeAgentRuntime"
+        "bedrock-agentcore:InvokeAgentRuntime",
+        "bedrock-agentcore:CreateAgentRuntime",
+        "bedrock-agentcore:UpdateAgentRuntime",
+        "bedrock-agentcore:DeleteAgentRuntime",
+        "bedrock-agentcore:GetAgentRuntime",
+        "bedrock-agentcore:ListAgentRuntimes"
       ],
       "Resource": "arn:aws:bedrock-agentcore:ap-northeast-1:123456789012:*"
     },
@@ -118,6 +123,17 @@
         "ecr:CompleteLayerUpload"
       ],
       "Resource": "arn:aws:ecr:ap-northeast-1:123456789012:repository/workspace-agent"
+    },
+    {
+      "Sid": "PassRoleToAgentCore",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::123456789012:role/AgentCoreExecutionRole",
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "bedrock-agentcore.amazonaws.com"
+        }
+      }
     }
   ]
 }
