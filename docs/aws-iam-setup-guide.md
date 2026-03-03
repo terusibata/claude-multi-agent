@@ -78,14 +78,7 @@
     {
       "Sid": "AgentCoreAccess",
       "Effect": "Allow",
-      "Action": [
-        "bedrock-agentcore:InvokeAgentRuntime",
-        "bedrock-agentcore:CreateAgentRuntime",
-        "bedrock-agentcore:UpdateAgentRuntime",
-        "bedrock-agentcore:DeleteAgentRuntime",
-        "bedrock-agentcore:GetAgentRuntime",
-        "bedrock-agentcore:ListAgentRuntimes"
-      ],
+      "Action": "bedrock-agentcore:*",
       "Resource": "arn:aws:bedrock-agentcore:ap-northeast-1:123456789012:*"
     },
     {
